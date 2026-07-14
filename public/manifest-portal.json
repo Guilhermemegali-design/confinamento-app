@@ -1,0 +1,14 @@
+{
+  "name": "Portal do Cliente - Confinamento",
+  "short_name": "Confinamento",
+  "description": "Acompanhe o confinamento dos seus lotes: pesagens e consumo",
+  "start_url": "/portal",
+  "display": "standalone",
+  "background_color": "#F7F6F3",
+  "theme_color": "#1F4D45",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon.jpg", "sizes": "192x192", "type": "image/jpeg" },
+    { "src": "/icon.jpg", "sizes": "512x512", "type": "image/jpeg" }
+  ]
+}
