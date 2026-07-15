@@ -201,7 +201,7 @@ export default function ConfinamentoTab({
     );
   }
 
-  const painel = calcularPainelConfinamento(lotes, pesagensPorLote);
+  const painel = calcularPainelConfinamento(lotes, pesagensPorLote, consumosPorLote);
   const comIndicadores = lotes.map((l) => ({
     lote: l,
     ...calcularIndicadoresLote(l, pesagensPorLote[l.id] || [], consumosPorLote[l.id] || []),
@@ -297,6 +297,22 @@ export default function ConfinamentoTab({
             <PainelCard
               label="Peso médio geral"
               valor={painel.pesoMedioGeral != null ? `${painel.pesoMedioGeral.toFixed(1)} kg` : "—"}
+            />
+            <PainelCard
+              label="Custo acumulado (ativos)"
+              valor={painel.custoAcumuladoAtivosMedio != null ? `${formatBRL(painel.custoAcumuladoAtivosMedio)}/animal` : "—"}
+            />
+            <PainelCard
+              label="Custo médio diário (ativos)"
+              valor={painel.custoMedioDiarioAtivosMedio != null ? `${formatBRL(painel.custoMedioDiarioAtivosMedio)}/animal` : "—"}
+            />
+            <PainelCard
+              label="Custo total (finalizados)"
+              valor={painel.custoTotalFinalizadosMedio != null ? `${formatBRL(painel.custoTotalFinalizadosMedio)}/animal` : "—"}
+            />
+            <PainelCard
+              label="Custo médio diário (finalizados)"
+              valor={painel.custoMedioDiarioFinalizadosMedio != null ? `${formatBRL(painel.custoMedioDiarioFinalizadosMedio)}/animal` : "—"}
             />
           </div>
 
