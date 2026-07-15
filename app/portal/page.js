@@ -18,11 +18,16 @@ export default function PortalCliente() {
 
   const carregarCliente = useCallback(async () => {
     if (!sessao) return;
-    const { data } = await supabase
-      .from("clientes")
-      .select("*")
+    const { data: vinculo } = await supabase
+      .from("clientes_usuarios")
+      .select("cliente_id")
       .eq("auth_user_id", sessao.user.id)
       .maybeSingle();
+    if (!vinculo) {
+      setCliente(null);
+      return;
+    }
+    const { data } = await supabase.from("clientes").select("*").eq("id", vinculo.cliente_id).maybeSingle();
     setCliente(data || null);
   }, [sessao]);
 
@@ -106,12 +111,24 @@ function TelaVincularConvite({ onVinculado }) {
     try {
       const { data: sessao } = await supabase.auth.getSession();
       const userId = sessao.session.user.id;
+      const userEmail = sessao.session.user.email;
       const { data: clienteEncontrado, error: erroBusca } = await supabase
-        .from("clientes").select("id").eq("codigo_convite", codigo.trim()).is("auth_user_id", null).maybeSingle();
+        .from("clientes").select("id, consultor_id").eq("codigo_convite", codigo.trim()).maybeSingle();
       if (erroBusca) throw erroBusca;
-      if (!clienteEncontrado) { setErro("Código inválido, ou já utilizado. Confira com seu consultor."); return; }
-      const { error: erroUpdate } = await supabase.from("clientes").update({ auth_user_id: userId }).eq("id", clienteEncontrado.id);
-      if (erroUpdate) throw erroUpdate;
+      if (!clienteEncontrado) { setErro("Código inválido. Confira com seu consultor."); return; }
+      const { error: erroVinculo } = await supabase.from("clientes_usuarios").insert({
+        cliente_id: clienteEncontrado.id,
+        consultor_id: clienteEncontrado.consultor_id,
+        auth_user_id: userId,
+        email: userEmail,
+      });
+      if (erroVinculo) {
+        if (erroVinculo.code === "23505") {
+          setErro("Você já tem acesso a essa fazenda.");
+          return;
+        }
+        throw erroVinculo;
+      }
       onVinculado();
     } catch (err) {
       setErro(err.message);

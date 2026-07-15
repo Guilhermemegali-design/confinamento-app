@@ -80,6 +80,7 @@ export default function Home() {
           lotes={dados.lotes}
           pesagens={dados.pesagens}
           consumos={dados.consumos}
+          clientesUsuarios={dados.clientesUsuarios}
           view={view}
           setView={setView}
           onAddCliente={async (c) => {
@@ -126,6 +127,10 @@ export default function Home() {
           onDeleteConsumo={async (id) => {
             await dados.excluirConsumo(id);
             mostrarToast("Consumo excluído");
+          }}
+          onRemoveAcessoCliente={async (id) => {
+            await dados.excluirAcessoCliente(id);
+            mostrarToast("Acesso removido");
           }}
         />
       </div>

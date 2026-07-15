@@ -7,11 +7,12 @@ import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryBut
 import ConfinamentoTab from "./ConfinamentoTab";
 
 export default function ClientesTab({
-  clientes, lotes, pesagens, consumos, view, setView,
+  clientes, lotes, pesagens, consumos, clientesUsuarios = [], view, setView,
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
   onAddConsumo, onUpdateConsumo, onDeleteConsumo,
+  onRemoveAcessoCliente,
 }) {
   if (view.screen === "confinamento") {
     const cliente = clientes.find((c) => c.id === view.id);
@@ -64,6 +65,7 @@ export default function ClientesTab({
     const lotesCliente = lotes.filter((l) => l.cliente_id === cliente.id);
     const lotesAtivos = lotesCliente.filter((l) => !l.data_saida).length;
     const linkPortal = "https://confinamento-nine.vercel.app/portal";
+    const pessoasComAcesso = clientesUsuarios.filter((cu) => cu.cliente_id === cliente.id);
 
     return (
       <div>
@@ -88,21 +90,39 @@ export default function ClientesTab({
           </>
         )}
 
-        <SectionTitle>Acesso do cliente</SectionTitle>
+        <SectionTitle>Acesso ao portal</SectionTitle>
         <div style={styles.card}>
-          {cliente.auth_user_id ? (
-            <FieldRow label="Status" value="✓ Cliente já tem acesso ao portal" />
-          ) : (
-            <>
-              <FieldRow label="Código de convite" value={cliente.codigo_convite} />
-              <FieldRow label="Link do portal" value={linkPortal} />
-              <div style={{ fontSize: 12, color: "#9A9A94", padding: "8px 0" }}>
-                Envie esse link e o código para {cliente.nome}. Ele cria uma conta lá e digita
-                esse código para liberar o acesso ao confinamento dele.
-              </div>
-            </>
-          )}
+          <FieldRow label="Código de convite" value={cliente.codigo_convite} />
+          <FieldRow label="Link do portal" value={linkPortal} />
+          <div style={{ fontSize: 12, color: "#9A9A94", padding: "8px 0" }}>
+            Envie esse link e o código para quem precisar de acesso a essa fazenda. Cada
+            pessoa cria a própria conta e digita esse código — pode liberar para várias
+            pessoas com o mesmo código.
+          </div>
         </div>
+
+        {pessoasComAcesso.length > 0 && (
+          <>
+            <SectionTitle>Pessoas com acesso</SectionTitle>
+            {pessoasComAcesso.map((pessoa) => (
+              <div key={pessoa.id} style={styles.rowCard}>
+                <div style={{ flex: 1 }}>{pessoa.email || "—"}</div>
+                {onRemoveAcessoCliente && (
+                  <button
+                    onClick={() => {
+                      if (confirm(`Remover o acesso de ${pessoa.email || "essa pessoa"} a ${cliente.nome}?`)) {
+                        onRemoveAcessoCliente(pessoa.id);
+                      }
+                    }}
+                    style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex" }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </>
+        )}
 
         <SectionTitle>Confinamento</SectionTitle>
         <button style={styles.listItem} onClick={() => setView({ screen: "confinamento", id: cliente.id })}>
