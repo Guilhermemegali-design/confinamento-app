@@ -79,11 +79,12 @@ export default function ClientesTab({
           <FieldRow label="Endereço" value={cliente.endereco || "—"} />
         </div>
 
-        {(cliente.ms_adaptacao != null || cliente.ms_crescimento != null || cliente.ms_terminacao != null) && (
+        {(cliente.ms_adaptacao != null || cliente.ms_recria != null || cliente.ms_crescimento != null || cliente.ms_terminacao != null) && (
           <>
             <SectionTitle>Matéria seca (MS) da dieta por fase</SectionTitle>
             <div style={styles.card}>
               <FieldRow label="Adaptação" value={cliente.ms_adaptacao != null ? `${cliente.ms_adaptacao}%` : "—"} />
+              <FieldRow label="Recria" value={cliente.ms_recria != null ? `${cliente.ms_recria}%` : "—"} />
               <FieldRow label="Crescimento" value={cliente.ms_crescimento != null ? `${cliente.ms_crescimento}%` : "—"} />
               <FieldRow label="Terminação" value={cliente.ms_terminacao != null ? `${cliente.ms_terminacao}%` : "—"} />
             </div>
@@ -186,6 +187,7 @@ function FormCliente({ cliente, onCancel, onSave }) {
   const [telefone, setTelefone] = useState(cliente?.telefone || "");
   const [endereco, setEndereco] = useState(cliente?.endereco || "");
   const [msAdaptacao, setMsAdaptacao] = useState(cliente?.ms_adaptacao != null ? String(cliente.ms_adaptacao) : "");
+  const [msRecria, setMsRecria] = useState(cliente?.ms_recria != null ? String(cliente.ms_recria) : "");
   const [msCrescimento, setMsCrescimento] = useState(cliente?.ms_crescimento != null ? String(cliente.ms_crescimento) : "");
   const [msTerminacao, setMsTerminacao] = useState(cliente?.ms_terminacao != null ? String(cliente.ms_terminacao) : "");
   const [salvando, setSalvando] = useState(false);
@@ -198,6 +200,7 @@ function FormCliente({ cliente, onCancel, onSave }) {
       await onSave({
         nome, contato, telefone, endereco,
         ms_adaptacao: msAdaptacao !== "" ? Number(msAdaptacao) : null,
+        ms_recria: msRecria !== "" ? Number(msRecria) : null,
         ms_crescimento: msCrescimento !== "" ? Number(msCrescimento) : null,
         ms_terminacao: msTerminacao !== "" ? Number(msTerminacao) : null,
       });
@@ -219,6 +222,7 @@ function FormCliente({ cliente, onCancel, onSave }) {
       <SectionTitle>Matéria seca (MS) da dieta por fase</SectionTitle>
       <div style={styles.card}>
         <InputField label="Adaptação (%)" type="number" value={msAdaptacao} onChange={setMsAdaptacao} placeholder="Ex: 55" />
+        <InputField label="Recria (%)" type="number" value={msRecria} onChange={setMsRecria} placeholder="Ex: 60" />
         <InputField label="Crescimento (%)" type="number" value={msCrescimento} onChange={setMsCrescimento} placeholder="Ex: 65" />
         <InputField label="Terminação (%)" type="number" value={msTerminacao} onChange={setMsTerminacao} placeholder="Ex: 70" />
         <div style={{ fontSize: 11.5, color: "#9A9A94", padding: "0 0 10px" }}>

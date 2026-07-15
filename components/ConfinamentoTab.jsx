@@ -9,6 +9,7 @@ import { BackHeader, SectionTitle, EmptyHint, Field, InputField, TextAreaField, 
 
 const FASES_DIETA = [
   { value: "adaptacao", label: "Adaptação" },
+  { value: "recria", label: "Recria" },
   { value: "crescimento", label: "Crescimento" },
   { value: "terminacao", label: "Terminação" },
 ];
@@ -40,6 +41,7 @@ function compararLotes(ordenacao) {
 
 function custoKgMnDaFase(lote, fase) {
   if (fase === "adaptacao") return lote.custo_kg_mn_adaptacao;
+  if (fase === "recria") return lote.custo_kg_mn_recria;
   if (fase === "crescimento") return lote.custo_kg_mn_crescimento;
   if (fase === "terminacao") return lote.custo_kg_mn_terminacao;
   return null;
@@ -50,6 +52,7 @@ function custoKgMnDaFase(lote, fase) {
 function msDaFase(cliente, fase) {
   if (!cliente) return null;
   if (fase === "adaptacao") return cliente.ms_adaptacao;
+  if (fase === "recria") return cliente.ms_recria;
   if (fase === "crescimento") return cliente.ms_crescimento;
   if (fase === "terminacao") return cliente.ms_terminacao;
   return null;
@@ -454,6 +457,9 @@ function LoteDetalhe({
         {lote.custo_kg_mn_adaptacao != null && (
           <Field label="Custo MN — Adaptação (atual)" value={formatBRL(lote.custo_kg_mn_adaptacao)} />
         )}
+        {lote.custo_kg_mn_recria != null && (
+          <Field label="Custo MN — Recria (atual)" value={formatBRL(lote.custo_kg_mn_recria)} />
+        )}
         {lote.custo_kg_mn_crescimento != null && (
           <Field label="Custo MN — Crescimento (atual)" value={formatBRL(lote.custo_kg_mn_crescimento)} />
         )}
@@ -723,6 +729,7 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
   const [pesoEntrada, setPesoEntrada] = useState(lote?.peso_entrada != null ? String(lote.peso_entrada) : "");
   const [gmdEsperado, setGmdEsperado] = useState(lote?.gmd_esperado != null ? String(lote.gmd_esperado) : "");
   const [custoAdaptacao, setCustoAdaptacao] = useState(lote?.custo_kg_mn_adaptacao != null ? String(lote.custo_kg_mn_adaptacao) : "");
+  const [custoRecria, setCustoRecria] = useState(lote?.custo_kg_mn_recria != null ? String(lote.custo_kg_mn_recria) : "");
   const [custoCrescimento, setCustoCrescimento] = useState(lote?.custo_kg_mn_crescimento != null ? String(lote.custo_kg_mn_crescimento) : "");
   const [custoTerminacao, setCustoTerminacao] = useState(lote?.custo_kg_mn_terminacao != null ? String(lote.custo_kg_mn_terminacao) : "");
   const [dataSaida, setDataSaida] = useState(lote?.data_saida || "");
@@ -742,6 +749,7 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
         peso_entrada: Number(pesoEntrada),
         gmd_esperado: gmdEsperado !== "" ? Number(gmdEsperado) : null,
         custo_kg_mn_adaptacao: custoAdaptacao !== "" ? Number(custoAdaptacao) : null,
+        custo_kg_mn_recria: custoRecria !== "" ? Number(custoRecria) : null,
         custo_kg_mn_crescimento: custoCrescimento !== "" ? Number(custoCrescimento) : null,
         custo_kg_mn_terminacao: custoTerminacao !== "" ? Number(custoTerminacao) : null,
         data_saida: dataSaida || null,
@@ -767,6 +775,7 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
       <SectionTitle>Custo do kg de MN por fase</SectionTitle>
       <div style={styles.card}>
         <InputField label="Adaptação (R$/kg)" type="number" value={custoAdaptacao} onChange={setCustoAdaptacao} placeholder="Ex: 1.10" />
+        <InputField label="Recria (R$/kg)" type="number" value={custoRecria} onChange={setCustoRecria} placeholder="Ex: 1.15" />
         <InputField label="Crescimento (R$/kg)" type="number" value={custoCrescimento} onChange={setCustoCrescimento} placeholder="Ex: 1.20" />
         <InputField label="Terminação (R$/kg)" type="number" value={custoTerminacao} onChange={setCustoTerminacao} placeholder="Ex: 1.35" />
         <div style={{ fontSize: 11.5, color: "#9A9A94", padding: "0 0 10px" }}>
