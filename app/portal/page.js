@@ -59,7 +59,15 @@ function TelaLoginCliente() {
         const { error } = await supabase.auth.signInWithPassword({ email, password: senha });
         if (error) throw error;
       } else {
-        const { error } = await supabase.auth.signUp({ email, password: senha });
+        // emailRedirectTo garante que o link de confirmação do e-mail volte
+        // para o portal do cliente — sem isso, o Supabase usa a "Site URL"
+        // padrão do projeto (a raiz do app, que é a tela do consultor), e o
+        // cliente cai numa tela dizendo que o acesso é exclusivo dele.
+        const { error } = await supabase.auth.signUp({
+          email,
+          password: senha,
+          options: { emailRedirectTo: "https://confinamento-nine.vercel.app/portal" },
+        });
         if (error) throw error;
         setErro("Conta criada! Verifique seu e-mail para confirmar o acesso e depois entre novamente.");
       }
