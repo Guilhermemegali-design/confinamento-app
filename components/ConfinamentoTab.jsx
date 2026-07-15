@@ -603,7 +603,27 @@ function LoteDetalhe({
 // sem legenda — com pontos ≥8px, linha fina de 2px e o rótulo exato
 // disponível na lista logo abaixo (que já funciona como "tabela" acessível
 // dos mesmos dados).
-function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45" }) {
+// Regressão linear simples (mínimos quadrados) usando o índice do ponto
+// como eixo x — serve para traçar uma linha de tendência mesmo com datas
+// espaçadas de forma irregular.
+function calcularRegressaoLinear(valores) {
+  const n = valores.length;
+  if (n < 2) return null;
+  let somaX = 0, somaY = 0, somaXY = 0, somaX2 = 0;
+  for (let i = 0; i < n; i++) {
+    somaX += i;
+    somaY += valores[i];
+    somaXY += i * valores[i];
+    somaX2 += i * i;
+  }
+  const denominador = n * somaX2 - somaX * somaX;
+  if (denominador === 0) return null;
+  const b = (n * somaXY - somaX * somaY) / denominador;
+  const a = (somaY - b * somaX) / n;
+  return { a, b }; // valor previsto no índice i = a + b*i
+}
+
+function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45", tendencia = false }) {
   const largura = 320;
   const altura = 120;
   const paddingEsquerda = 34;
@@ -628,6 +648,20 @@ function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45" }) {
   const linha = coords.map((c) => `${c.x},${c.y}`).join(" ");
   const formatEixo = (v) => `${Number.isInteger(v) ? v : v.toFixed(1)} ${unidade}`;
 
+  const regressao = tendencia ? calcularRegressaoLinear(valores) : null;
+  const linhaTendencia =
+    regressao &&
+    (() => {
+      const yInicio = regressao.a;
+      const yFim = regressao.a + regressao.b * (valores.length - 1);
+      return {
+        x1: coords[0].x,
+        y1: altura - paddingY - ((yInicio - min) / span) * (altura - paddingY * 2),
+        x2: coords[coords.length - 1].x,
+        y2: altura - paddingY - ((yFim - min) / span) * (altura - paddingY * 2),
+      };
+    })();
+
   return (
     <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #ECEAE3", padding: "14px 10px 10px" }}>
       <svg viewBox={`0 0 ${largura} ${altura}`} style={{ width: "100%", height: altura, display: "block" }}>
@@ -651,6 +685,18 @@ function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45" }) {
         <text x={0} y={paddingY + 3} fontSize="9" fill="#ABA9A0">{formatEixo(max)}</text>
         <text x={0} y={altura / 2 + 3} fontSize="9" fill="#ABA9A0">{formatEixo(meio)}</text>
         <text x={0} y={altura - paddingY + 3} fontSize="9" fill="#ABA9A0">{formatEixo(min)}</text>
+        {linhaTendencia && (
+          <line
+            x1={linhaTendencia.x1}
+            y1={linhaTendencia.y1}
+            x2={linhaTendencia.x2}
+            y2={linhaTendencia.y2}
+            stroke={cor}
+            strokeWidth="1.5"
+            strokeDasharray="5 4"
+            opacity="0.55"
+          />
+        )}
         <polyline points={linha} fill="none" stroke={cor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         {coords.map((c, i) => (
           <circle key={i} cx={c.x} cy={c.y} r="4" fill={cor}>
@@ -662,6 +708,9 @@ function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45" }) {
         <span>{formatDataBR(pontos[0].data)}</span>
         <span>{formatDataBR(pontos[pontos.length - 1].data)}</span>
       </div>
+      {linhaTendencia && (
+        <div style={{ fontSize: 10.5, color: "#9A9A94", padding: "4px 6px 0 34px" }}>- - - linha de tendência</div>
+      )}
     </div>
   );
 }
@@ -1080,7 +1129,7 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote }) {
           <div style={{ fontWeight: 700, fontSize: 14.5, margin: "0 4px 10px" }}>{lote.nome}</div>
           <div style={{ ...styles.sectionTitle, margin: "0 4px 6px" }}>Consumo de MS em relação ao peso vivo (%)</div>
           {pontosPV.length > 1 ? (
-            <GraficoLinha pontos={pontosPV} valueKey="percentualPV" unidade="%" cor="#1F4D45" />
+            <GraficoLinha pontos={pontosPV} valueKey="percentualPV" unidade="%" cor="#1F4D45" tendencia />
           ) : (
             <EmptyHint text="Falta a % de MS em pelo menos 2 lançamentos para montar este gráfico." />
           )}
