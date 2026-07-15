@@ -14,6 +14,22 @@ const FASES_DIETA = [
 ];
 const FASE_LABEL = Object.fromEntries(FASES_DIETA.map((f) => [f.value, f.label]));
 
+const OPCOES_ORDENACAO = [
+  { value: "entrada_desc", label: "Mais recentes" },
+  { value: "entrada_asc", label: "Mais antigos" },
+  { value: "nome", label: "Nome (A-Z)" },
+  { value: "cabecas_desc", label: "Nº de cabeças" },
+];
+
+function compararLotes(ordenacao) {
+  return (a, b) => {
+    if (ordenacao === "nome") return a.lote.nome.localeCompare(b.lote.nome, "pt-BR");
+    if (ordenacao === "cabecas_desc") return Number(b.lote.num_cabecas || 0) - Number(a.lote.num_cabecas || 0);
+    if (ordenacao === "entrada_asc") return a.lote.data_entrada.localeCompare(b.lote.data_entrada);
+    return b.lote.data_entrada.localeCompare(a.lote.data_entrada);
+  };
+}
+
 function custoKgMnDaFase(lote, fase) {
   if (fase === "adaptacao") return lote.custo_kg_mn_adaptacao;
   if (fase === "crescimento") return lote.custo_kg_mn_crescimento;
@@ -44,6 +60,7 @@ export default function ConfinamentoTab({
 }) {
   const [tela, setTela] = useState({ modo: "lista" });
   const [aba, setAba] = useState("painel");
+  const [ordenacao, setOrdenacao] = useState("entrada_desc");
 
   const pesagensPorLote = {};
   for (const p of pesagens) {
@@ -183,7 +200,7 @@ export default function ConfinamentoTab({
   }));
   const ativos = comIndicadores
     .filter((i) => i.status === "Ativo")
-    .sort((a, b) => b.lote.data_entrada.localeCompare(a.lote.data_entrada));
+    .sort(compararLotes(ordenacao));
   const finalizados = comIndicadores
     .filter((i) => i.status === "Finalizado")
     .sort((a, b) => (b.lote.data_saida || "").localeCompare(a.lote.data_saida || ""));
@@ -248,7 +265,18 @@ export default function ConfinamentoTab({
             />
           </div>
 
-          <SectionTitle>Lotes ativos</SectionTitle>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
+            <div style={{ ...styles.sectionTitle, margin: 0 }}>Lotes ativos</div>
+            <select
+              value={ordenacao}
+              onChange={(e) => setOrdenacao(e.target.value)}
+              style={{ fontSize: 12, color: "#5C5C58", background: "#F1EFE8", border: "none", borderRadius: 8, padding: "5px 8px", fontFamily: "inherit" }}
+            >
+              {OPCOES_ORDENACAO.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
           {ativos.length === 0 && <EmptyHint text="Nenhum lote ativo." />}
           {ativos.map(({ lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje, custoAcumuladoAnimal }) => (
             <button key={lote.id} style={styles.listItem} onClick={() => setTela({ modo: "lote", id: lote.id })}>
