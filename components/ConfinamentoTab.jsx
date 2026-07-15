@@ -69,6 +69,7 @@ export default function ConfinamentoTab({
   const [tela, setTela] = useState({ modo: "lista" });
   const [aba, setAba] = useState("painel");
   const [ordenacao, setOrdenacao] = useState("manual");
+  const [movendo, setMovendo] = useState(false);
 
   const pesagensPorLote = {};
   for (const p of pesagens) {
@@ -218,26 +219,35 @@ export default function ConfinamentoTab({
   // base na posição atual deles na tela — depois só troca a ordem dos dois
   // lotes envolvidos na troca.
   async function moverLote(index, delta) {
+    // Trava contra cliques rápidos em sequência: sem isso, um segundo clique
+    // dispara antes do primeiro salvar, usando dados desatualizados e
+    // desfazendo a troca anterior (a ordem "voltava" sozinha).
+    if (movendo) return;
     const novoIndex = index + delta;
     if (novoIndex < 0 || novoIndex >= ativos.length) return;
 
-    const comOrdemAtual = ativos.map((item, i) => ({
-      lote: item.lote,
-      ordemAtual: item.lote.ordem != null ? item.lote.ordem : i * 10,
-    }));
+    setMovendo(true);
+    try {
+      const comOrdemAtual = ativos.map((item, i) => ({
+        lote: item.lote,
+        ordemAtual: item.lote.ordem != null ? item.lote.ordem : i * 10,
+      }));
 
-    const a = comOrdemAtual[index];
-    const b = comOrdemAtual[novoIndex];
+      const a = comOrdemAtual[index];
+      const b = comOrdemAtual[novoIndex];
 
-    await Promise.all([
-      onAtualizar(a.lote.id, { ordem: b.ordemAtual }),
-      onAtualizar(b.lote.id, { ordem: a.ordemAtual }),
-      ...comOrdemAtual
-        .filter((item) => item.lote.ordem == null && item.lote.id !== a.lote.id && item.lote.id !== b.lote.id)
-        .map((item) => onAtualizar(item.lote.id, { ordem: item.ordemAtual })),
-    ]);
+      await Promise.all([
+        onAtualizar(a.lote.id, { ordem: b.ordemAtual }),
+        onAtualizar(b.lote.id, { ordem: a.ordemAtual }),
+        ...comOrdemAtual
+          .filter((item) => item.lote.ordem == null && item.lote.id !== a.lote.id && item.lote.id !== b.lote.id)
+          .map((item) => onAtualizar(item.lote.id, { ordem: item.ordemAtual })),
+      ]);
 
-    if (ordenacao !== "manual") setOrdenacao("manual");
+      if (ordenacao !== "manual") setOrdenacao("manual");
+    } finally {
+      setMovendo(false);
+    }
   }
 
   return (
@@ -337,15 +347,15 @@ export default function ConfinamentoTab({
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     <button
                       onClick={() => moverLote(index, -1)}
-                      disabled={index === 0}
-                      style={{ background: "transparent", border: "none", color: index === 0 ? "#D8D6CD" : "#5C5C58", cursor: index === 0 ? "default" : "pointer", padding: 2, display: "flex" }}
+                      disabled={index === 0 || movendo}
+                      style={{ background: "transparent", border: "none", color: index === 0 || movendo ? "#D8D6CD" : "#5C5C58", cursor: index === 0 || movendo ? "default" : "pointer", padding: 2, display: "flex" }}
                     >
                       <ChevronUp size={16} />
                     </button>
                     <button
                       onClick={() => moverLote(index, 1)}
-                      disabled={index === ativos.length - 1}
-                      style={{ background: "transparent", border: "none", color: index === ativos.length - 1 ? "#D8D6CD" : "#5C5C58", cursor: index === ativos.length - 1 ? "default" : "pointer", padding: 2, display: "flex" }}
+                      disabled={index === ativos.length - 1 || movendo}
+                      style={{ background: "transparent", border: "none", color: index === ativos.length - 1 || movendo ? "#D8D6CD" : "#5C5C58", cursor: index === ativos.length - 1 || movendo ? "default" : "pointer", padding: 2, display: "flex" }}
                     >
                       <ChevronDown size={16} />
                     </button>
