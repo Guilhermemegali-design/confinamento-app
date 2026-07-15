@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2, Pencil } from "lucide-react";
+import { Trash2, Pencil, ChevronUp, ChevronDown } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import { calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo } from "@/lib/confinamento";
@@ -15,6 +15,7 @@ const FASES_DIETA = [
 const FASE_LABEL = Object.fromEntries(FASES_DIETA.map((f) => [f.value, f.label]));
 
 const OPCOES_ORDENACAO = [
+  { value: "manual", label: "Ordem manual" },
   { value: "entrada_desc", label: "Mais recentes" },
   { value: "entrada_asc", label: "Mais antigos" },
   { value: "nome", label: "Nome (A-Z)" },
@@ -23,7 +24,14 @@ const OPCOES_ORDENACAO = [
 
 function compararLotes(ordenacao) {
   return (a, b) => {
-    if (ordenacao === "nome") return a.lote.nome.localeCompare(b.lote.nome, "pt-BR");
+    if (ordenacao === "manual") {
+      const oa = a.lote.ordem != null ? a.lote.ordem : Infinity;
+      const ob = b.lote.ordem != null ? b.lote.ordem : Infinity;
+      if (oa !== ob) return oa - ob;
+      return b.lote.data_entrada.localeCompare(a.lote.data_entrada);
+    }
+    // "numeric: true" faz "Curral 2" vir antes de "Curral 10".
+    if (ordenacao === "nome") return a.lote.nome.localeCompare(b.lote.nome, "pt-BR", { numeric: true });
     if (ordenacao === "cabecas_desc") return Number(b.lote.num_cabecas || 0) - Number(a.lote.num_cabecas || 0);
     if (ordenacao === "entrada_asc") return a.lote.data_entrada.localeCompare(b.lote.data_entrada);
     return b.lote.data_entrada.localeCompare(a.lote.data_entrada);
@@ -60,7 +68,7 @@ export default function ConfinamentoTab({
 }) {
   const [tela, setTela] = useState({ modo: "lista" });
   const [aba, setAba] = useState("painel");
-  const [ordenacao, setOrdenacao] = useState("entrada_desc");
+  const [ordenacao, setOrdenacao] = useState("manual");
 
   const pesagensPorLote = {};
   for (const p of pesagens) {
@@ -205,6 +213,33 @@ export default function ConfinamentoTab({
     .filter((i) => i.status === "Finalizado")
     .sort((a, b) => (b.lote.data_saida || "").localeCompare(a.lote.data_saida || ""));
 
+  // Move um lote ativo para cima/baixo na lista. Na primeira vez que isso é
+  // usado, dá uma "ordem" (10, 20, 30...) para todos os lotes ativos com
+  // base na posição atual deles na tela — depois só troca a ordem dos dois
+  // lotes envolvidos na troca.
+  async function moverLote(index, delta) {
+    const novoIndex = index + delta;
+    if (novoIndex < 0 || novoIndex >= ativos.length) return;
+
+    const comOrdemAtual = ativos.map((item, i) => ({
+      lote: item.lote,
+      ordemAtual: item.lote.ordem != null ? item.lote.ordem : i * 10,
+    }));
+
+    const a = comOrdemAtual[index];
+    const b = comOrdemAtual[novoIndex];
+
+    await Promise.all([
+      onAtualizar(a.lote.id, { ordem: b.ordemAtual }),
+      onAtualizar(b.lote.id, { ordem: a.ordemAtual }),
+      ...comOrdemAtual
+        .filter((item) => item.lote.ordem == null && item.lote.id !== a.lote.id && item.lote.id !== b.lote.id)
+        .map((item) => onAtualizar(item.lote.id, { ordem: item.ordemAtual })),
+    ]);
+
+    if (ordenacao !== "manual") setOrdenacao("manual");
+  }
+
   return (
     <div>
       <div style={styles.backHeaderRow}>
@@ -278,30 +313,56 @@ export default function ConfinamentoTab({
             </select>
           </div>
           {ativos.length === 0 && <EmptyHint text="Nenhum lote ativo." />}
-          {ativos.map(({ lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje, custoAcumuladoAnimal }) => (
-            <button key={lote.id} style={styles.listItem} onClick={() => setTela({ modo: "lote", id: lote.id })}>
-              <div style={styles.avatar}>{lote.nome.charAt(0)}</div>
-              <div style={{ flex: 1, textAlign: "left" }}>
-                <div style={styles.listItemTitle}>{lote.nome}</div>
-                <div style={styles.listItemSub}>
-                  {lote.num_cabecas} cab. · entrada {formatDataBR(lote.data_entrada)} · {diasConfinamento}d
-                </div>
-                {custoAcumuladoAnimal != null && (
-                  <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
-                    Custo acum. {formatBRL(custoAcumuladoAnimal)}/animal
+          {ativos.map((item, index) => {
+            const { lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje, custoAcumuladoAnimal } = item;
+            return (
+              <div key={lote.id} style={styles.listItem}>
+                {ordenacao === "manual" && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <button
+                      onClick={() => moverLote(index, -1)}
+                      disabled={index === 0}
+                      style={{ background: "transparent", border: "none", color: index === 0 ? "#D8D6CD" : "#5C5C58", cursor: index === 0 ? "default" : "pointer", padding: 2, display: "flex" }}
+                    >
+                      <ChevronUp size={16} />
+                    </button>
+                    <button
+                      onClick={() => moverLote(index, 1)}
+                      disabled={index === ativos.length - 1}
+                      style={{ background: "transparent", border: "none", color: index === ativos.length - 1 ? "#D8D6CD" : "#5C5C58", cursor: index === ativos.length - 1 ? "default" : "pointer", padding: 2, display: "flex" }}
+                    >
+                      <ChevronDown size={16} />
+                    </button>
                   </div>
                 )}
+                <button
+                  onClick={() => setTela({ modo: "lote", id: lote.id })}
+                  style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0, background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}
+                >
+                  <div style={styles.avatar}>{lote.nome.charAt(0)}</div>
+                  <div style={{ flex: 1, textAlign: "left" }}>
+                    <div style={styles.listItemTitle}>{lote.nome}</div>
+                    <div style={styles.listItemSub}>
+                      {lote.num_cabecas} cab. · entrada {formatDataBR(lote.data_entrada)} · {diasConfinamento}d
+                    </div>
+                    {custoAcumuladoAnimal != null && (
+                      <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
+                        Custo acum. {formatBRL(custoAcumuladoAnimal)}/animal
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: "#1F4D45" }}>
+                      {pesoEsperadoHoje != null ? `${pesoEsperadoHoje.toFixed(1)} kg` : "—"}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
+                      {gmdAcumulado != null ? `GMD ${gmdAcumulado.toFixed(2)}` : "—"}
+                    </div>
+                  </div>
+                </button>
               </div>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontWeight: 700, fontSize: 14, color: "#1F4D45" }}>
-                  {pesoEsperadoHoje != null ? `${pesoEsperadoHoje.toFixed(1)} kg` : "—"}
-                </div>
-                <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
-                  {gmdAcumulado != null ? `GMD ${gmdAcumulado.toFixed(2)}` : "—"}
-                </div>
-              </div>
-            </button>
-          ))}
+            );
+          })}
 
           <SectionTitle>Lotes finalizados</SectionTitle>
           {finalizados.length === 0 && <EmptyHint text="Nenhum lote finalizado ainda." />}
