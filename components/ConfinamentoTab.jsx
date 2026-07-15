@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Trash2, Pencil } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import { calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo } from "@/lib/confinamento";
@@ -39,7 +39,7 @@ export default function ConfinamentoTab({
   cliente, lotes, pesagens = [], consumos = [],
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
-  onAdicionarConsumo, onExcluirConsumo,
+  onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo,
   onBack,
 }) {
   const [tela, setTela] = useState({ modo: "lista" });
@@ -120,6 +120,24 @@ export default function ConfinamentoTab({
     );
   }
 
+  if (tela.modo === "editar-consumo") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    const consumo = (consumosPorLote[tela.loteId] || []).find((c) => c.id === tela.consumoId);
+    if (!lote || !consumo) return <EmptyHint text="Consumo não encontrado." />;
+    return (
+      <FormConsumo
+        lote={lote}
+        cliente={cliente}
+        consumo={consumo}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAtualizarConsumo(consumo.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
   if (tela.modo === "lancar-consumo") {
     const lotesAtivos = lotes.filter((l) => !l.data_saida);
     return (
@@ -152,6 +170,7 @@ export default function ConfinamentoTab({
         onNovaPesagem={onAdicionarPesagem && (() => setTela({ modo: "nova-pesagem", loteId: lote.id }))}
         onExcluirPesagem={onExcluirPesagem}
         onNovoConsumo={onAdicionarConsumo && (() => setTela({ modo: "novo-consumo", loteId: lote.id }))}
+        onEditarConsumo={onAtualizarConsumo && ((consumoId) => setTela({ modo: "editar-consumo", loteId: lote.id, consumoId }))}
         onExcluirConsumo={onExcluirConsumo}
       />
     );
@@ -298,7 +317,7 @@ function LoteDetalhe({
   lote, indicadores, evolucao, evolucaoConsumo,
   onBack, onEditar,
   onNovaPesagem, onExcluirPesagem,
-  onNovoConsumo, onExcluirConsumo,
+  onNovoConsumo, onEditarConsumo, onExcluirConsumo,
 }) {
   return (
     <div>
@@ -436,6 +455,14 @@ function LoteDetalhe({
                     {c.custoDiarioAnimal != null ? ` · ${formatBRL(c.custoDiarioAnimal)}/animal` : ""}
                   </div>
                 </div>
+                {onEditarConsumo && (
+                  <button
+                    onClick={() => onEditarConsumo(c.id)}
+                    style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                )}
                 {onExcluirConsumo && (
                   <button
                     onClick={() => {
@@ -635,11 +662,12 @@ function FormPesagem({ onCancel, onSave }) {
   );
 }
 
-function FormConsumo({ lote, cliente, onCancel, onSave }) {
-  const [data, setData] = useState(new Date().toISOString().slice(0, 10));
-  const [consumoTotalLote, setConsumoTotalLote] = useState("");
-  const [msDieta, setMsDieta] = useState("");
-  const [dietaFase, setDietaFase] = useState(null);
+function FormConsumo({ lote, cliente, consumo, onCancel, onSave }) {
+  const editando = Boolean(consumo);
+  const [data, setData] = useState(consumo?.data || new Date().toISOString().slice(0, 10));
+  const [consumoTotalLote, setConsumoTotalLote] = useState(consumo?.consumo_total_lote != null ? String(consumo.consumo_total_lote) : "");
+  const [msDieta, setMsDieta] = useState(consumo?.ms_dieta != null ? String(consumo.ms_dieta) : "");
+  const [dietaFase, setDietaFase] = useState(consumo?.dieta_fase || null);
   const [salvando, setSalvando] = useState(false);
   const valido = data && consumoTotalLote !== "";
   const consumoMSPreview =
@@ -675,7 +703,7 @@ function FormConsumo({ lote, cliente, onCancel, onSave }) {
 
   return (
     <div>
-      <BackHeader title="Novo consumo" onBack={onCancel} />
+      <BackHeader title={editando ? "Editar consumo" : "Novo consumo"} onBack={onCancel} />
       <div style={styles.card}>
         <InputField label="Data *" type="date" value={data} onChange={setData} />
         <div style={{ padding: "10px 0 4px" }}>
@@ -724,7 +752,7 @@ function FormConsumo({ lote, cliente, onCancel, onSave }) {
         />
       </div>
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
-        {salvando ? "Salvando..." : "Salvar consumo"}
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Salvar consumo"}
       </PrimaryButton>
     </div>
   );

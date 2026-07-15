@@ -119,6 +119,10 @@ export default function Home() {
             await dados.adicionarConsumo(loteId, c);
             mostrarToast("Consumo registrado");
           }}
+          onUpdateConsumo={async (id, c) => {
+            await dados.atualizarConsumo(id, c);
+            mostrarToast("Consumo atualizado");
+          }}
           onDeleteConsumo={async (id) => {
             await dados.excluirConsumo(id);
             mostrarToast("Consumo excluído");

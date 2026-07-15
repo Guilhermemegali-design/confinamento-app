@@ -11,7 +11,7 @@ export default function ClientesTab({
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
-  onAddConsumo, onDeleteConsumo,
+  onAddConsumo, onUpdateConsumo, onDeleteConsumo,
 }) {
   if (view.screen === "confinamento") {
     const cliente = clientes.find((c) => c.id === view.id);
@@ -32,6 +32,7 @@ export default function ClientesTab({
         onAdicionarPesagem={onAddPesagem}
         onExcluirPesagem={onDeletePesagem}
         onAdicionarConsumo={onAddConsumo}
+        onAtualizarConsumo={onUpdateConsumo}
         onExcluirConsumo={onDeleteConsumo}
         onBack={() => setView({ screen: "cliente-detalhe", id: cliente.id })}
       />
