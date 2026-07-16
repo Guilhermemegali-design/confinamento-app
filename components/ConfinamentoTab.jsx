@@ -1149,6 +1149,7 @@ function FormConsumoEmMassa({ lotesAtivos, cliente, onCancel, onSalvarLote, onCo
 // dado necessário (MS da dieta preenchida).
 function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote }) {
   const [exportando, setExportando] = useState(false);
+  const [ordenacao, setOrdenacao] = useState("manual");
   const comDados = lotes
     .map((lote) => ({
       lote,
@@ -1157,7 +1158,8 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote }) {
         (p) => p.percentualPV != null
       ),
     }))
-    .filter((x) => x.pontosPV.length > 0);
+    .filter((x) => x.pontosPV.length > 0)
+    .sort(compararLotes(ordenacao));
 
   if (comDados.length === 0) {
     return (
@@ -1179,7 +1181,16 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", margin: "0 4px 14px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 4px 14px", gap: 8 }}>
+        <select
+          value={ordenacao}
+          onChange={(e) => setOrdenacao(e.target.value)}
+          style={{ fontSize: 12, color: "#5C5C58", background: "#F1EFE8", border: "none", borderRadius: 8, padding: "5px 8px", fontFamily: "inherit" }}
+        >
+          {OPCOES_ORDENACAO.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
         <button
           onClick={exportar}
           disabled={exportando}
