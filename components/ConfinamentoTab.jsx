@@ -4,7 +4,10 @@ import { useState } from "react";
 import { Trash2, Pencil, ChevronUp, ChevronDown } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
-import { calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo } from "@/lib/confinamento";
+import {
+  calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo,
+  NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, calcularHistoricoEsperadoRealizado,
+} from "@/lib/confinamento";
 import { BackHeader, SectionTitle, EmptyHint, Field, InputField, TextAreaField, PrimaryButton } from "./UI";
 
 const FASES_DIETA = [
@@ -63,10 +66,11 @@ function msDaFase(cliente, fase) {
 // Reaproveitado tanto na tela do consultor (com criar/excluir) quanto no portal
 // do cliente (ver e editar).
 export default function ConfinamentoTab({
-  cliente, lotes, pesagens = [], consumos = [],
+  cliente, lotes, pesagens = [], consumos = [], leiturasCocho = [],
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo,
+  onRegistrarLeituraCocho,
   onBack,
 }) {
   const [tela, setTela] = useState({ modo: "lista" });
@@ -81,6 +85,10 @@ export default function ConfinamentoTab({
   const consumosPorLote = {};
   for (const c of consumos) {
     (consumosPorLote[c.lote_id] ||= []).push(c);
+  }
+  const leiturasCochoPorLote = {};
+  for (const l of leiturasCocho) {
+    (leiturasCochoPorLote[l.lote_id] ||= []).push(l);
   }
 
   if (tela.modo === "novo") {
@@ -274,7 +282,7 @@ export default function ConfinamentoTab({
         <div style={{ fontSize: 13, color: "#9A9A94", marginTop: -8, marginBottom: 14 }}>{cliente.nome}</div>
       )}
 
-      <div style={styles.viewToggle}>
+      <div style={{ ...styles.viewToggle, flexWrap: "wrap" }}>
         <button
           onClick={() => setAba("painel")}
           style={{ ...styles.viewToggleBtn, ...(aba === "painel" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
@@ -287,10 +295,33 @@ export default function ConfinamentoTab({
         >
           Gráficos
         </button>
+        {onRegistrarLeituraCocho && (
+          <button
+            onClick={() => setAba("cocho")}
+            style={{ ...styles.viewToggleBtn, ...(aba === "cocho" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
+          >
+            Leitura de cocho
+          </button>
+        )}
+        <button
+          onClick={() => setAba("esperado")}
+          style={{ ...styles.viewToggleBtn, ...(aba === "esperado" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
+        >
+          Consumo esperado
+        </button>
       </div>
 
       {aba === "graficos" ? (
         <AbaGraficos lotes={lotes} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} />
+      ) : aba === "cocho" && onRegistrarLeituraCocho ? (
+        <AbaLeituraCocho
+          lotes={lotes}
+          consumosPorLote={consumosPorLote}
+          leiturasCochoPorLote={leiturasCochoPorLote}
+          onRegistrar={onRegistrarLeituraCocho}
+        />
+      ) : aba === "esperado" ? (
+        <AbaConsumoEsperado lotes={lotes} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} />
       ) : (
         <>
           <SectionTitle>Painel</SectionTitle>
@@ -1144,6 +1175,222 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+// Leitura de cocho: pra cada lote ativo, mostra o consumo de referência
+// (último lançamento até ontem) e 5 botões de nota (-2 a 2) que decidem o
+// ajuste do trato de hoje. Uma leitura por lote/dia — clicar em outra nota
+// no mesmo dia substitui a anterior (upsert), corrigindo clique errado sem
+// precisar excluir nada.
+function AbaLeituraCocho({ lotes, consumosPorLote, leiturasCochoPorLote, onRegistrar }) {
+  const hoje = new Date().toISOString().slice(0, 10);
+  const ativos = lotes.filter((l) => !l.data_saida);
+  const [salvandoId, setSalvandoId] = useState(null);
+
+  if (ativos.length === 0) return <EmptyHint text="Nenhum lote ativo." />;
+
+  async function registrar(lote, referencia, nota) {
+    setSalvandoId(lote.id);
+    try {
+      await onRegistrar(lote.id, {
+        data: hoje,
+        consumo_referencia: Number(referencia.consumo_total_lote),
+        nota,
+        ajuste_percentual: NOTAS_LEITURA_COCHO.find((n) => n.nota === nota).ajuste,
+        quantidade_esperada: calcularQuantidadeEsperada(referencia.consumo_total_lote, nota),
+      });
+    } finally {
+      setSalvandoId(null);
+    }
+  }
+
+  return (
+    <div>
+      {ativos.map((lote) => {
+        const referencia = obterConsumoReferenciaCocho(consumosPorLote[lote.id] || []);
+        const historico = [...(leiturasCochoPorLote[lote.id] || [])].sort((a, b) => a.data.localeCompare(b.data));
+        const leituraHoje = historico.find((l) => l.data === hoje);
+        return (
+          <div key={lote.id} style={{ ...styles.card, marginBottom: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5, padding: "10px 0 4px" }}>{lote.nome}</div>
+            {referencia ? (
+              <div style={{ fontSize: 12.5, color: "#9A9A94", paddingBottom: 8 }}>
+                Consumo de referência ({formatDataBR(referencia.data)}): {referencia.consumo_total_lote} kg/dia
+              </div>
+            ) : (
+              <div style={{ fontSize: 12.5, color: "#9A9A94", paddingBottom: 8 }}>
+                Nenhum consumo lançado ainda — lance o consumo do lote antes de fazer a leitura de cocho.
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 6, paddingBottom: 8 }}>
+              {NOTAS_LEITURA_COCHO.map(({ nota, ajuste }) => {
+                const ativa = leituraHoje && Number(leituraHoje.nota) === nota;
+                return (
+                  <button
+                    key={nota}
+                    disabled={!referencia || salvandoId === lote.id}
+                    onClick={() => registrar(lote, referencia, nota)}
+                    title={`${ajuste > 0 ? "+" : ""}${ajuste}% no trato`}
+                    style={{
+                      flex: 1,
+                      padding: "10px 0",
+                      borderRadius: 10,
+                      fontWeight: 700,
+                      fontSize: 14,
+                      border: ativa ? "none" : "1px solid #ECEAE3",
+                      background: ativa ? "#1F4D45" : "#fff",
+                      color: ativa ? "#fff" : !referencia ? "#D8D6CD" : "#22231F",
+                      cursor: !referencia || salvandoId === lote.id ? "default" : "pointer",
+                    }}
+                  >
+                    {nota > 0 ? `+${nota}` : nota}
+                  </button>
+                );
+              })}
+            </div>
+            {leituraHoje && (
+              <div style={{ fontSize: 12.5, color: "#A85A2A", fontWeight: 600, paddingBottom: historico.length > 1 ? 10 : 0 }}>
+                Quantidade esperada hoje: {Number(leituraHoje.quantidade_esperada).toFixed(2)} kg (
+                {Number(leituraHoje.ajuste_percentual) > 0 ? "+" : ""}
+                {Number(leituraHoje.ajuste_percentual)}%)
+              </div>
+            )}
+            {historico.length > 1 && <GraficoLinha pontos={historico} valueKey="nota" unidade="pontos" cor="#7A4B26" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Consumo esperado: quantidade que deveria ser fornecida hoje (decidida na
+// leitura de cocho) e, assim que o consumo real do dia for lançado (na aba
+// Nutrição do lote), compara esperado x realizado num gráfico.
+function AbaConsumoEsperado({ lotes, consumosPorLote, leiturasCochoPorLote }) {
+  const hoje = new Date().toISOString().slice(0, 10);
+  const ativos = lotes.filter((l) => !l.data_saida);
+
+  if (ativos.length === 0) return <EmptyHint text="Nenhum lote ativo." />;
+
+  return (
+    <div>
+      {ativos.map((lote) => {
+        const leituras = leiturasCochoPorLote[lote.id] || [];
+        const leituraHoje = leituras.find((l) => l.data === hoje);
+        const historico = calcularHistoricoEsperadoRealizado(leituras, consumosPorLote[lote.id] || []);
+        return (
+          <div key={lote.id} style={{ marginBottom: 26 }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5, margin: "0 4px 6px" }}>{lote.nome}</div>
+            {leituraHoje ? (
+              <div style={{ fontSize: 13, color: "#A85A2A", fontWeight: 700, margin: "0 4px 10px" }}>
+                Esperado hoje: {Number(leituraHoje.quantidade_esperada).toFixed(2)} kg (nota{" "}
+                {Number(leituraHoje.nota) > 0 ? "+" : ""}
+                {Number(leituraHoje.nota)})
+              </div>
+            ) : (
+              <div style={{ fontSize: 12.5, color: "#9A9A94", margin: "0 4px 10px" }}>
+                Sem leitura de cocho hoje — registre na aba "Leitura de cocho".
+              </div>
+            )}
+            {historico.length > 1 ? (
+              <GraficoDuasLinhas
+                pontos={historico}
+                chave1="quantidadeEsperada"
+                chave2="realizado"
+                label1="Esperado"
+                label2="Realizado"
+                unidade="kg"
+                cor1="#1F4D45"
+                cor2="#A85A2A"
+              />
+            ) : (
+              <EmptyHint text='Ainda não há histórico suficiente — depende de pelo menos 2 leituras de cocho para montar o gráfico.' />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Gráfico de duas séries (esperado x realizado), mesmo estilo do
+// GraficoLinha — linha cheia para a primeira série, tracejada para a
+// segunda, com legenda embaixo. Pontos sem valor numa das séries (dia sem
+// consumo lançado ainda) simplesmente não entram na respectiva linha.
+function GraficoDuasLinhas({ pontos, chave1, chave2, label1, label2, unidade = "", cor1 = "#1F4D45", cor2 = "#A85A2A" }) {
+  const largura = 320;
+  const altura = 130;
+  const paddingEsquerda = 34;
+  const paddingDireita = 10;
+  const paddingY = 16;
+
+  const todosValores = pontos.flatMap((p) => [p[chave1], p[chave2]]).filter((v) => v != null);
+  const min = Math.min(...todosValores);
+  const max = Math.max(...todosValores);
+  const meio = (min + max) / 2;
+  const span = max - min || 1;
+
+  const xDe = (i) =>
+    pontos.length > 1
+      ? paddingEsquerda + (i / (pontos.length - 1)) * (largura - paddingEsquerda - paddingDireita)
+      : (paddingEsquerda + largura - paddingDireita) / 2;
+  const yDe = (v) => altura - paddingY - ((v - min) / span) * (altura - paddingY * 2);
+
+  function construirLinha(chave) {
+    return pontos
+      .map((p, i) => (p[chave] != null ? { x: xDe(i), y: yDe(p[chave]), v: p[chave], data: p.data } : null))
+      .filter(Boolean);
+  }
+
+  const coords1 = construirLinha(chave1);
+  const coords2 = construirLinha(chave2);
+  const formatEixo = (v) => `${Number.isInteger(v) ? v : v.toFixed(1)} ${unidade}`;
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #ECEAE3", padding: "14px 10px 10px" }}>
+      <svg viewBox={`0 0 ${largura} ${altura}`} style={{ width: "100%", height: altura, display: "block" }}>
+        <line x1={paddingEsquerda} y1={paddingY} x2={largura - paddingDireita} y2={paddingY} stroke="#F1EFE8" strokeWidth="1" />
+        <line x1={paddingEsquerda} y1={altura / 2} x2={largura - paddingDireita} y2={altura / 2} stroke="#F1EFE8" strokeWidth="1" />
+        <line
+          x1={paddingEsquerda}
+          y1={altura - paddingY}
+          x2={largura - paddingDireita}
+          y2={altura - paddingY}
+          stroke="#F1EFE8"
+          strokeWidth="1"
+        />
+        <text x={0} y={paddingY + 3} fontSize="9" fill="#ABA9A0">{formatEixo(max)}</text>
+        <text x={0} y={altura / 2 + 3} fontSize="9" fill="#ABA9A0">{formatEixo(meio)}</text>
+        <text x={0} y={altura - paddingY + 3} fontSize="9" fill="#ABA9A0">{formatEixo(min)}</text>
+        <polyline
+          points={coords1.map((c) => `${c.x},${c.y}`).join(" ")}
+          fill="none" stroke={cor1} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+        />
+        <polyline
+          points={coords2.map((c) => `${c.x},${c.y}`).join(" ")}
+          fill="none" stroke={cor2} strokeWidth="2" strokeDasharray="4 3" strokeLinecap="round" strokeLinejoin="round"
+        />
+        {coords1.map((c, i) => (
+          <circle key={`a${i}`} cx={c.x} cy={c.y} r="3.5" fill={cor1}>
+            <title>{`${formatDataBR(c.data)} · ${label1}: ${c.v} ${unidade}`}</title>
+          </circle>
+        ))}
+        {coords2.map((c, i) => (
+          <circle key={`b${i}`} cx={c.x} cy={c.y} r="3.5" fill={cor2}>
+            <title>{`${formatDataBR(c.data)} · ${label2}: ${c.v} ${unidade}`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#9A9A94", padding: "2px 6px 0 34px" }}>
+        <span>{formatDataBR(pontos[0].data)}</span>
+        <span>{formatDataBR(pontos[pontos.length - 1].data)}</span>
+      </div>
+      <div style={{ display: "flex", gap: 14, fontSize: 10.5, color: "#5C5C58", padding: "6px 6px 0 34px" }}>
+        <span><span style={{ color: cor1 }}>●</span> {label1}</span>
+        <span><span style={{ color: cor2 }}>●</span> {label2}</span>
+      </div>
     </div>
   );
 }

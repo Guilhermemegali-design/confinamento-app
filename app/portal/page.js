@@ -173,6 +173,7 @@ function PainelCliente({ cliente }) {
   const [lotes, setLotes] = useState([]);
   const [pesagens, setPesagens] = useState([]);
   const [consumos, setConsumos] = useState([]);
+  const [leiturasCocho, setLeiturasCocho] = useState([]);
 
   const carregar = useCallback(async () => {
     const { data: l } = await supabase.from("lotes_confinamento").select("*").eq("cliente_id", cliente.id);
@@ -183,9 +184,12 @@ function PainelCliente({ cliente }) {
       setPesagens(p || []);
       const { data: c } = await supabase.from("consumos_lote").select("*").in("lote_id", loteIds);
       setConsumos(c || []);
+      const { data: lc } = await supabase.from("leituras_cocho").select("*").in("lote_id", loteIds);
+      setLeiturasCocho(lc || []);
     } else {
       setPesagens([]);
       setConsumos([]);
+      setLeiturasCocho([]);
     }
   }, [cliente.id]);
 
@@ -227,6 +231,22 @@ function PainelCliente({ cliente }) {
     return data;
   }
 
+  // Upsert: uma leitura por lote/dia — clicar em outra nota no mesmo dia
+  // substitui a anterior.
+  async function registrarLeituraCocho(loteId, dados) {
+    const { data, error } = await supabase
+      .from("leituras_cocho")
+      .upsert({ ...dados, lote_id: loteId, consultor_id: cliente.consultor_id }, { onConflict: "lote_id,data" })
+      .select()
+      .single();
+    if (error) throw error;
+    setLeiturasCocho((ls) => {
+      const existe = ls.some((l) => l.lote_id === loteId && l.data === data.data);
+      return existe ? ls.map((l) => (l.lote_id === loteId && l.data === data.data ? data : l)) : [...ls, data];
+    });
+    return data;
+  }
+
   return (
     <div style={styles.app}>
       <div style={styles.topbar}>
@@ -247,9 +267,11 @@ function PainelCliente({ cliente }) {
           lotes={lotes}
           pesagens={pesagens}
           consumos={consumos}
+          leiturasCocho={leiturasCocho}
           onAtualizar={atualizarLote}
           onAdicionarPesagem={adicionarPesagem}
           onAdicionarConsumo={adicionarConsumo}
+          onRegistrarLeituraCocho={registrarLeituraCocho}
         />
       </div>
     </div>

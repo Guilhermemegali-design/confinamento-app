@@ -7,11 +7,12 @@ import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryBut
 import ConfinamentoTab from "./ConfinamentoTab";
 
 export default function ClientesTab({
-  clientes, lotes, pesagens, consumos, clientesUsuarios = [], view, setView,
+  clientes, lotes, pesagens, consumos, leiturasCocho = [], clientesUsuarios = [], view, setView,
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
   onAddConsumo, onUpdateConsumo, onDeleteConsumo,
+  onRegistrarLeituraCocho,
   onRemoveAcessoCliente,
 }) {
   if (view.screen === "confinamento") {
@@ -21,12 +22,14 @@ export default function ClientesTab({
     const loteIdsCliente = new Set(lotesCliente.map((l) => l.id));
     const pesagensCliente = pesagens.filter((p) => loteIdsCliente.has(p.lote_id));
     const consumosCliente = consumos.filter((c) => loteIdsCliente.has(c.lote_id));
+    const leiturasCochoCliente = leiturasCocho.filter((l) => loteIdsCliente.has(l.lote_id));
     return (
       <ConfinamentoTab
         cliente={cliente}
         lotes={lotesCliente}
         pesagens={pesagensCliente}
         consumos={consumosCliente}
+        leiturasCocho={leiturasCochoCliente}
         onAdicionar={(dados) => onAddLote(cliente.id, dados)}
         onAtualizar={onUpdateLote}
         onExcluir={onDeleteLote}
@@ -35,6 +38,7 @@ export default function ClientesTab({
         onAdicionarConsumo={onAddConsumo}
         onAtualizarConsumo={onUpdateConsumo}
         onExcluirConsumo={onDeleteConsumo}
+        onRegistrarLeituraCocho={onRegistrarLeituraCocho}
         onBack={() => setView({ screen: "cliente-detalhe", id: cliente.id })}
       />
     );

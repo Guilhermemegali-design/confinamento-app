@@ -80,6 +80,7 @@ export default function Home() {
           lotes={dados.lotes}
           pesagens={dados.pesagens}
           consumos={dados.consumos}
+          leiturasCocho={dados.leiturasCocho}
           clientesUsuarios={dados.clientesUsuarios}
           view={view}
           setView={setView}
@@ -127,6 +128,10 @@ export default function Home() {
           onDeleteConsumo={async (id) => {
             await dados.excluirConsumo(id);
             mostrarToast("Consumo excluído");
+          }}
+          onRegistrarLeituraCocho={async (loteId, l) => {
+            await dados.registrarLeituraCocho(loteId, l);
+            mostrarToast("Leitura de cocho registrada");
           }}
           onRemoveAcessoCliente={async (id) => {
             await dados.excluirAcessoCliente(id);
