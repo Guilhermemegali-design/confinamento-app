@@ -661,7 +661,7 @@ function calcularRegressaoLinear(valores) {
   return { a, b }; // valor previsto no índice i = a + b*i
 }
 
-function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45", tendencia = false }) {
+function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45", tendencia = false, id }) {
   const largura = 320;
   const altura = 120;
   const paddingEsquerda = 34;
@@ -702,7 +702,7 @@ function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45", tendenc
 
   return (
     <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #ECEAE3", padding: "14px 10px 10px" }}>
-      <svg viewBox={`0 0 ${largura} ${altura}`} style={{ width: "100%", height: altura, display: "block" }}>
+      <svg id={id} viewBox={`0 0 ${largura} ${altura}`} style={{ width: "100%", height: altura, display: "block" }}>
         <line x1={paddingEsquerda} y1={paddingY} x2={largura - paddingDireita} y2={paddingY} stroke="#F1EFE8" strokeWidth="1" />
         <line
           x1={paddingEsquerda}
@@ -1148,9 +1148,11 @@ function FormConsumoEmMassa({ lotesAtivos, cliente, onCancel, onSalvarLote, onCo
 // Só entra na lista quem já tem pelo menos 2 lançamentos de consumo com o
 // dado necessário (MS da dieta preenchida).
 function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote }) {
+  const [exportando, setExportando] = useState(false);
   const comDados = lotes
     .map((lote) => ({
       lote,
+      svgId: `grafico-pv-lote-${lote.id}`,
       pontosPV: calcularEvolucaoConsumo(lote, pesagensPorLote[lote.id] || [], consumosPorLote[lote.id] || []).filter(
         (p) => p.percentualPV != null
       ),
@@ -1163,14 +1165,35 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote }) {
     );
   }
 
+  async function exportar() {
+    setExportando(true);
+    try {
+      await exportarGraficosPDF(
+        comDados.filter((x) => x.pontosPV.length > 1),
+        "Consumo de MS em relação ao peso vivo (%)"
+      );
+    } finally {
+      setExportando(false);
+    }
+  }
+
   return (
     <div>
-      {comDados.map(({ lote, pontosPV }) => (
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "0 4px 14px" }}>
+        <button
+          onClick={exportar}
+          disabled={exportando}
+          style={{ ...styles.editLinkBtn, display: "flex", alignItems: "center", gap: 6 }}
+        >
+          <Download size={14} /> {exportando ? "Gerando PDF..." : "Exportar PDF"}
+        </button>
+      </div>
+      {comDados.map(({ lote, pontosPV, svgId }) => (
         <div key={lote.id} style={{ marginBottom: 26 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5, margin: "0 4px 10px" }}>{lote.nome}</div>
           <div style={{ ...styles.sectionTitle, margin: "0 4px 6px" }}>Consumo de MS em relação ao peso vivo (%)</div>
           {pontosPV.length > 1 ? (
-            <GraficoLinha pontos={pontosPV} valueKey="percentualPV" unidade="%" cor="#1F4D45" tendencia />
+            <GraficoLinha pontos={pontosPV} valueKey="percentualPV" unidade="%" cor="#1F4D45" tendencia id={svgId} />
           ) : (
             <EmptyHint text="Falta a % de MS em pelo menos 2 lançamentos para montar este gráfico." />
           )}
@@ -1178,6 +1201,84 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote }) {
       ))}
     </div>
   );
+}
+
+// Rasteriza um <svg> (auto-contido, sem CSS externo) num PNG via canvas —
+// funciona porque os gráficos são desenhados só com elementos SVG básicos
+// (linha, polyline, texto), sem depender de folha de estilo externa.
+function svgParaPngDataUrl(svgEl, escala = 2) {
+  return new Promise((resolve, reject) => {
+    const viewBox = svgEl.viewBox.baseVal;
+    const largura = viewBox && viewBox.width ? viewBox.width : svgEl.clientWidth;
+    const altura = viewBox && viewBox.height ? viewBox.height : svgEl.clientHeight;
+
+    const xml = new XMLSerializer().serializeToString(svgEl);
+    const xmlComNamespace = xml.includes("xmlns=") ? xml : xml.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+    const svg64 = btoa(unescape(encodeURIComponent(xmlComNamespace)));
+
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = largura * escala;
+      canvas.height = altura * escala;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve({ dataUrl: canvas.toDataURL("image/png"), largura, altura });
+    };
+    img.onerror = reject;
+    img.src = `data:image/svg+xml;base64,${svg64}`;
+  });
+}
+
+// Monta um PDF com um gráfico por lote, empilhando quantos couberem em cada
+// página, para o consultor mandar direto pro gestor sem precisar printar tela.
+async function exportarGraficosPDF(itens, tituloGrafico) {
+  if (itens.length === 0) return;
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const margem = 40;
+  const larguraPagina = doc.internal.pageSize.getWidth();
+  const alturaPagina = doc.internal.pageSize.getHeight();
+  const larguraImg = larguraPagina - margem * 2;
+  let y = margem;
+
+  doc.setFontSize(16);
+  doc.text("Relatório de gráficos - Confinamento", margem, y);
+  y += 18;
+  doc.setFontSize(9);
+  doc.setTextColor(120);
+  doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")}`, margem, y);
+  doc.setTextColor(0);
+  y += 22;
+
+  for (const { lote, svgId } of itens) {
+    const svgEl = document.getElementById(svgId);
+    if (!svgEl) continue;
+    const { dataUrl, largura, altura } = await svgParaPngDataUrl(svgEl);
+    const alturaImg = (altura / largura) * larguraImg;
+    const alturaBloco = 34 + alturaImg;
+
+    if (y + alturaBloco > alturaPagina - margem) {
+      doc.addPage();
+      y = margem;
+    }
+
+    doc.setFontSize(12);
+    doc.setFont(undefined, "bold");
+    doc.text(lote.nome, margem, y);
+    doc.setFont(undefined, "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(120);
+    doc.text(tituloGrafico, margem, y + 13);
+    doc.setTextColor(0);
+    y += 22;
+    doc.addImage(dataUrl, "PNG", margem, y, larguraImg, alturaImg);
+    y += alturaImg + 24;
+  }
+
+  doc.save(`graficos-confinamento-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 // Leitura de cocho: pra cada lote ativo, mostra o consumo de referência
