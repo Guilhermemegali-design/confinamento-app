@@ -209,6 +209,17 @@ function PainelCliente({ cliente }) {
     return data;
   }
 
+  async function adicionarLote(dados) {
+    const { data, error } = await supabase
+      .from("lotes_confinamento")
+      .insert({ ...dados, cliente_id: cliente.id, consultor_id: cliente.consultor_id })
+      .select()
+      .single();
+    if (error) throw error;
+    setLotes((ls) => [...ls, data]);
+    return data;
+  }
+
   async function adicionarPesagem(loteId, dados) {
     const { data, error } = await supabase
       .from("pesagens_lote")
@@ -229,6 +240,24 @@ function PainelCliente({ cliente }) {
     if (error) throw error;
     setConsumos((cs) => [...cs, data]);
     return data;
+  }
+
+  async function atualizarConsumo(consumoId, dados) {
+    const { data, error } = await supabase
+      .from("consumos_lote")
+      .update(dados)
+      .eq("id", consumoId)
+      .select()
+      .single();
+    if (error) throw error;
+    setConsumos((cs) => cs.map((c) => (c.id === consumoId ? data : c)));
+    return data;
+  }
+
+  async function excluirConsumo(consumoId) {
+    const { error } = await supabase.from("consumos_lote").delete().eq("id", consumoId);
+    if (error) throw error;
+    setConsumos((cs) => cs.filter((c) => c.id !== consumoId));
   }
 
   // Upsert: uma leitura por lote/dia — clicar em outra nota no mesmo dia
@@ -268,9 +297,12 @@ function PainelCliente({ cliente }) {
           pesagens={pesagens}
           consumos={consumos}
           leiturasCocho={leiturasCocho}
+          onAdicionar={adicionarLote}
           onAtualizar={atualizarLote}
           onAdicionarPesagem={adicionarPesagem}
           onAdicionarConsumo={adicionarConsumo}
+          onAtualizarConsumo={atualizarConsumo}
+          onExcluirConsumo={excluirConsumo}
           onRegistrarLeituraCocho={registrarLeituraCocho}
         />
       </div>
