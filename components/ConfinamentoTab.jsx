@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2, Pencil, ChevronUp, ChevronDown } from "lucide-react";
+import { Trash2, Pencil, ChevronUp, ChevronDown, Download } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import {
   calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo,
   NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, calcularHistoricoEsperadoRealizado,
+  montarTabelaConsumoEsperado,
 } from "@/lib/confinamento";
 import { BackHeader, SectionTitle, EmptyHint, Field, InputField, TextAreaField, PrimaryButton } from "./UI";
 
@@ -1265,6 +1266,27 @@ function AbaLeituraCocho({ lotes, consumosPorLote, leiturasCochoPorLote, onRegis
   );
 }
 
+// Baixa a tabela (lote + quantidade a fornecer) em CSV — abre certinho no
+// Excel/Sheets em pt-BR (separador ";", vírgula decimal, BOM de UTF-8 pros
+// acentos não bagunçarem).
+function exportarConsumoEsperadoCSV(linhas, dataISO) {
+  const cabecalho = "Lote;Quantidade esperada (kg)";
+  const corpo = linhas
+    .map((l) => `${l.lote};${l.quantidade != null ? l.quantidade.toFixed(2).replace(".", ",") : ""}`)
+    .join("\n");
+  const csv = `${cabecalho}\n${corpo}`;
+
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `consumo-esperado-${dataISO}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // Consumo esperado: quantidade que deveria ser fornecida hoje (decidida na
 // leitura de cocho) e, assim que o consumo real do dia for lançado (na aba
 // Nutrição do lote), compara esperado x realizado num gráfico.
@@ -1274,8 +1296,18 @@ function AbaConsumoEsperado({ lotes, consumosPorLote, leiturasCochoPorLote }) {
 
   if (ativos.length === 0) return <EmptyHint text="Nenhum lote ativo." />;
 
+  const tabela = montarTabelaConsumoEsperado(ativos, leiturasCochoPorLote, consumosPorLote, hoje);
+
   return (
     <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "0 4px 14px" }}>
+        <button
+          onClick={() => exportarConsumoEsperadoCSV(tabela, hoje)}
+          style={{ ...styles.editLinkBtn, display: "flex", alignItems: "center", gap: 6 }}
+        >
+          <Download size={14} /> Exportar tabela
+        </button>
+      </div>
       {ativos.map((lote) => {
         const leituras = leiturasCochoPorLote[lote.id] || [];
         const leituraHoje = leituras.find((l) => l.data === hoje);
