@@ -153,6 +153,22 @@ adicionada nesta sessão para atender a Belmont).
     (Cmd+Q); se não resolver, 2) remover do Dock e reinstalar a partir de
     `https://confinamento-nine.vercel.app` (o domínio fixo). Ainda sem
     confirmação se resolveu.
+21. **Import de planilha na aba de consumo**: botão "Importar planilha" (ao
+    lado de "+ Consumo") sobe um `.xlsx` no mesmo formato pivot que os
+    clientes já mandam (uma coluna de data + uma coluna por lote), sem
+    precisar de mim pra cada lançamento. Casa o cabeçalho da coluna com o
+    lote pelo número final (ex: "3" → "Lote 3"), ignora célula em branco
+    (não é zero, é "não lançou"), e pula linhas que já existem pro mesmo
+    lote+data (evita duplicar se a planilha for reimportada). MS/fase são
+    opcionais e aplicados a todos os lançamentos importados de uma vez —
+    igual ao "Lançar consumo em massa" já existente. Usa `lib/useDadosConfinamento.js`
+    → `importarConsumosEmLote` (um único INSERT em array, não um por linha).
+    **Importante**: instalado `xlsx` a partir do CDN do próprio SheetJS
+    (`cdn.sheetjs.com`), não do npm — a versão do registro npm tem
+    vulnerabilidades (prototype pollution/ReDoS) sem correção publicada lá.
+    Testada a lógica de parsing isolada (data em `Date`/`dd/mm/aaaa`/ISO,
+    coluna desconhecida, célula em branco) via script Node — não consegui
+    testar a tela em si porque preciso de login do consultor.
 
 ## Pendências / coisas para prestar atenção
 
