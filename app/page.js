@@ -121,6 +121,10 @@ export default function Home() {
             await dados.adicionarConsumo(loteId, c);
             mostrarToast("Consumo registrado");
           }}
+          onImportarConsumos={async (linhas) => {
+            await dados.importarConsumosEmLote(linhas);
+            mostrarToast(`${linhas.length} lançamento${linhas.length > 1 ? "s" : ""} importado${linhas.length > 1 ? "s" : ""}`);
+          }}
           onUpdateConsumo={async (id, c) => {
             await dados.atualizarConsumo(id, c);
             mostrarToast("Consumo atualizado");

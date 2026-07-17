@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2, Pencil, ChevronUp, ChevronDown, Download } from "lucide-react";
+import { Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import {
@@ -70,7 +70,7 @@ export default function ConfinamentoTab({
   cliente, lotes, pesagens = [], consumos = [], leiturasCocho = [],
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
-  onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo,
+  onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho,
   onBack,
 }) {
@@ -189,6 +189,18 @@ export default function ConfinamentoTab({
     );
   }
 
+  if (tela.modo === "importar-consumo") {
+    return (
+      <ImportarConsumoPlanilha
+        lotes={lotes}
+        consumos={consumos}
+        onCancel={() => setTela({ modo: "lista" })}
+        onImportar={onImportarConsumos}
+        onConcluido={() => setTela({ modo: "lista" })}
+      />
+    );
+  }
+
   if (tela.modo === "lote") {
     const lote = lotes.find((l) => l.id === tela.id);
     if (!lote) return <EmptyHint text="Lote não encontrado." />;
@@ -266,10 +278,15 @@ export default function ConfinamentoTab({
     <div>
       <div style={styles.backHeaderRow}>
         {onBack ? <BackHeader title="Confinamento" onBack={onBack} semMargem /> : <h1 style={styles.h1}>Confinamento</h1>}
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {onAdicionarConsumo && (
             <button onClick={() => setTela({ modo: "lancar-consumo" })} style={styles.editLinkBtn}>
               + Consumo
+            </button>
+          )}
+          {onImportarConsumos && (
+            <button onClick={() => setTela({ modo: "importar-consumo" })} style={styles.editLinkBtn}>
+              Importar planilha
             </button>
           )}
           {onAdicionar && (
@@ -1140,6 +1157,251 @@ function FormConsumoEmMassa({ lotesAtivos, cliente, onCancel, onSalvarLote, onCo
           ? `Salvar consumo (${linhasPreenchidas.length} lote${linhasPreenchidas.length > 1 ? "s" : ""})`
           : "Preencha ao menos um lote"}
       </PrimaryButton>
+    </div>
+  );
+}
+
+// Casa o cabeçalho de uma coluna da planilha (ex: "3", "Lote 3", "Curral 5")
+// com o lote correspondente — compara pelo número quando os dois têm um
+// (cobre o caso comum da coluna vir só com o número do lote/curral), senão
+// cai para comparação exata de texto (sem acento/maiúscula/espaço nas pontas).
+function normalizarTexto(valor) {
+  return String(valor ?? "").trim().toLowerCase();
+}
+function extrairNumero(valor) {
+  const m = String(valor ?? "").match(/\d+/);
+  return m ? m[0] : null;
+}
+function encontrarLotePorCabecalho(cabecalho, lotes) {
+  const numeroAlvo = extrairNumero(cabecalho);
+  const textoAlvo = normalizarTexto(cabecalho);
+  if (!textoAlvo) return null;
+  return (
+    lotes.find((l) => {
+      const numeroLote = extrairNumero(l.nome);
+      return numeroAlvo != null && numeroLote != null
+        ? numeroAlvo === numeroLote
+        : normalizarTexto(l.nome) === textoAlvo;
+    }) || null
+  );
+}
+
+// Datas podem vir como objeto Date (quando a célula do Excel está formatada
+// como data), texto dd/mm/aaaa, aaaa-mm-dd, ou o serial numérico do Excel
+// (dias desde 30/12/1899) quando a planilha guarda a data como texto puro.
+function normalizarDataPlanilha(valor) {
+  if (valor instanceof Date && !isNaN(valor)) {
+    return valor.toISOString().slice(0, 10);
+  }
+  const texto = String(valor ?? "").trim();
+  if (!texto) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(texto)) return texto;
+  const dm = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (dm) {
+    const [, d, mo, yBruto] = dm;
+    const y = yBruto.length === 2 ? `20${yBruto}` : yBruto;
+    return `${y.padStart(4, "0")}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  const serial = Number(texto);
+  if (Number.isFinite(serial) && serial > 20000 && serial < 90000) {
+    const base = new Date(Date.UTC(1899, 11, 30));
+    base.setUTCDate(base.getUTCDate() + serial);
+    return base.toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+// Célula em branco = "não lançou nesse dia" (não é zero) — só vira número
+// quando de fato tem um valor preenchido.
+function normalizarNumeroPlanilha(valor) {
+  if (valor == null || valor === "") return null;
+  if (typeof valor === "number") return Number.isFinite(valor) ? valor : null;
+  const n = Number(String(valor).trim().replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+// Importa consumo diário de vários lotes de uma vez a partir de uma planilha
+// Excel no mesmo formato de pivot table que já vem do sistema do cliente:
+// uma coluna de data e uma coluna por lote (cabeçalho = nome/número do lote).
+function ImportarConsumoPlanilha({ lotes, consumos, onCancel, onImportar, onConcluido }) {
+  const [processando, setProcessando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [resultado, setResultado] = useState(null);
+  const [msDieta, setMsDieta] = useState("");
+  const [dietaFase, setDietaFase] = useState(null);
+  const [importando, setImportando] = useState(false);
+  const [concluido, setConcluido] = useState(null);
+
+  const existentes = new Set(consumos.map((c) => `${c.lote_id}|${c.data}`));
+
+  async function processarArquivo(file) {
+    if (!file) return;
+    setProcessando(true);
+    setErro(null);
+    setResultado(null);
+    setConcluido(null);
+    try {
+      const XLSX = await import("xlsx");
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+      const aba = workbook.Sheets[workbook.SheetNames[0]];
+      const linhas = XLSX.utils.sheet_to_json(aba, { header: 1, defval: null });
+      if (linhas.length < 2) throw new Error("Planilha vazia ou sem linhas de dados.");
+
+      const cabecalho = linhas[0];
+      const colunas = cabecalho
+        .slice(1)
+        .map((texto, i) => ({ indice: i + 1, texto, lote: encontrarLotePorCabecalho(texto, lotes) }))
+        .filter((c) => c.texto != null && c.texto !== "");
+      const naoReconhecidas = [...new Set(colunas.filter((c) => !c.lote).map((c) => String(c.texto)))];
+
+      const novos = [];
+      let jaExistentes = 0;
+      let linhasSemData = 0;
+
+      for (const linha of linhas.slice(1)) {
+        if (!linha || linha.every((v) => v == null || v === "")) continue;
+        const data = normalizarDataPlanilha(linha[0]);
+        if (!data) {
+          linhasSemData++;
+          continue;
+        }
+        for (const coluna of colunas) {
+          if (!coluna.lote) continue;
+          const valor = normalizarNumeroPlanilha(linha[coluna.indice]);
+          if (valor == null) continue;
+          const chave = `${coluna.lote.id}|${data}`;
+          if (existentes.has(chave)) {
+            jaExistentes++;
+            continue;
+          }
+          novos.push({ loteId: coluna.lote.id, loteNome: coluna.lote.nome, data, consumoTotalLote: valor });
+        }
+      }
+
+      setResultado({ novos, naoReconhecidas, jaExistentes, linhasSemData });
+    } catch (e) {
+      setErro(e.message || "Não foi possível ler essa planilha.");
+    } finally {
+      setProcessando(false);
+    }
+  }
+
+  async function confirmar() {
+    if (!resultado || resultado.novos.length === 0) return;
+    setImportando(true);
+    try {
+      const custoPorLote = new Map();
+      const linhas = resultado.novos.map((n) => {
+        if (!custoPorLote.has(n.loteId)) {
+          const lote = lotes.find((l) => l.id === n.loteId);
+          custoPorLote.set(n.loteId, dietaFase ? custoKgMnDaFase(lote, dietaFase) : null);
+        }
+        return {
+          lote_id: n.loteId,
+          data: n.data,
+          consumo_total_lote: n.consumoTotalLote,
+          ms_dieta: msDieta !== "" ? Number(msDieta) : null,
+          dieta_fase: dietaFase || null,
+          custo_kg_mn: custoPorLote.get(n.loteId),
+        };
+      });
+      await onImportar(linhas);
+      setConcluido(linhas.length);
+    } finally {
+      setImportando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title="Importar planilha de consumo" onBack={onCancel} />
+
+      <div style={styles.card}>
+        <div style={{ fontSize: 13, color: "#5C5C58", padding: "10px 0" }}>
+          Planilha Excel (.xlsx) com uma coluna de data e uma coluna por lote —
+          o nome de cada coluna precisa bater com o nome do lote (ex: a coluna
+          "3" reconhece o lote "Lote 3"). Células em branco são ignoradas (o
+          lote simplesmente não recebeu trato naquele dia).
+        </div>
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          disabled={processando || importando}
+          onChange={(e) => processarArquivo(e.target.files?.[0])}
+          style={{ fontSize: 13, padding: "10px 0" }}
+        />
+        {processando && <div style={{ fontSize: 13, color: "#9A9A94" }}>Lendo planilha...</div>}
+        {erro && <div style={{ fontSize: 13, color: "#B8763E", padding: "6px 0" }}>{erro}</div>}
+      </div>
+
+      {resultado && concluido == null && (
+        <>
+          <div style={{ ...styles.card, marginTop: 10 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, padding: "10px 0 4px" }}>Resumo da planilha</div>
+            <div style={{ fontSize: 13, color: "#5C5C58", lineHeight: 1.6 }}>
+              {resultado.novos.length} lançamento{resultado.novos.length !== 1 ? "s" : ""} novo
+              {resultado.novos.length !== 1 ? "s" : ""} pronto{resultado.novos.length !== 1 ? "s" : ""} pra importar
+              {resultado.jaExistentes > 0 && (
+                <div>{resultado.jaExistentes} já existiam no app (não serão duplicados)</div>
+              )}
+              {resultado.linhasSemData > 0 && <div>{resultado.linhasSemData} linha(s) sem data válida, ignorada(s)</div>}
+              {resultado.naoReconhecidas.length > 0 && (
+                <div style={{ color: "#B8763E", marginTop: 4 }}>
+                  Colunas não reconhecidas (verifique o nome do lote): {resultado.naoReconhecidas.join(", ")}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {resultado.novos.length > 0 && (
+            <div style={{ ...styles.card, marginTop: 10 }}>
+              <div style={{ padding: "10px 0 4px" }}>
+                <div style={styles.fieldLabel}>Dieta fornecida (aplica a todos os lançamentos importados)</div>
+                <div style={{ ...styles.viewToggle, marginTop: 6 }}>
+                  {FASES_DIETA.map((f) => (
+                    <button
+                      key={f.value}
+                      onClick={() => setDietaFase(f.value)}
+                      style={{
+                        ...styles.viewToggleBtn,
+                        ...(dietaFase === f.value ? styles.viewToggleBtnActive : {}),
+                        flex: 1, justifyContent: "center", padding: "7px 6px", fontSize: 12.5,
+                      }}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <InputField
+                label="MS da dieta (%) — opcional, aplica a todos"
+                type="number"
+                value={msDieta}
+                onChange={setMsDieta}
+                placeholder="Ex: 46.81"
+              />
+            </div>
+          )}
+
+          <PrimaryButton disabled={resultado.novos.length === 0 || importando} onClick={confirmar}>
+            {importando
+              ? "Importando..."
+              : resultado.novos.length > 0
+              ? `Importar ${resultado.novos.length} lançamento${resultado.novos.length > 1 ? "s" : ""}`
+              : "Nenhum lançamento novo para importar"}
+          </PrimaryButton>
+        </>
+      )}
+
+      {concluido != null && (
+        <div style={{ ...styles.card, marginTop: 10, textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1F4D45", padding: "14px 0" }}>
+            {concluido} lançamento{concluido !== 1 ? "s" : ""} importado{concluido !== 1 ? "s" : ""} com sucesso.
+          </div>
+          <PrimaryButton onClick={onConcluido}>Voltar</PrimaryButton>
+        </div>
+      )}
     </div>
   );
 }

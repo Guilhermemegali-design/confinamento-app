@@ -11,7 +11,7 @@ export default function ClientesTab({
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
-  onAddConsumo, onUpdateConsumo, onDeleteConsumo,
+  onAddConsumo, onUpdateConsumo, onDeleteConsumo, onImportarConsumos,
   onRegistrarLeituraCocho,
   onRemoveAcessoCliente,
 }) {
@@ -38,6 +38,7 @@ export default function ClientesTab({
         onAdicionarConsumo={onAddConsumo}
         onAtualizarConsumo={onUpdateConsumo}
         onExcluirConsumo={onDeleteConsumo}
+        onImportarConsumos={onImportarConsumos}
         onRegistrarLeituraCocho={onRegistrarLeituraCocho}
         onBack={() => setView({ screen: "cliente-detalhe", id: cliente.id })}
       />
