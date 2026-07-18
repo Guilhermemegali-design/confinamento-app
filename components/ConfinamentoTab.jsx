@@ -309,6 +309,18 @@ export default function ConfinamentoTab({
           Painel
         </button>
         <button
+          onClick={() => setAba("lotes-ativos")}
+          style={{ ...styles.viewToggleBtn, ...(aba === "lotes-ativos" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
+        >
+          Lotes ativos
+        </button>
+        <button
+          onClick={() => setAba("lotes-finalizados")}
+          style={{ ...styles.viewToggleBtn, ...(aba === "lotes-finalizados" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
+        >
+          Lotes finalizados
+        </button>
+        <button
           onClick={() => setAba("graficos")}
           style={{ ...styles.viewToggleBtn, ...(aba === "graficos" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
         >
@@ -341,45 +353,9 @@ export default function ConfinamentoTab({
         />
       ) : aba === "esperado" ? (
         <AbaConsumoEsperado lotes={lotes} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} />
-      ) : (
+      ) : aba === "lotes-ativos" ? (
         <>
-          <SectionTitle>Painel</SectionTitle>
-          <div style={styles.gestaoGrid}>
-            <PainelCard label="Total de lotes" valor={painel.totalLotes} />
-            <PainelCard label="Lotes ativos" valor={painel.lotesAtivos} />
-            <PainelCard label="Lotes finalizados" valor={painel.lotesFinalizados} />
-            <PainelCard label="Cabeças ativas" valor={painel.cabecasAtivas} />
-            <PainelCard
-              label="GMD médio (finalizados)"
-              valor={painel.gmdMedioFinalizados != null ? `${painel.gmdMedioFinalizados.toFixed(2)} kg/dia` : "—"}
-            />
-            <PainelCard
-              label="GMD esperado médio"
-              valor={painel.gmdEsperadoMedio != null ? `${painel.gmdEsperadoMedio.toFixed(2)} kg/dia` : "—"}
-            />
-            <PainelCard
-              label="Peso médio geral"
-              valor={painel.pesoMedioGeral != null ? `${painel.pesoMedioGeral.toFixed(1)} kg` : "—"}
-            />
-            <PainelCard
-              label="Custo acumulado (ativos)"
-              valor={painel.custoAcumuladoAtivosMedio != null ? `${formatBRL(painel.custoAcumuladoAtivosMedio)}/animal` : "—"}
-            />
-            <PainelCard
-              label="Custo médio diário (ativos)"
-              valor={painel.custoMedioDiarioAtivosMedio != null ? `${formatBRL(painel.custoMedioDiarioAtivosMedio)}/animal` : "—"}
-            />
-            <PainelCard
-              label="Custo total (finalizados)"
-              valor={painel.custoTotalFinalizadosMedio != null ? `${formatBRL(painel.custoTotalFinalizadosMedio)}/animal` : "—"}
-            />
-            <PainelCard
-              label="Custo médio diário (finalizados)"
-              valor={painel.custoMedioDiarioFinalizadosMedio != null ? `${formatBRL(painel.custoMedioDiarioFinalizadosMedio)}/animal` : "—"}
-            />
-          </div>
-
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 4px 8px" }}>
             <div style={{ ...styles.sectionTitle, margin: 0 }}>Lotes ativos</div>
             <select
               value={ordenacao}
@@ -442,7 +418,9 @@ export default function ConfinamentoTab({
               </div>
             );
           })}
-
+        </>
+      ) : aba === "lotes-finalizados" ? (
+        <>
           <SectionTitle>Lotes finalizados</SectionTitle>
           {finalizados.length === 0 && <EmptyHint text="Nenhum lote finalizado ainda." />}
           {finalizados.map(({ lote, diasConfinamento, gmdVivoEntradaSaida }) => (
@@ -464,6 +442,44 @@ export default function ConfinamentoTab({
               </div>
             </button>
           ))}
+        </>
+      ) : (
+        <>
+          <SectionTitle>Painel</SectionTitle>
+          <div style={styles.gestaoGrid}>
+            <PainelCard label="Total de lotes" valor={painel.totalLotes} />
+            <PainelCard label="Lotes ativos" valor={painel.lotesAtivos} />
+            <PainelCard label="Lotes finalizados" valor={painel.lotesFinalizados} />
+            <PainelCard label="Cabeças ativas" valor={painel.cabecasAtivas} />
+            <PainelCard
+              label="GMD médio (finalizados)"
+              valor={painel.gmdMedioFinalizados != null ? `${painel.gmdMedioFinalizados.toFixed(2)} kg/dia` : "—"}
+            />
+            <PainelCard
+              label="GMD esperado médio"
+              valor={painel.gmdEsperadoMedio != null ? `${painel.gmdEsperadoMedio.toFixed(2)} kg/dia` : "—"}
+            />
+            <PainelCard
+              label="Peso médio geral"
+              valor={painel.pesoMedioGeral != null ? `${painel.pesoMedioGeral.toFixed(1)} kg` : "—"}
+            />
+            <PainelCard
+              label="Custo acumulado (ativos)"
+              valor={painel.custoAcumuladoAtivosMedio != null ? `${formatBRL(painel.custoAcumuladoAtivosMedio)}/animal` : "—"}
+            />
+            <PainelCard
+              label="Custo médio diário (ativos)"
+              valor={painel.custoMedioDiarioAtivosMedio != null ? `${formatBRL(painel.custoMedioDiarioAtivosMedio)}/animal` : "—"}
+            />
+            <PainelCard
+              label="Custo total (finalizados)"
+              valor={painel.custoTotalFinalizadosMedio != null ? `${formatBRL(painel.custoTotalFinalizadosMedio)}/animal` : "—"}
+            />
+            <PainelCard
+              label="Custo médio diário (finalizados)"
+              valor={painel.custoMedioDiarioFinalizadosMedio != null ? `${formatBRL(painel.custoMedioDiarioFinalizadosMedio)}/animal` : "—"}
+            />
+          </div>
         </>
       )}
     </div>
