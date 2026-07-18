@@ -7,12 +7,13 @@ import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryBut
 import ConfinamentoTab from "./ConfinamentoTab";
 
 export default function ClientesTab({
-  clientes, lotes, pesagens, consumos, leiturasCocho = [], clientesUsuarios = [], view, setView,
+  clientes, lotes, pesagens, consumos, leiturasCocho = [], clientesUsuarios = [], currais = [], view, setView,
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
   onAddConsumo, onUpdateConsumo, onDeleteConsumo, onImportarConsumos,
   onRegistrarLeituraCocho,
+  onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais,
   onRemoveAcessoCliente,
 }) {
   if (view.screen === "confinamento") {
@@ -23,6 +24,7 @@ export default function ClientesTab({
     const pesagensCliente = pesagens.filter((p) => loteIdsCliente.has(p.lote_id));
     const consumosCliente = consumos.filter((c) => loteIdsCliente.has(c.lote_id));
     const leiturasCochoCliente = leiturasCocho.filter((l) => loteIdsCliente.has(l.lote_id));
+    const curraisCliente = currais.filter((c) => c.cliente_id === cliente.id);
     return (
       <ConfinamentoTab
         cliente={cliente}
@@ -30,6 +32,7 @@ export default function ClientesTab({
         pesagens={pesagensCliente}
         consumos={consumosCliente}
         leiturasCocho={leiturasCochoCliente}
+        currais={curraisCliente}
         onAdicionar={(dados) => onAddLote(cliente.id, dados)}
         onAtualizar={onUpdateLote}
         onExcluir={onDeleteLote}
@@ -40,6 +43,11 @@ export default function ClientesTab({
         onExcluirConsumo={onDeleteConsumo}
         onImportarConsumos={onImportarConsumos}
         onRegistrarLeituraCocho={onRegistrarLeituraCocho}
+        onAdicionarCurral={onAddCurral}
+        onAtualizarCurral={onUpdateCurral}
+        onExcluirCurral={onDeleteCurral}
+        onImportarCurrais={onImportarCurrais}
+        onAtualizarCliente={onUpdateCliente}
         onBack={() => setView({ screen: "cliente-detalhe", id: cliente.id })}
       />
     );

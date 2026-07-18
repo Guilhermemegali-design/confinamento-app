@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
@@ -10,6 +11,10 @@ import {
   montarTabelaConsumoEsperado,
 } from "@/lib/confinamento";
 import { BackHeader, SectionTitle, EmptyHint, Field, InputField, TextAreaField, PrimaryButton } from "./UI";
+
+// Leaflet mexe com "window"/"document" ao criar o mapa — precisa ficar fora
+// do SSR do Next, senão quebra o build.
+const MapaCurrais = dynamic(() => import("./MapaCurrais"), { ssr: false });
 
 const FASES_DIETA = [
   { value: "adaptacao", label: "Adaptação" },
@@ -67,11 +72,12 @@ function msDaFase(cliente, fase) {
 // Reaproveitado tanto na tela do consultor (com criar/excluir) quanto no portal
 // do cliente (ver e editar).
 export default function ConfinamentoTab({
-  cliente, lotes, pesagens = [], consumos = [], leiturasCocho = [],
+  cliente, lotes, pesagens = [], consumos = [], leiturasCocho = [], currais = [],
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho,
+  onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onAtualizarCliente,
   onBack,
 }) {
   const [tela, setTela] = useState({ modo: "lista" });
@@ -340,6 +346,12 @@ export default function ConfinamentoTab({
         >
           Consumo esperado
         </button>
+        <button
+          onClick={() => setAba("mapa")}
+          style={{ ...styles.viewToggleBtn, ...(aba === "mapa" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
+        >
+          Mapa
+        </button>
       </div>
 
       {aba === "graficos" ? (
@@ -353,6 +365,18 @@ export default function ConfinamentoTab({
         />
       ) : aba === "esperado" ? (
         <AbaConsumoEsperado lotes={lotes} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} />
+      ) : aba === "mapa" ? (
+        <MapaCurrais
+          cliente={cliente}
+          lotes={lotes}
+          currais={currais}
+          onAdicionarCurral={onAdicionarCurral}
+          onAtualizarCurral={onAtualizarCurral}
+          onExcluirCurral={onExcluirCurral}
+          onImportarCurrais={onImportarCurrais}
+          onAtualizarLote={onAtualizar}
+          onAtualizarCliente={onAtualizarCliente}
+        />
       ) : aba === "lotes-ativos" ? (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 4px 8px" }}>

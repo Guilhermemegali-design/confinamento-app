@@ -82,6 +82,7 @@ export default function Home() {
           consumos={dados.consumos}
           leiturasCocho={dados.leiturasCocho}
           clientesUsuarios={dados.clientesUsuarios}
+          currais={dados.currais}
           view={view}
           setView={setView}
           onAddCliente={async (c) => {
@@ -136,6 +137,22 @@ export default function Home() {
           onRegistrarLeituraCocho={async (loteId, l) => {
             await dados.registrarLeituraCocho(loteId, l);
             mostrarToast("Leitura de cocho registrada");
+          }}
+          onAddCurral={async (clienteId, c) => {
+            await dados.adicionarCurral(clienteId, c);
+            mostrarToast("Curral marcado");
+          }}
+          onUpdateCurral={async (id, c) => {
+            await dados.atualizarCurral(id, c);
+            mostrarToast("Curral atualizado");
+          }}
+          onDeleteCurral={async (id) => {
+            await dados.excluirCurral(id);
+            mostrarToast("Curral excluído");
+          }}
+          onImportarCurrais={async (clienteId, linhas) => {
+            await dados.importarCurraisEmLote(clienteId, linhas);
+            mostrarToast(`${linhas.length} curral${linhas.length > 1 ? "is" : ""} importado${linhas.length > 1 ? "s" : ""}`);
           }}
           onRemoveAcessoCliente={async (id) => {
             await dados.excluirAcessoCliente(id);

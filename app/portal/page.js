@@ -174,6 +174,7 @@ function PainelCliente({ cliente }) {
   const [pesagens, setPesagens] = useState([]);
   const [consumos, setConsumos] = useState([]);
   const [leiturasCocho, setLeiturasCocho] = useState([]);
+  const [currais, setCurrais] = useState([]);
 
   const carregar = useCallback(async () => {
     const { data: l } = await supabase.from("lotes_confinamento").select("*").eq("cliente_id", cliente.id);
@@ -191,6 +192,8 @@ function PainelCliente({ cliente }) {
       setConsumos([]);
       setLeiturasCocho([]);
     }
+    const { data: cu } = await supabase.from("currais").select("*").eq("cliente_id", cliente.id);
+    setCurrais(cu || []);
   }, [cliente.id]);
 
   useEffect(() => {
@@ -276,6 +279,45 @@ function PainelCliente({ cliente }) {
     return data;
   }
 
+  async function adicionarCurral(clienteId, dados) {
+    const { data, error } = await supabase
+      .from("currais")
+      .insert({ ...dados, cliente_id: clienteId, consultor_id: cliente.consultor_id })
+      .select()
+      .single();
+    if (error) throw error;
+    setCurrais((cs) => [...cs, data]);
+    return data;
+  }
+
+  async function atualizarCurral(curralId, dados) {
+    const { data, error } = await supabase
+      .from("currais")
+      .update(dados)
+      .eq("id", curralId)
+      .select()
+      .single();
+    if (error) throw error;
+    setCurrais((cs) => cs.map((c) => (c.id === curralId ? data : c)));
+    return data;
+  }
+
+  async function excluirCurral(curralId) {
+    const { error } = await supabase.from("currais").delete().eq("id", curralId);
+    if (error) throw error;
+    setCurrais((cs) => cs.filter((c) => c.id !== curralId));
+    setLotes((ls) => ls.map((l) => (l.curral_id === curralId ? { ...l, curral_id: null } : l)));
+  }
+
+  async function importarCurraisEmLote(clienteId, linhas) {
+    if (linhas.length === 0) return [];
+    const paraInserir = linhas.map((l) => ({ ...l, cliente_id: clienteId, consultor_id: cliente.consultor_id }));
+    const { data, error } = await supabase.from("currais").insert(paraInserir).select();
+    if (error) throw error;
+    setCurrais((cs) => [...cs, ...(data || [])]);
+    return data;
+  }
+
   return (
     <div style={styles.app}>
       <div style={styles.topbar}>
@@ -297,6 +339,7 @@ function PainelCliente({ cliente }) {
           pesagens={pesagens}
           consumos={consumos}
           leiturasCocho={leiturasCocho}
+          currais={currais}
           onAdicionar={adicionarLote}
           onAtualizar={atualizarLote}
           onAdicionarPesagem={adicionarPesagem}
@@ -304,6 +347,10 @@ function PainelCliente({ cliente }) {
           onAtualizarConsumo={atualizarConsumo}
           onExcluirConsumo={excluirConsumo}
           onRegistrarLeituraCocho={registrarLeituraCocho}
+          onAdicionarCurral={adicionarCurral}
+          onAtualizarCurral={atualizarCurral}
+          onExcluirCurral={excluirCurral}
+          onImportarCurrais={importarCurraisEmLote}
         />
       </div>
     </div>
