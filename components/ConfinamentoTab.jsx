@@ -193,6 +193,7 @@ export default function ConfinamentoTab({
     return (
       <ImportarConsumoPlanilha
         lotes={lotes}
+        cliente={cliente}
         consumos={consumos}
         onCancel={() => setTela({ modo: "lista" })}
         onImportar={onImportarConsumos}
@@ -1161,10 +1162,10 @@ function FormConsumoEmMassa({ lotesAtivos, cliente, onCancel, onSalvarLote, onCo
   );
 }
 
-// Casa o cabeçalho de uma coluna da planilha (ex: "3", "Lote 3", "Curral 5")
-// com o lote correspondente — compara pelo número quando os dois têm um
-// (cobre o caso comum da coluna vir só com o número do lote/curral), senão
-// cai para comparação exata de texto (sem acento/maiúscula/espaço nas pontas).
+// Casa o valor de uma célula (ex: "3", "Lote 3", "Curral 5") com o lote
+// correspondente — compara pelo número quando os dois têm um (cobre o caso
+// comum da planilha trazer só o número do lote/curral), senão cai para
+// comparação exata de texto (sem acento/maiúscula/espaço nas pontas).
 function normalizarTexto(valor) {
   return String(valor ?? "").trim().toLowerCase();
 }
@@ -1172,9 +1173,9 @@ function extrairNumero(valor) {
   const m = String(valor ?? "").match(/\d+/);
   return m ? m[0] : null;
 }
-function encontrarLotePorCabecalho(cabecalho, lotes) {
-  const numeroAlvo = extrairNumero(cabecalho);
-  const textoAlvo = normalizarTexto(cabecalho);
+function encontrarLotePorNomeOuNumero(valor, lotes) {
+  const numeroAlvo = extrairNumero(valor);
+  const textoAlvo = normalizarTexto(valor);
   if (!textoAlvo) return null;
   return (
     lotes.find((l) => {
@@ -1184,6 +1185,35 @@ function encontrarLotePorCabecalho(cabecalho, lotes) {
         : normalizarTexto(l.nome) === textoAlvo;
     }) || null
   );
+}
+
+// Cabeçalho/texto sem acento, minúsculo, só letras/números separados por
+// espaço — pra achar coluna pelo nome ("MS (%)", "Ms Dieta", "ms" tudo vira
+// "ms") e reconhecer a fase da dieta ("Terminação"/"Terminacao" → mesma coisa).
+function normalizarCabecalho(valor) {
+  return String(valor ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+function indiceColuna(cabecalhos, palavras) {
+  return cabecalhos.findIndex((h) => {
+    const norm = normalizarCabecalho(h);
+    if (!norm) return false;
+    const tokens = norm.split(" ");
+    return palavras.some((p) => tokens.includes(p) || norm.startsWith(p));
+  });
+}
+function normalizarFasePlanilha(valor) {
+  const norm = normalizarCabecalho(valor).replace(/\s+/g, "");
+  if (!norm) return null;
+  if (norm.startsWith("adapt")) return "adaptacao";
+  if (norm.startsWith("recri")) return "recria";
+  if (norm.startsWith("cresc")) return "crescimento";
+  if (norm.startsWith("termin")) return "terminacao";
+  return null;
 }
 
 // Datas podem vir como objeto Date (quando a célula do Excel está formatada
@@ -1223,12 +1253,10 @@ function normalizarNumeroPlanilha(valor) {
 // Importa consumo diário de vários lotes de uma vez a partir de uma planilha
 // Excel no mesmo formato de pivot table que já vem do sistema do cliente:
 // uma coluna de data e uma coluna por lote (cabeçalho = nome/número do lote).
-function ImportarConsumoPlanilha({ lotes, consumos, onCancel, onImportar, onConcluido }) {
+function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImportar, onConcluido }) {
   const [processando, setProcessando] = useState(false);
   const [erro, setErro] = useState(null);
   const [resultado, setResultado] = useState(null);
-  const [msDieta, setMsDieta] = useState("");
-  const [dietaFase, setDietaFase] = useState(null);
   const [importando, setImportando] = useState(false);
   const [concluido, setConcluido] = useState(null);
 
@@ -1249,37 +1277,68 @@ function ImportarConsumoPlanilha({ lotes, consumos, onCancel, onImportar, onConc
       if (linhas.length < 2) throw new Error("Planilha vazia ou sem linhas de dados.");
 
       const cabecalho = linhas[0];
-      const colunas = cabecalho
-        .slice(1)
-        .map((texto, i) => ({ indice: i + 1, texto, lote: encontrarLotePorCabecalho(texto, lotes) }))
-        .filter((c) => c.texto != null && c.texto !== "");
-      const naoReconhecidas = [...new Set(colunas.filter((c) => !c.lote).map((c) => String(c.texto)))];
+      const idxData = indiceColuna(cabecalho, ["data"]);
+      const idxLote = indiceColuna(cabecalho, ["lote", "curral"]);
+      const idxQuant = indiceColuna(cabecalho, ["quanti", "quantidade", "consumo"]);
+      const idxDieta = indiceColuna(cabecalho, ["dieta", "fase"]);
+      const idxMs = indiceColuna(cabecalho, ["ms"]);
+      const faltando = [];
+      if (idxData === -1) faltando.push("Data");
+      if (idxLote === -1) faltando.push("Lote");
+      if (idxQuant === -1) faltando.push("Quantidade");
+      if (faltando.length > 0) {
+        throw new Error(`Não encontrei a coluna de ${faltando.join(" / ")} na planilha — confira os cabeçalhos.`);
+      }
 
-      const novos = [];
-      let jaExistentes = 0;
-      let linhasSemData = 0;
+      // Junta linhas do mesmo lote+data (ex: dois tratos no mesmo dia) somando
+      // a quantidade — a fase/MS ficam com o primeiro valor preenchido do grupo.
+      const grupos = new Map();
+      const naoReconhecidos = new Set();
+      let linhasIgnoradas = 0;
+      let totalLinhasSomadas = 0;
 
       for (const linha of linhas.slice(1)) {
         if (!linha || linha.every((v) => v == null || v === "")) continue;
-        const data = normalizarDataPlanilha(linha[0]);
-        if (!data) {
-          linhasSemData++;
+        const data = normalizarDataPlanilha(linha[idxData]);
+        const lote = encontrarLotePorNomeOuNumero(linha[idxLote], lotes);
+        const valor = normalizarNumeroPlanilha(linha[idxQuant]);
+        if (!data || !lote || valor == null) {
+          if (!lote && linha[idxLote] != null && linha[idxLote] !== "") naoReconhecidos.add(String(linha[idxLote]));
+          linhasIgnoradas++;
           continue;
         }
-        for (const coluna of colunas) {
-          if (!coluna.lote) continue;
-          const valor = normalizarNumeroPlanilha(linha[coluna.indice]);
-          if (valor == null) continue;
-          const chave = `${coluna.lote.id}|${data}`;
-          if (existentes.has(chave)) {
-            jaExistentes++;
-            continue;
-          }
-          novos.push({ loteId: coluna.lote.id, loteNome: coluna.lote.nome, data, consumoTotalLote: valor });
+        const chave = `${lote.id}|${data}`;
+        const fase = idxDieta !== -1 ? normalizarFasePlanilha(linha[idxDieta]) : null;
+        const ms = idxMs !== -1 ? normalizarNumeroPlanilha(linha[idxMs]) : null;
+        if (grupos.has(chave)) {
+          const grupo = grupos.get(chave);
+          grupo.consumoTotalLote += valor;
+          grupo.linhas += 1;
+          if (grupo.fase == null) grupo.fase = fase;
+          if (grupo.ms == null) grupo.ms = ms;
+          totalLinhasSomadas++;
+        } else {
+          grupos.set(chave, { loteId: lote.id, loteNome: lote.nome, data, consumoTotalLote: valor, fase, ms, linhas: 1 });
         }
       }
 
-      setResultado({ novos, naoReconhecidas, jaExistentes, linhasSemData });
+      const novos = [];
+      let jaExistentes = 0;
+      for (const [chave, grupo] of grupos) {
+        if (existentes.has(chave)) {
+          jaExistentes++;
+          continue;
+        }
+        novos.push(grupo);
+      }
+
+      setResultado({
+        novos,
+        naoReconhecidos: [...naoReconhecidos],
+        jaExistentes,
+        linhasIgnoradas,
+        totalLinhasSomadas,
+      });
     } catch (e) {
       setErro(e.message || "Não foi possível ler essa planilha.");
     } finally {
@@ -1291,19 +1350,18 @@ function ImportarConsumoPlanilha({ lotes, consumos, onCancel, onImportar, onConc
     if (!resultado || resultado.novos.length === 0) return;
     setImportando(true);
     try {
-      const custoPorLote = new Map();
       const linhas = resultado.novos.map((n) => {
-        if (!custoPorLote.has(n.loteId)) {
-          const lote = lotes.find((l) => l.id === n.loteId);
-          custoPorLote.set(n.loteId, dietaFase ? custoKgMnDaFase(lote, dietaFase) : null);
-        }
+        const lote = lotes.find((l) => l.id === n.loteId);
+        // MS: usa o da própria planilha se veio preenchido; senão cai pro MS
+        // cadastrado no cliente pra essa fase (mesma regra do lançamento manual).
+        const msFinal = n.ms != null ? n.ms : n.fase ? msDaFase(cliente, n.fase) : null;
         return {
           lote_id: n.loteId,
           data: n.data,
           consumo_total_lote: n.consumoTotalLote,
-          ms_dieta: msDieta !== "" ? Number(msDieta) : null,
-          dieta_fase: dietaFase || null,
-          custo_kg_mn: custoPorLote.get(n.loteId),
+          ms_dieta: msFinal,
+          dieta_fase: n.fase || null,
+          custo_kg_mn: n.fase ? custoKgMnDaFase(lote, n.fase) : null,
         };
       });
       await onImportar(linhas);
@@ -1319,10 +1377,11 @@ function ImportarConsumoPlanilha({ lotes, consumos, onCancel, onImportar, onConc
 
       <div style={styles.card}>
         <div style={{ fontSize: 13, color: "#5C5C58", padding: "10px 0" }}>
-          Planilha Excel (.xlsx) com uma coluna de data e uma coluna por lote —
-          o nome de cada coluna precisa bater com o nome do lote (ex: a coluna
-          "3" reconhece o lote "Lote 3"). Células em branco são ignoradas (o
-          lote simplesmente não recebeu trato naquele dia).
+          Planilha Excel (.xlsx) com uma linha por lote/data e colunas "Data",
+          "Lote", "Quantidade" (ou "Consumo") — "Dieta" e "MS" são opcionais.
+          O nome do lote na planilha precisa bater com o do app (ex: "3"
+          reconhece "Lote 3"). Se o mesmo lote aparecer mais de uma vez no
+          mesmo dia, as quantidades são somadas num único lançamento diário.
         </div>
         <input
           type="file"
@@ -1342,47 +1401,22 @@ function ImportarConsumoPlanilha({ lotes, consumos, onCancel, onImportar, onConc
             <div style={{ fontSize: 13, color: "#5C5C58", lineHeight: 1.6 }}>
               {resultado.novos.length} lançamento{resultado.novos.length !== 1 ? "s" : ""} novo
               {resultado.novos.length !== 1 ? "s" : ""} pronto{resultado.novos.length !== 1 ? "s" : ""} pra importar
+              {resultado.totalLinhasSomadas > 0 && (
+                <div>{resultado.totalLinhasSomadas} linha(s) somadas por serem do mesmo lote/data</div>
+              )}
               {resultado.jaExistentes > 0 && (
                 <div>{resultado.jaExistentes} já existiam no app (não serão duplicados)</div>
               )}
-              {resultado.linhasSemData > 0 && <div>{resultado.linhasSemData} linha(s) sem data válida, ignorada(s)</div>}
-              {resultado.naoReconhecidas.length > 0 && (
+              {resultado.linhasIgnoradas > 0 && (
+                <div>{resultado.linhasIgnoradas} linha(s) sem data/lote/quantidade válidos, ignorada(s)</div>
+              )}
+              {resultado.naoReconhecidos.length > 0 && (
                 <div style={{ color: "#B8763E", marginTop: 4 }}>
-                  Colunas não reconhecidas (verifique o nome do lote): {resultado.naoReconhecidas.join(", ")}
+                  Lotes não reconhecidos (verifique o nome): {resultado.naoReconhecidos.join(", ")}
                 </div>
               )}
             </div>
           </div>
-
-          {resultado.novos.length > 0 && (
-            <div style={{ ...styles.card, marginTop: 10 }}>
-              <div style={{ padding: "10px 0 4px" }}>
-                <div style={styles.fieldLabel}>Dieta fornecida (aplica a todos os lançamentos importados)</div>
-                <div style={{ ...styles.viewToggle, marginTop: 6 }}>
-                  {FASES_DIETA.map((f) => (
-                    <button
-                      key={f.value}
-                      onClick={() => setDietaFase(f.value)}
-                      style={{
-                        ...styles.viewToggleBtn,
-                        ...(dietaFase === f.value ? styles.viewToggleBtnActive : {}),
-                        flex: 1, justifyContent: "center", padding: "7px 6px", fontSize: 12.5,
-                      }}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <InputField
-                label="MS da dieta (%) — opcional, aplica a todos"
-                type="number"
-                value={msDieta}
-                onChange={setMsDieta}
-                placeholder="Ex: 46.81"
-              />
-            </div>
-          )}
 
           <PrimaryButton disabled={resultado.novos.length === 0 || importando} onClick={confirmar}>
             {importando
