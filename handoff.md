@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-17
+Última atualização: 2026-07-18
 
 ## O que é
 
@@ -177,9 +177,82 @@ adicionada nesta sessão para atender a Belmont).
     Testada a lógica de parsing/soma/fallback de MS isolada via script Node
     reproduzindo os dados exatos do print que o usuário mandou — não
     consegui testar a tela em si porque preciso de login do consultor.
+22. **Painel dividido em 3 abas**: "Painel" ficou só com os cartões de
+    resumo — "Lotes ativos" e "Lotes finalizados" (que antes vinham
+    empilhados embaixo do Painel) agora são abas próprias.
+23. **Mapa de currais** (aba nova "Mapa"): mapa com satélite (Leaflet +
+    tiles do Esri World Imagery, sem precisar de chave de API) mostrando
+    cada curral como um pino. O consultor/cliente toca no mapa pra marcar
+    um curral novo, e **arrasta o crachá do lote** (da bandeja "sem
+    curral" ou de outro curral) pra cima de um curral pra realocar —
+    soltar em cima de um curral já ocupado **troca os dois lotes de
+    lugar**. O arrasto usa Pointer Events puros (down/move/up), não o
+    drag-and-drop nativo do HTML5, porque esse não funciona direito em
+    touch — testado e confirmado funcionando em mouse simulado.
+    - **Novo modelo de dados**: tabela `currais` (id, cliente_id, nome,
+      lat, lng) + `lotes_confinamento.curral_id` — separa "lote" (o lote de
+      gado, com todo o histórico dele) de "curral" (o piquete físico,
+      fixo), porque um lote pode mudar de curral durante o confinamento
+      sem perder o histórico. RLS espelha `lotes_confinamento`: consultor
+      tem acesso total; cliente/funcionário (via `clientes_usuarios`) pode
+      ver/criar/editar curral (não excluir), e já pode mudar o
+      `curral_id` do lote pela política "cliente_edita_seus_lotes" que já
+      existia — não precisou de RLS nova pra isso.
+    - **Import de KML com múltiplos currais**: reconhece cada `<Polygon>`
+      nomeado do KML como um curral (posição = centro do polígono), e o
+      polígono sem nome (ou o maior, se nenhum for "sem título") como o
+      contorno da fazenda (desenha o limite e centraliza o mapa nele).
+      Desambigua nomes repetidos dentro do próprio arquivo (o
+      `Belmont.kml` real que o usuário mandou tinha dois Placemarks
+      chamados "11" — o segundo virou "11 (2)" automaticamente, com aviso
+      na tela pra revisar). Ignora `<Point>` (são "LookAt" — marcadores de
+      câmera do Google Earth Pro, não posição de curral).
+    - **Import de KML é só do consultor por enquanto**: salvar
+      `mapa_contorno`/`mapa_centro_lat`/`mapa_centro_lng` exige dar
+      UPDATE em `clientes`, e não existe política de RLS pra
+      cliente/funcionário fazer isso (só existe a bem restrita
+      "cliente_aceita_convite", que não serve pra isso). Dava pra abrir
+      isso pro portal também, mas decidi não criar uma RLS nova de
+      "cliente edita o próprio cadastro" sem confirmar com o usuário — é
+      mais permissão do que ele pediu. **Se pedir**: falta uma policy tipo
+      `create policy "cliente_atualiza_mapa_do_proprio_cadastro" on
+      clientes for update using (id in (select cliente_id from
+      clientes_usuarios where auth_user_id = auth.uid())) with check
+      (...)`, e passar `onAtualizarCliente` no wiring do portal
+      (`app/portal/page.js`) do jeito que já foi feito pro lado do
+      consultor. Enquanto isso, cliente/funcionário já conseguem marcar
+      currais manualmente e arrastar lotes — só o import de KML que fica
+      esperando o consultor.
+    - **Bug real encontrado e corrigido durante o teste**: o `fitBounds`
+      rodava antes do container do mapa ter o tamanho final (0px de
+      largura por um instante, por causa do import dinâmico do Leaflet +
+      layout do resto da tela ainda assentando) — o Leaflet travava num
+      zoom degenerado (bate no teto, 19) que nunca mais se corrigia
+      sozinho, e todo marcador nascia centenas de pixels fora da posição
+      visual real dos tiles. Corrigido esperando um tamanho de container
+      diferente de zero antes do primeiro fitBounds/setView, mais um
+      `ResizeObserver` pra manter certo se o container mudar de tamanho
+      depois. Testado de ponta a ponta (mapa renderiza, marcador na
+      posição certa, arrastar pra curral vazio, arrastar-trocar com
+      curral ocupado) numa rota de teste descartável com dados fictícios
+      e o `Belmont.kml` real — não deu pra testar logado como consultor de
+      verdade por falta de credencial.
 
 ## Pendências / coisas para prestar atenção
 
+- **Mapa de currais dos outros clientes**: só a Belmont tem
+  `mapa_centro_lat`/`mapa_centro_lng` preenchidos (calculado a partir do
+  `Belmont.kml` que o usuário mandou) e nenhum cliente tem currais
+  cadastrados ainda — a Belmont em si só tem o contorno salvo, os 24
+  currais do KML **não foram importados** (isso foi feito e testado numa
+  rota de teste com dados fictícios, não na Belmont real — falta o
+  usuário logar e importar pela tela mesmo, ou pedir pra eu rodar o
+  import direto no banco). Os outros clientes (Junco, Alterosa, Porto
+  Pará, Valadares) não têm KML nenhum ainda.
+- **Import de KML restrito ao consultor**: RLS não permite cliente/
+  funcionário atualizar `clientes.mapa_contorno` — ver detalhes e o SQL
+  da policy que faltaria no item 23 acima, caso o usuário peça pra abrir
+  isso pro portal também.
 - **Lote 13 da Junco Agropecuaria**: não existe no banco — precisa o usuário
   passar `num_cabecas`, `peso_entrada` e `data_entrada` reais pra eu criar o
   lote e lançar os 24 registros de consumo pendentes (10/06–11/07/2026).
