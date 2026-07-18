@@ -154,21 +154,29 @@ adicionada nesta sessão para atender a Belmont).
     `https://confinamento-nine.vercel.app` (o domínio fixo). Ainda sem
     confirmação se resolveu.
 21. **Import de planilha na aba de consumo**: botão "Importar planilha" (ao
-    lado de "+ Consumo") sobe um `.xlsx` no mesmo formato pivot que os
-    clientes já mandam (uma coluna de data + uma coluna por lote), sem
-    precisar de mim pra cada lançamento. Casa o cabeçalho da coluna com o
-    lote pelo número final (ex: "3" → "Lote 3"), ignora célula em branco
-    (não é zero, é "não lançou"), e pula linhas que já existem pro mesmo
-    lote+data (evita duplicar se a planilha for reimportada). MS/fase são
-    opcionais e aplicados a todos os lançamentos importados de uma vez —
-    igual ao "Lançar consumo em massa" já existente. Usa `lib/useDadosConfinamento.js`
-    → `importarConsumosEmLote` (um único INSERT em array, não um por linha).
+    lado de "+ Consumo") sobe um `.xlsx` no formato real que o consultor
+    exporta — **uma linha por lote/data**, com colunas "Data", "Lote",
+    "Dieta" e "Quantidade"/"Consumo" (não é pivot table; a v1 tinha assumido
+    pivot e foi refeita depois que o usuário mandou um print do formato
+    real). Colunas são reconhecidas pelo **nome do cabeçalho** (não pela
+    posição), então podem vir em qualquer ordem. O nome/número do lote na
+    célula é casado com o lote pelo número final (ex: "3" → "Lote 3").
+    Linhas do mesmo lote+data são **somadas** num único lançamento (o
+    export do cliente pode ter mais de um trato no mesmo dia pro mesmo
+    lote). MS da dieta: usa o valor da própria planilha se a coluna "MS"
+    existir e vier preenchida naquela linha; senão cai pro MS cadastrado no
+    cliente pra aquela fase (`cliente.ms_adaptacao/recria/crescimento/terminacao`
+    — mesma regra do lançamento manual, `msDaFase()`). Custo do kg de MN
+    vem de `custoKgMnDaFase(lote, fase)` a partir da fase lida da coluna
+    "Dieta". Pula linhas que já existem pro mesmo lote+data (evita duplicar
+    se a planilha for reimportada). Usa `lib/useDadosConfinamento.js` →
+    `importarConsumosEmLote` (um único INSERT em array, não um por linha).
     **Importante**: instalado `xlsx` a partir do CDN do próprio SheetJS
     (`cdn.sheetjs.com`), não do npm — a versão do registro npm tem
     vulnerabilidades (prototype pollution/ReDoS) sem correção publicada lá.
-    Testada a lógica de parsing isolada (data em `Date`/`dd/mm/aaaa`/ISO,
-    coluna desconhecida, célula em branco) via script Node — não consegui
-    testar a tela em si porque preciso de login do consultor.
+    Testada a lógica de parsing/soma/fallback de MS isolada via script Node
+    reproduzindo os dados exatos do print que o usuário mandou — não
+    consegui testar a tela em si porque preciso de login do consultor.
 
 ## Pendências / coisas para prestar atenção
 
