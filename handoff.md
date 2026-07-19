@@ -237,6 +237,22 @@ adicionada nesta sessão para atender a Belmont).
       curral ocupado) numa rota de teste descartável com dados fictícios
       e o `Belmont.kml` real — não deu pra testar logado como consultor de
       verdade por falta de credencial.
+24. **Histórico de ocupação do curral**: clicar no rótulo do curral agora
+    mostra o ocupante atual (lote, nº de cabeças, "desde" quando) e o
+    **histórico completo de todo lote que já passou por ali** (entrada →
+    saída ou "até hoje"). Antes só dava pra saber o lote ATUAL
+    (`lotes_confinamento.curral_id`) — arrastar sobrescrevia sem deixar
+    rastro. Nova tabela `curral_ocupacoes` (curral_id, lote_id,
+    data_inicio, data_fim — `data_fim` null = ocupação em aberto) e
+    `lib/useDadosConfinamento.js` → `moverLoteParaCurral()`, que
+    substituiu o `onAtualizarLote(loteId, {curral_id})` cru no
+    drag/troca/desvincular: fecha a ocupação anterior (`data_fim = hoje`)
+    antes de abrir a nova. RLS espelha as outras tabelas de curral —
+    cliente/funcionário já registram e fecham ocupação pelo mesmo gesto
+    de arrastar, sem permissão nova. Testado de ponta a ponta (clicar no
+    curral → ver ocupante atual; arrastar lote → nova linha de ocupação
+    aparece no histórico com a data de hoje) na mesma rota de teste
+    descartável.
 
 ## Pendências / coisas para prestar atenção
 
