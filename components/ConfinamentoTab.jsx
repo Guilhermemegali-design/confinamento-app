@@ -72,12 +72,12 @@ function msDaFase(cliente, fase) {
 // Reaproveitado tanto na tela do consultor (com criar/excluir) quanto no portal
 // do cliente (ver e editar).
 export default function ConfinamentoTab({
-  cliente, lotes, pesagens = [], consumos = [], leiturasCocho = [], currais = [],
+  cliente, lotes, pesagens = [], consumos = [], leiturasCocho = [], currais = [], curralOcupacoes = [],
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho,
-  onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onAtualizarCliente,
+  onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onMoverLoteParaCurral, onAtualizarCliente,
   onBack,
 }) {
   const [tela, setTela] = useState({ modo: "lista" });
@@ -370,11 +370,13 @@ export default function ConfinamentoTab({
           cliente={cliente}
           lotes={lotes}
           currais={currais}
+          curralOcupacoes={curralOcupacoes}
           onAdicionarCurral={onAdicionarCurral}
           onAtualizarCurral={onAtualizarCurral}
           onExcluirCurral={onExcluirCurral}
           onImportarCurrais={onImportarCurrais}
           onAtualizarLote={onAtualizar}
+          onMoverLoteParaCurral={onMoverLoteParaCurral}
           onAtualizarCliente={onAtualizarCliente}
         />
       ) : aba === "lotes-ativos" ? (

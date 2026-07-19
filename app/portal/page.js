@@ -175,6 +175,7 @@ function PainelCliente({ cliente }) {
   const [consumos, setConsumos] = useState([]);
   const [leiturasCocho, setLeiturasCocho] = useState([]);
   const [currais, setCurrais] = useState([]);
+  const [curralOcupacoes, setCurralOcupacoes] = useState([]);
 
   const carregar = useCallback(async () => {
     const { data: l } = await supabase.from("lotes_confinamento").select("*").eq("cliente_id", cliente.id);
@@ -194,6 +195,13 @@ function PainelCliente({ cliente }) {
     }
     const { data: cu } = await supabase.from("currais").select("*").eq("cliente_id", cliente.id);
     setCurrais(cu || []);
+    const curralIds = (cu || []).map((x) => x.id);
+    if (curralIds.length > 0) {
+      const { data: co } = await supabase.from("curral_ocupacoes").select("*").in("curral_id", curralIds);
+      setCurralOcupacoes(co || []);
+    } else {
+      setCurralOcupacoes([]);
+    }
   }, [cliente.id]);
 
   useEffect(() => {
@@ -307,6 +315,7 @@ function PainelCliente({ cliente }) {
     if (error) throw error;
     setCurrais((cs) => cs.filter((c) => c.id !== curralId));
     setLotes((ls) => ls.map((l) => (l.curral_id === curralId ? { ...l, curral_id: null } : l)));
+    setCurralOcupacoes((os) => os.filter((o) => o.curral_id !== curralId));
   }
 
   async function importarCurraisEmLote(clienteId, linhas) {
@@ -316,6 +325,33 @@ function PainelCliente({ cliente }) {
     if (error) throw error;
     setCurrais((cs) => [...cs, ...(data || [])]);
     return data;
+  }
+
+  async function moverLoteParaCurral(loteId, novoCurralId, curralAnteriorId) {
+    const hoje = new Date().toISOString().slice(0, 10);
+    if (curralAnteriorId) {
+      const { data: fechadas, error: erroFechar } = await supabase
+        .from("curral_ocupacoes")
+        .update({ data_fim: hoje })
+        .eq("curral_id", curralAnteriorId)
+        .eq("lote_id", loteId)
+        .is("data_fim", null)
+        .select();
+      if (erroFechar) throw erroFechar;
+      if (fechadas?.length) {
+        setCurralOcupacoes((os) => os.map((o) => fechadas.find((f) => f.id === o.id) || o));
+      }
+    }
+    if (novoCurralId) {
+      const { data: nova, error: erroAbrir } = await supabase
+        .from("curral_ocupacoes")
+        .insert({ curral_id: novoCurralId, lote_id: loteId, consultor_id: cliente.consultor_id, data_inicio: hoje })
+        .select()
+        .single();
+      if (erroAbrir) throw erroAbrir;
+      setCurralOcupacoes((os) => [...os, nova]);
+    }
+    return atualizarLote(loteId, { curral_id: novoCurralId });
   }
 
   return (
@@ -340,6 +376,7 @@ function PainelCliente({ cliente }) {
           consumos={consumos}
           leiturasCocho={leiturasCocho}
           currais={currais}
+          curralOcupacoes={curralOcupacoes}
           onAdicionar={adicionarLote}
           onAtualizar={atualizarLote}
           onAdicionarPesagem={adicionarPesagem}
@@ -351,6 +388,7 @@ function PainelCliente({ cliente }) {
           onAtualizarCurral={atualizarCurral}
           onExcluirCurral={excluirCurral}
           onImportarCurrais={importarCurraisEmLote}
+          onMoverLoteParaCurral={moverLoteParaCurral}
         />
       </div>
     </div>

@@ -7,13 +7,13 @@ import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryBut
 import ConfinamentoTab from "./ConfinamentoTab";
 
 export default function ClientesTab({
-  clientes, lotes, pesagens, consumos, leiturasCocho = [], clientesUsuarios = [], currais = [], view, setView,
+  clientes, lotes, pesagens, consumos, leiturasCocho = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
   onAddConsumo, onUpdateConsumo, onDeleteConsumo, onImportarConsumos,
   onRegistrarLeituraCocho,
-  onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais,
+  onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais, onMoverLoteParaCurral,
   onRemoveAcessoCliente,
 }) {
   if (view.screen === "confinamento") {
@@ -25,6 +25,8 @@ export default function ClientesTab({
     const consumosCliente = consumos.filter((c) => loteIdsCliente.has(c.lote_id));
     const leiturasCochoCliente = leiturasCocho.filter((l) => loteIdsCliente.has(l.lote_id));
     const curraisCliente = currais.filter((c) => c.cliente_id === cliente.id);
+    const curralIdsCliente = new Set(curraisCliente.map((c) => c.id));
+    const curralOcupacoesCliente = curralOcupacoes.filter((o) => curralIdsCliente.has(o.curral_id));
     return (
       <ConfinamentoTab
         cliente={cliente}
@@ -33,6 +35,7 @@ export default function ClientesTab({
         consumos={consumosCliente}
         leiturasCocho={leiturasCochoCliente}
         currais={curraisCliente}
+        curralOcupacoes={curralOcupacoesCliente}
         onAdicionar={(dados) => onAddLote(cliente.id, dados)}
         onAtualizar={onUpdateLote}
         onExcluir={onDeleteLote}
@@ -47,6 +50,7 @@ export default function ClientesTab({
         onAtualizarCurral={onUpdateCurral}
         onExcluirCurral={onDeleteCurral}
         onImportarCurrais={onImportarCurrais}
+        onMoverLoteParaCurral={onMoverLoteParaCurral}
         onAtualizarCliente={onUpdateCliente}
         onBack={() => setView({ screen: "cliente-detalhe", id: cliente.id })}
       />

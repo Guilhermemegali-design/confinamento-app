@@ -83,6 +83,7 @@ export default function Home() {
           leiturasCocho={dados.leiturasCocho}
           clientesUsuarios={dados.clientesUsuarios}
           currais={dados.currais}
+          curralOcupacoes={dados.curralOcupacoes}
           view={view}
           setView={setView}
           onAddCliente={async (c) => {
@@ -153,6 +154,10 @@ export default function Home() {
           onImportarCurrais={async (clienteId, linhas) => {
             await dados.importarCurraisEmLote(clienteId, linhas);
             mostrarToast(`${linhas.length} curral${linhas.length > 1 ? "is" : ""} importado${linhas.length > 1 ? "s" : ""}`);
+          }}
+          onMoverLoteParaCurral={async (loteId, novoCurralId, curralAnteriorId) => {
+            await dados.moverLoteParaCurral(loteId, novoCurralId, curralAnteriorId);
+            mostrarToast("Lote movido");
           }}
           onRemoveAcessoCliente={async (id) => {
             await dados.excluirAcessoCliente(id);

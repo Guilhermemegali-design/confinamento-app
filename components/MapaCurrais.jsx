@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import { Trash2, Upload } from "lucide-react";
 import { styles } from "@/lib/styles";
+import { formatDataBR } from "@/lib/format";
 import { SectionTitle, EmptyHint, InputField, PrimaryButton } from "./UI";
 
 // Área aproximada (fórmula do "shoelace", em graus²) — só serve pra comparar
@@ -113,7 +114,7 @@ const ZOOM_PADRAO = 4;
 // nome dele) de um curral pro outro — ou da bandeja de "sem curral" pra um
 // curral vazio. Pensado pra funcionário usar no campo, sem precisar
 // entender de mapa: arrastar e soltar é a única ação.
-export default function MapaCurrais({ cliente, lotes, currais, onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onAtualizarLote, onAtualizarCliente }) {
+export default function MapaCurrais({ cliente, lotes, currais, curralOcupacoes = [], onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onAtualizarLote, onMoverLoteParaCurral, onAtualizarCliente }) {
   const mapaRef = useRef(null);
   // Cobre o mapa E a bandeja de "sem curral" abaixo — o drag precisa
   // funcionar partindo de qualquer um dos dois.
@@ -333,16 +334,18 @@ export default function MapaCurrais({ cliente, lotes, currais, onAdicionarCurral
       const bandejaEl = alvo && alvo.closest && alvo.closest("[data-bandeja-sem-curral]");
       const curralAlvoId = curralAlvoEl ? curralAlvoEl.getAttribute("data-curral-id") : null;
 
+      const mover = onMoverLoteParaCurral || ((loteId, novoCurralId) => onAtualizarLote(loteId, { curral_id: novoCurralId }));
+
       if (bandejaEl && !curralAlvoId) {
-        if (arrasto.origemCurralId) onAtualizarLote(arrasto.loteId, { curral_id: null });
+        if (arrasto.origemCurralId) mover(arrasto.loteId, null, arrasto.origemCurralId);
         return;
       }
       if (!curralAlvoId || curralAlvoId === arrasto.origemCurralId) return;
 
       const ocupanteAlvo = loteDoCurral.get(curralAlvoId);
-      onAtualizarLote(arrasto.loteId, { curral_id: curralAlvoId });
+      mover(arrasto.loteId, curralAlvoId, arrasto.origemCurralId);
       if (ocupanteAlvo && ocupanteAlvo.id !== arrasto.loteId) {
-        onAtualizarLote(ocupanteAlvo.id, { curral_id: arrasto.origemCurralId || null });
+        mover(ocupanteAlvo.id, arrasto.origemCurralId || null, curralAlvoId);
       }
     }
 
@@ -496,6 +499,50 @@ export default function MapaCurrais({ cliente, lotes, currais, onAdicionarCurral
 
       {curralEditando && (
         <div style={{ ...styles.card, marginTop: 10 }}>
+          {(() => {
+            const ocupante = loteDoCurral.get(curralEditando.id);
+            const historico = curralOcupacoes
+              .filter((o) => o.curral_id === curralEditando.id)
+              .sort((a, b) => b.data_inicio.localeCompare(a.data_inicio));
+            const ocupacaoAtual = historico.find((o) => o.data_fim == null);
+            return (
+              <div style={{ padding: "10px 0 4px" }}>
+                <div style={styles.fieldLabel}>Ocupante atual</div>
+                {ocupante ? (
+                  <div style={{ fontSize: 13.5, padding: "4px 0 10px" }}>
+                    <div style={{ fontWeight: 700 }}>{ocupante.nome}</div>
+                    <div style={{ color: "#9A9A94", fontSize: 12 }}>
+                      {ocupante.num_cabecas} cab.
+                      {ocupacaoAtual ? ` · desde ${formatDataBR(ocupacaoAtual.data_inicio)}` : ""}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, color: "#9A9A94", padding: "4px 0 10px" }}>Vazio no momento.</div>
+                )}
+                <div style={styles.fieldLabel}>Histórico de lotes neste curral</div>
+                {historico.length === 0 ? (
+                  <div style={{ fontSize: 13, color: "#9A9A94", padding: "4px 0 10px" }}>
+                    Nenhuma movimentação registrada ainda.
+                  </div>
+                ) : (
+                  <div style={{ padding: "4px 0 10px" }}>
+                    {historico.map((o) => {
+                      const lote = lotes.find((l) => l.id === o.lote_id);
+                      return (
+                        <div key={o.id} style={{ fontSize: 12.5, padding: "4px 0", borderBottom: "1px solid #F1EFE8" }}>
+                          <span style={{ fontWeight: 600 }}>{lote ? lote.nome : "Lote excluído"}</span>
+                          <span style={{ color: "#9A9A94" }}>
+                            {" — "}
+                            {formatDataBR(o.data_inicio)} até {o.data_fim ? formatDataBR(o.data_fim) : "hoje"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <InputField label="Nome do curral" value={nomeEdicao} onChange={setNomeEdicao} />
           <div style={{ display: "flex", gap: 8, padding: "0 0 12px" }}>
             <button onClick={() => setCurralEditando(null)} style={{ ...styles.editLinkBtn, background: "#F1EFE8", color: "#5C5C58", flex: 1 }}>
