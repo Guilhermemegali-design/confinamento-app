@@ -7,8 +7,8 @@ import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import {
   calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo,
-  NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, calcularHistoricoEsperadoRealizado,
-  montarTabelaConsumoEsperado,
+  NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, obterConsumoReferenciaAntesDe,
+  ajustePercentualDaNota, calcularHistoricoEsperadoRealizado, montarTabelaConsumoEsperado,
 } from "@/lib/confinamento";
 import { BackHeader, SectionTitle, EmptyHint, Field, InputField, TextAreaField, PrimaryButton } from "./UI";
 
@@ -92,7 +92,7 @@ export default function ConfinamentoTab({
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
-  onRegistrarLeituraCocho,
+  onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onMoverLoteParaCurral, onAtualizarCliente,
   onBack,
 }) {
@@ -219,6 +219,19 @@ export default function ConfinamentoTab({
         consumos={consumos}
         onCancel={() => setTela({ modo: "lista" })}
         onImportar={onImportarConsumos}
+        onConcluido={() => setTela({ modo: "lista" })}
+      />
+    );
+  }
+
+  if (tela.modo === "importar-cocho") {
+    return (
+      <ImportarLeituraCochoPlanilha
+        lotes={lotes}
+        leiturasCocho={leiturasCocho}
+        consumosPorLote={consumosPorLote}
+        onCancel={() => setTela({ modo: "lista" })}
+        onImportar={onImportarLeiturasCocho}
         onConcluido={() => setTela({ modo: "lista" })}
       />
     );
@@ -378,6 +391,7 @@ export default function ConfinamentoTab({
           consumosPorLote={consumosPorLote}
           leiturasCochoPorLote={leiturasCochoPorLote}
           onRegistrar={onRegistrarLeituraCocho}
+          onAbrirImportar={onImportarLeiturasCocho && (() => setTela({ modo: "importar-cocho" }))}
         />
       ) : aba === "esperado" ? (
         <AbaConsumoEsperado lotes={lotes} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} />
@@ -1515,6 +1529,194 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
   );
 }
 
+// Importa a leitura de cocho (nota de -2 a 2 por lote/dia) de uma planilha —
+// mesmo modelo de colunas "Data"/"Lote" do importador de consumo, mais uma
+// coluna de nota/escore. O consumo de referência e a quantidade esperada de
+// cada linha são recalculados a partir do consumo já lançado no app antes
+// daquela data (mesma regra usada no lançamento manual, dia a dia).
+function ImportarLeituraCochoPlanilha({ lotes, leiturasCocho, consumosPorLote, onCancel, onImportar, onConcluido }) {
+  const [processando, setProcessando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [resultado, setResultado] = useState(null);
+  const [importando, setImportando] = useState(false);
+  const [concluido, setConcluido] = useState(null);
+
+  const existentes = new Set(leiturasCocho.map((l) => `${l.lote_id}|${l.data}`));
+
+  async function processarArquivo(file) {
+    if (!file) return;
+    setProcessando(true);
+    setErro(null);
+    setResultado(null);
+    setConcluido(null);
+    try {
+      const XLSX = await import("xlsx");
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+      const aba = workbook.Sheets[workbook.SheetNames[0]];
+      const linhas = XLSX.utils.sheet_to_json(aba, { header: 1, defval: null });
+      if (linhas.length < 2) throw new Error("Planilha vazia ou sem linhas de dados.");
+
+      const cabecalho = linhas[0];
+      const idxData = indiceColuna(cabecalho, ["data"]);
+      const idxLote = indiceColuna(cabecalho, ["lote", "curral"]);
+      const idxNota = indiceColuna(cabecalho, ["nota", "escore", "pontuacao", "score", "avaliacao"]);
+      const faltando = [];
+      if (idxData === -1) faltando.push("Data");
+      if (idxLote === -1) faltando.push("Lote");
+      if (idxNota === -1) faltando.push("Nota");
+      if (faltando.length > 0) {
+        throw new Error(`Não encontrei a coluna de ${faltando.join(" / ")} na planilha — confira os cabeçalhos.`);
+      }
+
+      // Se o mesmo lote/data aparecer mais de uma vez, fica valendo a
+      // última linha (não faz sentido somar notas de leitura de cocho).
+      const candidatos = new Map();
+      const naoReconhecidos = new Set();
+      const notasInvalidas = new Set();
+      let linhasIgnoradas = 0;
+
+      for (const linha of linhas.slice(1)) {
+        if (!linha || linha.every((v) => v == null || v === "")) continue;
+        const data = normalizarDataPlanilha(linha[idxData]);
+        const lote = encontrarLotePorNomeOuNumero(linha[idxLote], lotes);
+        const notaBruta = normalizarNumeroPlanilha(linha[idxNota]);
+        const nota = notaBruta != null ? Math.round(notaBruta) : null;
+        const notaValida = nota != null && NOTAS_LEITURA_COCHO.some((n) => n.nota === nota);
+        if (!data || !lote || !notaValida) {
+          if (!lote && linha[idxLote] != null && linha[idxLote] !== "") naoReconhecidos.add(String(linha[idxLote]));
+          if (lote && data && !notaValida && notaBruta != null) notasInvalidas.add(String(linha[idxNota]));
+          linhasIgnoradas++;
+          continue;
+        }
+        candidatos.set(`${lote.id}|${data}`, { loteId: lote.id, loteNome: lote.nome, data, nota });
+      }
+
+      const novos = [];
+      const semReferencia = [];
+      let jaExistentes = 0;
+      for (const [chave, candidato] of candidatos) {
+        if (existentes.has(chave)) {
+          jaExistentes++;
+          continue;
+        }
+        const referencia = obterConsumoReferenciaAntesDe(consumosPorLote[candidato.loteId] || [], candidato.data);
+        if (!referencia) {
+          semReferencia.push(candidato);
+          continue;
+        }
+        novos.push({
+          loteId: candidato.loteId,
+          data: candidato.data,
+          consumoReferencia: Number(referencia.consumo_total_lote),
+          nota: candidato.nota,
+        });
+      }
+
+      setResultado({ novos, semReferencia, naoReconhecidos: [...naoReconhecidos], notasInvalidas: [...notasInvalidas], jaExistentes, linhasIgnoradas });
+    } catch (e) {
+      setErro(e.message || "Não foi possível ler essa planilha.");
+    } finally {
+      setProcessando(false);
+    }
+  }
+
+  async function confirmar() {
+    if (!resultado || resultado.novos.length === 0) return;
+    setImportando(true);
+    try {
+      const linhas = resultado.novos.map((n) => ({
+        lote_id: n.loteId,
+        data: n.data,
+        consumo_referencia: n.consumoReferencia,
+        nota: n.nota,
+        ajuste_percentual: ajustePercentualDaNota(n.nota),
+        quantidade_esperada: calcularQuantidadeEsperada(n.consumoReferencia, n.nota),
+      }));
+      await onImportar(linhas);
+      setConcluido(linhas.length);
+    } finally {
+      setImportando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title="Importar planilha de leitura de cocho" onBack={onCancel} />
+
+      <div style={styles.card}>
+        <div style={{ fontSize: 13, color: "#5C5C58", padding: "10px 0" }}>
+          Planilha Excel (.xlsx) com uma linha por lote/data e colunas "Data",
+          "Lote" e "Nota" (escore de -2 a 2, igual aos botões da leitura
+          manual). O nome do lote na planilha precisa bater com o do app (ex:
+          "3" reconhece "Lote 3"). Cada linha usa como referência o consumo já
+          lançado no app antes daquela data — sem consumo lançado antes, a
+          linha é ignorada.
+        </div>
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          disabled={processando || importando}
+          onChange={(e) => processarArquivo(e.target.files?.[0])}
+          style={{ fontSize: 13, padding: "10px 0" }}
+        />
+        {processando && <div style={{ fontSize: 13, color: "#9A9A94" }}>Lendo planilha...</div>}
+        {erro && <div style={{ fontSize: 13, color: "#B8763E", padding: "6px 0" }}>{erro}</div>}
+      </div>
+
+      {resultado && concluido == null && (
+        <>
+          <div style={{ ...styles.card, marginTop: 10 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, padding: "10px 0 4px" }}>Resumo da planilha</div>
+            <div style={{ fontSize: 13, color: "#5C5C58", lineHeight: 1.6 }}>
+              {resultado.novos.length} leitura{resultado.novos.length !== 1 ? "s" : ""} nova
+              {resultado.novos.length !== 1 ? "s" : ""} pronta{resultado.novos.length !== 1 ? "s" : ""} pra importar
+              {resultado.jaExistentes > 0 && (
+                <div>{resultado.jaExistentes} já existiam no app (não serão duplicadas)</div>
+              )}
+              {resultado.semReferencia.length > 0 && (
+                <div>
+                  {resultado.semReferencia.length} linha(s) ignorada(s) por não ter consumo lançado antes da data
+                </div>
+              )}
+              {resultado.linhasIgnoradas > 0 && (
+                <div>{resultado.linhasIgnoradas} linha(s) sem data/lote/nota válidos, ignorada(s)</div>
+              )}
+              {resultado.naoReconhecidos.length > 0 && (
+                <div style={{ color: "#B8763E", marginTop: 4 }}>
+                  Lotes não reconhecidos (verifique o nome): {resultado.naoReconhecidos.join(", ")}
+                </div>
+              )}
+              {resultado.notasInvalidas.length > 0 && (
+                <div style={{ color: "#B8763E", marginTop: 4 }}>
+                  Nota fora do intervalo -2 a 2: {resultado.notasInvalidas.join(", ")}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <PrimaryButton disabled={resultado.novos.length === 0 || importando} onClick={confirmar}>
+            {importando
+              ? "Importando..."
+              : resultado.novos.length > 0
+              ? `Importar ${resultado.novos.length} leitura${resultado.novos.length > 1 ? "s" : ""}`
+              : "Nenhuma leitura nova para importar"}
+          </PrimaryButton>
+        </>
+      )}
+
+      {concluido != null && (
+        <div style={{ ...styles.card, marginTop: 10, textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1F4D45", padding: "14px 0" }}>
+            {concluido} leitura{concluido !== 1 ? "s" : ""} importada{concluido !== 1 ? "s" : ""} com sucesso.
+          </div>
+          <PrimaryButton onClick={onConcluido}>Voltar</PrimaryButton>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Gráfico de consumo por lote: consumo de MS em relação ao peso vivo (%).
 // Só entra na lista quem já tem pelo menos 2 lançamentos de consumo com o
 // dado necessário (MS da dieta preenchida).
@@ -1668,12 +1870,26 @@ async function exportarGraficosPDF(itens, tituloGrafico) {
 // ajuste do trato de hoje. Uma leitura por lote/dia — clicar em outra nota
 // no mesmo dia substitui a anterior (upsert), corrigindo clique errado sem
 // precisar excluir nada.
-function AbaLeituraCocho({ lotes, consumosPorLote, leiturasCochoPorLote, onRegistrar }) {
+function AbaLeituraCocho({ lotes, consumosPorLote, leiturasCochoPorLote, onRegistrar, onAbrirImportar }) {
   const hoje = new Date().toISOString().slice(0, 10);
   const ativos = lotes.filter((l) => !l.data_saida);
   const [salvandoId, setSalvandoId] = useState(null);
 
-  if (ativos.length === 0) return <EmptyHint text="Nenhum lote ativo." />;
+  return (
+    <div>
+      {onAbrirImportar && (
+        <div style={{ display: "flex", justifyContent: "flex-end", margin: "0 4px 12px" }}>
+          <button onClick={onAbrirImportar} style={styles.editLinkBtn}>
+            Importar planilha
+          </button>
+        </div>
+      )}
+      {ativos.length === 0 ? <EmptyHint text="Nenhum lote ativo." /> : <ListaLeituraCocho ativos={ativos} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} onRegistrar={onRegistrar} salvandoId={salvandoId} setSalvandoId={setSalvandoId} hoje={hoje} />}
+    </div>
+  );
+}
+
+function ListaLeituraCocho({ ativos, consumosPorLote, leiturasCochoPorLote, onRegistrar, salvandoId, setSalvandoId, hoje }) {
 
   async function registrar(lote, referencia, nota) {
     setSalvandoId(lote.id);

@@ -12,7 +12,7 @@ export default function ClientesTab({
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
   onAddConsumo, onUpdateConsumo, onDeleteConsumo, onImportarConsumos,
-  onRegistrarLeituraCocho,
+  onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais, onMoverLoteParaCurral,
   onRemoveAcessoCliente,
 }) {
@@ -46,6 +46,7 @@ export default function ClientesTab({
         onExcluirConsumo={onDeleteConsumo}
         onImportarConsumos={onImportarConsumos}
         onRegistrarLeituraCocho={onRegistrarLeituraCocho}
+        onImportarLeiturasCocho={onImportarLeiturasCocho}
         onAdicionarCurral={onAddCurral}
         onAtualizarCurral={onUpdateCurral}
         onExcluirCurral={onDeleteCurral}

@@ -139,6 +139,10 @@ export default function Home() {
             await dados.registrarLeituraCocho(loteId, l);
             mostrarToast("Leitura de cocho registrada");
           }}
+          onImportarLeiturasCocho={async (linhas) => {
+            await dados.importarLeiturasCochoEmLote(linhas);
+            mostrarToast(`${linhas.length} leitura${linhas.length > 1 ? "s" : ""} importada${linhas.length > 1 ? "s" : ""}`);
+          }}
           onAddCurral={async (clienteId, c) => {
             await dados.adicionarCurral(clienteId, c);
             mostrarToast("Curral marcado");

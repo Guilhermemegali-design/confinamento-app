@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-18
+Última atualização: 2026-07-20
 
 ## O que é
 
@@ -253,6 +253,33 @@ adicionada nesta sessão para atender a Belmont).
     curral → ver ocupante atual; arrastar lote → nova linha de ocupação
     aparece no histórico com a data de hoje) na mesma rota de teste
     descartável.
+25. **Ordenação de lotes na tela de lançar consumo + preferência salva**:
+    o mesmo dropdown de ordenação (manual/recentes/antigos/nome/cabeças)
+    das abas Lotes ativos e Gráficos agora também está na tela "Lançar
+    consumo do dia" (`FormConsumoEmMassa`). Além disso, a ordenação
+    escolhida em qualquer uma das três telas fica salva no
+    `localStorage` do navegador por cliente (`usarOrdenacaoPersistida` em
+    `ConfinamentoTab.jsx`) — antes voltava sempre para "Ordem manual" ao
+    reabrir a tela/recarregar a página.
+26. **Importar planilha de leitura de cocho**: nova tela
+    `ImportarLeituraCochoPlanilha`, aberta pelo botão "Importar planilha"
+    na aba Leitura de cocho. Mesmo modelo de planilha do importador de
+    consumo (colunas "Data"/"Lote"), mais uma coluna "Nota" (escore -2 a
+    2, aceita sinônimos "escore"/"pontuação"/"score"/"avaliação"). Para
+    cada linha, `consumo_referencia` e `quantidade_esperada` são
+    recalculados a partir do consumo já lançado no app **antes** daquela
+    data (`lib/confinamento.js` → `obterConsumoReferenciaAntesDe`, usado
+    também para refatorar `obterConsumoReferenciaCocho` sem mudar seu
+    comportamento) — linha sem consumo lançado antes é ignorada e
+    reportada no resumo. Leituras cujo lote/data já existem no app são
+    puladas (sem duplicar/sobrescrever), igual ao importador de consumo.
+    Novo `importarLeiturasCochoEmLote()` em `useDadosConfinamento.js`
+    (insert em lote). Assim como o import de consumo e de currais, fica
+    **só no lado consultor** (`app/page.js` → `ClientesTab.jsx`) — não
+    foi ligado no portal do cliente. Testado de ponta a ponta com
+    planilha .xlsx real (linha duplicada de lote/data existente pulada,
+    linha sem consumo de referência ignorada, linha nova importada e
+    aparecendo no histórico do lote) numa rota de teste descartável.
 
 ## Pendências / coisas para prestar atenção
 
