@@ -32,6 +32,22 @@ const OPCOES_ORDENACAO = [
   { value: "cabecas_desc", label: "Nº de cabeças" },
 ];
 
+// Lembra a ordenação escolhida pelo usuário (por cliente) entre uma
+// visita e outra — sem isso, toda vez que abre a tela teria que
+// escolher "Nome (A-Z)"/etc de novo.
+function usarOrdenacaoPersistida(clienteId) {
+  const chave = `confinamento_ordenacao_${clienteId || "geral"}`;
+  const [ordenacao, setOrdenacaoState] = useState(() => {
+    if (typeof window === "undefined") return "manual";
+    return window.localStorage.getItem(chave) || "manual";
+  });
+  function setOrdenacao(valor) {
+    setOrdenacaoState(valor);
+    if (typeof window !== "undefined") window.localStorage.setItem(chave, valor);
+  }
+  return [ordenacao, setOrdenacao];
+}
+
 function compararLotes(ordenacao) {
   return (a, b) => {
     if (ordenacao === "manual") {
@@ -82,7 +98,7 @@ export default function ConfinamentoTab({
 }) {
   const [tela, setTela] = useState({ modo: "lista" });
   const [aba, setAba] = useState("painel");
-  const [ordenacao, setOrdenacao] = useState("manual");
+  const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(cliente?.id);
   const [movendo, setMovendo] = useState(false);
 
   const pesagensPorLote = {};
@@ -355,7 +371,7 @@ export default function ConfinamentoTab({
       </div>
 
       {aba === "graficos" ? (
-        <AbaGraficos lotes={lotes} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} />
+        <AbaGraficos lotes={lotes} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} clienteId={cliente?.id} />
       ) : aba === "cocho" && onRegistrarLeituraCocho ? (
         <AbaLeituraCocho
           lotes={lotes}
@@ -1032,7 +1048,7 @@ function FormConsumoEmMassa({ lotesAtivos, cliente, onCancel, onSalvarLote, onCo
   const [faseGlobal, setFaseGlobal] = useState(null);
   const [msGlobal, setMsGlobal] = useState("");
   const [salvando, setSalvando] = useState(false);
-  const [ordenacao, setOrdenacao] = useState("manual");
+  const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(cliente?.id);
 
   const lotesOrdenados = lotesAtivos
     .map((lote) => ({ lote }))
@@ -1502,9 +1518,9 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
 // Gráfico de consumo por lote: consumo de MS em relação ao peso vivo (%).
 // Só entra na lista quem já tem pelo menos 2 lançamentos de consumo com o
 // dado necessário (MS da dieta preenchida).
-function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote }) {
+function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, clienteId }) {
   const [exportando, setExportando] = useState(false);
-  const [ordenacao, setOrdenacao] = useState("manual");
+  const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(clienteId);
   const comDados = lotes
     .map((lote) => ({
       lote,
