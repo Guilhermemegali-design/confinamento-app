@@ -1032,6 +1032,12 @@ function FormConsumoEmMassa({ lotesAtivos, cliente, onCancel, onSalvarLote, onCo
   const [faseGlobal, setFaseGlobal] = useState(null);
   const [msGlobal, setMsGlobal] = useState("");
   const [salvando, setSalvando] = useState(false);
+  const [ordenacao, setOrdenacao] = useState("manual");
+
+  const lotesOrdenados = lotesAtivos
+    .map((lote) => ({ lote }))
+    .sort(compararLotes(ordenacao))
+    .map((item) => item.lote);
 
   function setCampo(loteId, campo, valor) {
     setValores((v) => ({ ...v, [loteId]: { ...v[loteId], [campo]: valor } }));
@@ -1131,9 +1137,20 @@ function FormConsumoEmMassa({ lotesAtivos, cliente, onCancel, onSalvarLote, onCo
         />
       </div>
 
-      <SectionTitle>Lotes ativos</SectionTitle>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 4px 8px" }}>
+        <div style={{ ...styles.sectionTitle, margin: 0 }}>Lotes ativos</div>
+        <select
+          value={ordenacao}
+          onChange={(e) => setOrdenacao(e.target.value)}
+          style={{ fontSize: 12, color: "#5C5C58", background: "#F1EFE8", border: "none", borderRadius: 8, padding: "5px 8px", fontFamily: "inherit" }}
+        >
+          {OPCOES_ORDENACAO.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      </div>
       {lotesAtivos.length === 0 && <EmptyHint text="Nenhum lote ativo para lançar consumo." />}
-      {lotesAtivos.map((lote) => {
+      {lotesOrdenados.map((lote) => {
         const valorLote = valores[lote.id] || {};
         const preview =
           valorLote.consumo && valorLote.ms && lote.num_cabecas > 0
