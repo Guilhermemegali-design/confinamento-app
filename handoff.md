@@ -274,9 +274,10 @@ adicionada nesta sessão para atender a Belmont).
     reportada no resumo. Leituras cujo lote/data já existem no app são
     puladas (sem duplicar/sobrescrever), igual ao importador de consumo.
     Novo `importarLeiturasCochoEmLote()` em `useDadosConfinamento.js`
-    (insert em lote). Assim como o import de consumo e de currais, fica
-    **só no lado consultor** (`app/page.js` → `ClientesTab.jsx`) — não
-    foi ligado no portal do cliente. Testado de ponta a ponta com
+    (insert em lote) e equivalente local em `app/portal/page.js` — o
+    cliente/funcionário também vê o botão "Importar planilha" no
+    portal dele (RLS de `leituras_cocho` já permitia insert do cliente,
+    não precisou de migration nova). Testado de ponta a ponta com
     planilha .xlsx real (linha duplicada de lote/data existente pulada,
     linha sem consumo de referência ignorada, linha nova importada e
     aparecendo no histórico do lote) numa rota de teste descartável.

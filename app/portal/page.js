@@ -287,6 +287,15 @@ function PainelCliente({ cliente }) {
     return data;
   }
 
+  async function importarLeiturasCochoEmLote(linhas) {
+    if (linhas.length === 0) return [];
+    const paraInserir = linhas.map((l) => ({ ...l, consultor_id: cliente.consultor_id }));
+    const { data, error } = await supabase.from("leituras_cocho").insert(paraInserir).select();
+    if (error) throw error;
+    setLeiturasCocho((ls) => [...ls, ...(data || [])]);
+    return data;
+  }
+
   async function adicionarCurral(clienteId, dados) {
     const { data, error } = await supabase
       .from("currais")
@@ -384,6 +393,7 @@ function PainelCliente({ cliente }) {
           onAtualizarConsumo={atualizarConsumo}
           onExcluirConsumo={excluirConsumo}
           onRegistrarLeituraCocho={registrarLeituraCocho}
+          onImportarLeiturasCocho={importarLeiturasCochoEmLote}
           onAdicionarCurral={adicionarCurral}
           onAtualizarCurral={atualizarCurral}
           onExcluirCurral={excluirCurral}
