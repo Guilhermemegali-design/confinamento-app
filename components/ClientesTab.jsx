@@ -16,6 +16,8 @@ export default function ClientesTab({
   onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais, onMoverLoteParaCurral,
   onRemoveAcessoCliente,
 }) {
+  const [abaGeral, setAbaGeral] = useState("clientes");
+
   if (view.screen === "confinamento") {
     const cliente = clientes.find((c) => c.id === view.id);
     if (!cliente) return <EmptyHint text="Cliente não encontrado." />;
@@ -175,25 +177,45 @@ export default function ClientesTab({
 
   return (
     <div>
-      <PainelGeral clientes={clientes} lotes={lotes} setView={setView} />
-      <ListHeader title="Clientes" actionLabel="Novo cliente" onAction={() => setView({ screen: "novo-cliente" })} />
-      {ordenados.length === 0 && <EmptyHint text="Cadastre seu primeiro cliente para começar." />}
-      {ordenados.map((c) => (
-        <button key={c.id} style={styles.listItem} onClick={() => setView({ screen: "cliente-detalhe", id: c.id })}>
-          <div style={styles.avatar}>{c.nome.charAt(0)}</div>
-          <div style={{ flex: 1, textAlign: "left" }}>
-            <div style={styles.listItemTitle}>{c.nome}</div>
-            <div style={styles.listItemSub}>{c.contato || "Sem contato informado"}</div>
-          </div>
+      <div style={styles.viewToggle}>
+        <button
+          onClick={() => setAbaGeral("painel")}
+          style={{ ...styles.viewToggleBtn, ...(abaGeral === "painel" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
+        >
+          Painel
         </button>
-      ))}
+        <button
+          onClick={() => setAbaGeral("clientes")}
+          style={{ ...styles.viewToggleBtn, ...(abaGeral === "clientes" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
+        >
+          Clientes
+        </button>
+      </div>
+
+      {abaGeral === "painel" ? (
+        <PainelGeral clientes={clientes} lotes={lotes} setView={setView} />
+      ) : (
+        <>
+          <ListHeader title="Clientes" actionLabel="Novo cliente" onAction={() => setView({ screen: "novo-cliente" })} />
+          {ordenados.length === 0 && <EmptyHint text="Cadastre seu primeiro cliente para começar." />}
+          {ordenados.map((c) => (
+            <button key={c.id} style={styles.listItem} onClick={() => setView({ screen: "cliente-detalhe", id: c.id })}>
+              <div style={styles.avatar}>{c.nome.charAt(0)}</div>
+              <div style={{ flex: 1, textAlign: "left" }}>
+                <div style={styles.listItemTitle}>{c.nome}</div>
+                <div style={styles.listItemSub}>{c.contato || "Sem contato informado"}</div>
+              </div>
+            </button>
+          ))}
+        </>
+      )}
     </div>
   );
 }
 
 function PainelGeral({ clientes, lotes, setView }) {
   const ativos = lotes.filter((l) => !l.data_saida);
-  if (ativos.length === 0) return null;
+  if (ativos.length === 0) return <EmptyHint text="Nenhum lote ativo ainda." />;
 
   const totalCabecas = ativos.reduce((soma, l) => soma + (l.num_cabecas || 0), 0);
 
