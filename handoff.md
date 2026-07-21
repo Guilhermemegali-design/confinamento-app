@@ -328,12 +328,25 @@ adicionada nesta sessão para atender a Belmont).
     original — inclusive no painel consultoria-wide (`PainelGeral` em
     `ClientesTab.jsx`). RLS de `saidas_lote` espelha `pesagens_lote`:
     cliente insere e vê, só o consultor exclui (registrar saída errada
-    exige pedir pro consultor apagar). **Limitação conhecida**: o consumo
-    de ração por cabeça (`consumoMS`/custo diário) continua dividindo pelo
-    `num_cabecas` **original** do lote, não pelo que resta após uma saída
-    parcial — corrigir isso exigiria saber quantas cabeças existiam em
-    cada dia específico de consumo lançado, o que não foi implementado
-    nesta sessão.
+    exige pedir pro consultor apagar).
+31. **Consumo/custo por cabeça corrigido após saída parcial** (fecha a
+    limitação deixada no item 30): antes, o consumo de MS e o custo por
+    animal sempre dividiam pelo `num_cabecas` **original** do lote, mesmo
+    depois de uma saída parcial — subestimando o consumo/custo real por
+    animal nos dias seguintes (a mesma ração dividida por menos bocas).
+    Nova função `calcularCabecasNaData(lote, saidas, dataISO)` em
+    `lib/confinamento.js` — desconta as saídas parciais lançadas até
+    aquela data (inclusive) — usada agora em todo lugar que antes dividia
+    por `lote.num_cabecas` direto: `calcularIndicadoresLote`
+    (consumo/custo do lançamento mais recente), `calcularCustoAcumulado`
+    (custo acumulado, dia a dia), `calcularEvolucaoConsumo` (histórico e
+    gráficos), e as prévias de cálculo em `FormConsumo` e
+    `FormConsumoEmMassa` (o consultor já vê o valor certo antes de salvar,
+    usando a data escolhida no formulário). Testado lançando consumo antes
+    e depois de uma saída parcial no mesmo lote (500 kg/dia de MN, 60% MS,
+    saída de 20 de 50 cabeças): 6.00 kg MS/cab/dia antes da saída (÷50) e
+    10.00 kg MS/cab/dia depois (÷30), confirmado tanto na prévia do
+    formulário quanto no histórico salvo.
 
 ## Pendências / coisas para prestar atenção
 
@@ -385,11 +398,6 @@ adicionada nesta sessão para atender a Belmont).
   plano), mas se o usuário reportar algo que "sumiu" e o código/dados
   estão corretos, ainda vale suspeitar disso primeiro — pedir pra fechar
   e reabrir o app antes de investigar mais fundo.
-- **Custo/consumo por cabeça após saída parcial** (item 30): continua
-  dividindo pelo `num_cabecas` original do lote, não pelo que resta depois
-  de uma saída parcial — o custo/consumo por animal fica um pouco
-  subestimado nos dias após a primeira retirada. Corrigir direito exigiria
-  saber a contagem de cabeças válida em cada data de consumo lançada.
 - **Nunca usar `git commit --amend`** nem forçar push nesse repo sem pedir —
   o usuário não é super técnico e já teve dificuldade com comandos de git
   (colar comando com caracteres estranhos, autenticação por token, etc.) — ir

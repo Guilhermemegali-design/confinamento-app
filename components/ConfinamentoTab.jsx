@@ -7,7 +7,7 @@ import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import {
   calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo,
-  calcularResumoSaidas,
+  calcularResumoSaidas, calcularCabecasNaData,
   NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, obterConsumoReferenciaAntesDe,
   ajustePercentualDaNota, calcularHistoricoEsperadoRealizado, montarTabelaConsumoEsperado,
 } from "@/lib/confinamento";
@@ -204,6 +204,7 @@ export default function ConfinamentoTab({
       <FormConsumo
         lote={lote}
         cliente={cliente}
+        saidas={saidasPorLote[lote.id] || []}
         onCancel={() => setTela({ modo: "lote", id: lote.id })}
         onSave={async (dados) => {
           await onAdicionarConsumo(lote.id, dados);
@@ -222,6 +223,7 @@ export default function ConfinamentoTab({
         lote={lote}
         cliente={cliente}
         consumo={consumo}
+        saidas={saidasPorLote[lote.id] || []}
         onCancel={() => setTela({ modo: "lote", id: lote.id })}
         onSave={async (dados) => {
           await onAtualizarConsumo(consumo.id, dados);
@@ -236,6 +238,7 @@ export default function ConfinamentoTab({
     return (
       <FormConsumoEmMassa
         lotesAtivos={lotesAtivos}
+        saidasPorLote={saidasPorLote}
         cliente={cliente}
         onCancel={() => setTela({ modo: "lista" })}
         onSalvarLote={onAdicionarConsumo}
@@ -278,7 +281,7 @@ export default function ConfinamentoTab({
     const saidasLote = saidasPorLote[lote.id] || [];
     const indicadores = calcularIndicadoresLote(lote, pesagensLote, consumosLote, saidasLote);
     const evolucao = calcularEvolucaoLote(lote, pesagensLote);
-    const evolucaoConsumo = calcularEvolucaoConsumo(lote, pesagensLote, consumosLote);
+    const evolucaoConsumo = calcularEvolucaoConsumo(lote, pesagensLote, consumosLote, saidasLote);
     return (
       <LoteDetalhe
         lote={lote}
@@ -421,7 +424,7 @@ export default function ConfinamentoTab({
       </div>
 
       {aba === "graficos" ? (
-        <AbaGraficos lotes={lotes} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} clienteId={cliente?.id} />
+        <AbaGraficos lotes={lotes} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} clienteId={cliente?.id} />
       ) : aba === "cocho" && onRegistrarLeituraCocho ? (
         <AbaLeituraCocho
           lotes={lotes}
@@ -1092,7 +1095,7 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
   );
 }
 
-function FormConsumo({ lote, cliente, consumo, onCancel, onSave }) {
+function FormConsumo({ lote, cliente, consumo, saidas = [], onCancel, onSave }) {
   const editando = Boolean(consumo);
   const [data, setData] = useState(consumo?.data || new Date().toISOString().slice(0, 10));
   const [consumoTotalLote, setConsumoTotalLote] = useState(consumo?.consumo_total_lote != null ? String(consumo.consumo_total_lote) : "");
@@ -1100,14 +1103,17 @@ function FormConsumo({ lote, cliente, consumo, onCancel, onSave }) {
   const [dietaFase, setDietaFase] = useState(consumo?.dieta_fase || null);
   const [salvando, setSalvando] = useState(false);
   const valido = data && consumoTotalLote !== "";
+  // Se já houve saída parcial antes dessa data, divide pelo que sobrou no
+  // lote naquele dia — não pelo total que entrou.
+  const cabecasNaData = calcularCabecasNaData(lote, saidas, data);
   const consumoMSPreview =
-    consumoTotalLote !== "" && msDieta !== "" && lote.num_cabecas > 0
-      ? (Number(consumoTotalLote) * (Number(msDieta) / 100)) / Number(lote.num_cabecas)
+    consumoTotalLote !== "" && msDieta !== "" && cabecasNaData > 0
+      ? (Number(consumoTotalLote) * (Number(msDieta) / 100)) / cabecasNaData
       : null;
   const custoKgMnAtual = dietaFase ? custoKgMnDaFase(lote, dietaFase) : null;
   const custoDiarioPreview =
-    consumoTotalLote !== "" && custoKgMnAtual != null && lote.num_cabecas > 0
-      ? (Number(consumoTotalLote) / Number(lote.num_cabecas)) * Number(custoKgMnAtual)
+    consumoTotalLote !== "" && custoKgMnAtual != null && cabecasNaData > 0
+      ? (Number(consumoTotalLote) / cabecasNaData) * Number(custoKgMnAtual)
       : null;
 
   function selecionarFase(fase) {
@@ -1191,7 +1197,7 @@ function FormConsumo({ lote, cliente, consumo, onCancel, onSave }) {
 // Lançamento do consumo do dia para todos os lotes ativos de uma vez —
 // uma data só, um cartão por lote (só quem tiver o consumo preenchido é
 // salvo).
-function FormConsumoEmMassa({ lotesAtivos, cliente, onCancel, onSalvarLote, onConcluido }) {
+function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel, onSalvarLote, onConcluido }) {
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
   const [valores, setValores] = useState({}); // { [loteId]: { consumo: "", ms: "", fase: "" } }
   const [faseGlobal, setFaseGlobal] = useState(null);
@@ -1317,14 +1323,15 @@ function FormConsumoEmMassa({ lotesAtivos, cliente, onCancel, onSalvarLote, onCo
       {lotesAtivos.length === 0 && <EmptyHint text="Nenhum lote ativo para lançar consumo." />}
       {lotesOrdenados.map((lote) => {
         const valorLote = valores[lote.id] || {};
+        const cabecasNaData = calcularCabecasNaData(lote, saidasPorLote[lote.id] || [], data);
         const preview =
-          valorLote.consumo && valorLote.ms && lote.num_cabecas > 0
-            ? (Number(valorLote.consumo) * (Number(valorLote.ms) / 100)) / Number(lote.num_cabecas)
+          valorLote.consumo && valorLote.ms && cabecasNaData > 0
+            ? (Number(valorLote.consumo) * (Number(valorLote.ms) / 100)) / cabecasNaData
             : null;
         const custoAtual = valorLote.fase ? custoKgMnDaFase(lote, valorLote.fase) : null;
         const previewCusto =
-          valorLote.consumo && custoAtual != null && lote.num_cabecas > 0
-            ? (Number(valorLote.consumo) / Number(lote.num_cabecas)) * Number(custoAtual)
+          valorLote.consumo && custoAtual != null && cabecasNaData > 0
+            ? (Number(valorLote.consumo) / cabecasNaData) * Number(custoAtual)
             : null;
         return (
           <div key={lote.id} style={{ ...styles.card, marginBottom: 10 }}>
@@ -1855,16 +1862,19 @@ function ImportarLeituraCochoPlanilha({ lotes, leiturasCocho, consumosPorLote, o
 // Gráfico de consumo por lote: consumo de MS em relação ao peso vivo (%).
 // Só entra na lista quem já tem pelo menos 2 lançamentos de consumo com o
 // dado necessário (MS da dieta preenchida).
-function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, clienteId }) {
+function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = {}, clienteId }) {
   const [exportando, setExportando] = useState(false);
   const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(clienteId);
   const comDados = lotes
     .map((lote) => ({
       lote,
       svgId: `grafico-pv-lote-${lote.id}`,
-      pontosPV: calcularEvolucaoConsumo(lote, pesagensPorLote[lote.id] || [], consumosPorLote[lote.id] || []).filter(
-        (p) => p.percentualPV != null
-      ),
+      pontosPV: calcularEvolucaoConsumo(
+        lote,
+        pesagensPorLote[lote.id] || [],
+        consumosPorLote[lote.id] || [],
+        saidasPorLote[lote.id] || []
+      ).filter((p) => p.percentualPV != null),
     }))
     .filter((x) => x.pontosPV.length > 0)
     .sort(compararLotes(ordenacao));
