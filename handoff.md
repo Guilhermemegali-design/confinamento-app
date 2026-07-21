@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-20
+Última atualização: 2026-07-20 (painel de visão geral + fix de auto-update do PWA)
 
 ## O que é
 
@@ -281,6 +281,22 @@ adicionada nesta sessão para atender a Belmont).
     planilha .xlsx real (linha duplicada de lote/data existente pulada,
     linha sem consumo de referência ignorada, linha nova importada e
     aparecendo no histórico do lote) numa rota de teste descartável.
+27. **Aba "Painel" na tela inicial do consultor**: `PainelGeral` em
+    `ClientesTab.jsx` — mostra o total de cabeças confinadas (soma de
+    `num_cabecas` dos lotes sem `data_saida`) e o breakdown por cliente,
+    ordenado do maior pro menor, cada linha clicável levando direto pro
+    cliente. Fica numa aba própria ("Painel" / "Clientes", mesmo padrão
+    de abas do `ConfinamentoTab`), não mais fixo acima da lista.
+28. **Fix do PWA que não atualizava sozinho**: `RegistroServiceWorker.jsx`
+    registrava o Service Worker uma vez e nunca verificava de novo — em
+    apps instalados na tela inicial (iOS/Mac), isso fazia o usuário ficar
+    preso na versão antiga até excluir e reinstalar o ícone. Agora
+    registra com `updateViaCache: "none"`, chama `registration.update()`
+    toda vez que o app volta ao primeiro plano (`visibilitychange`), e dá
+    `window.location.reload()` automático quando um novo Service Worker
+    assume o controle (`controllerchange`, com guarda contra loop).
+    Reduz bastante a necessidade de excluir/reinstalar, mas não elimina
+    100% em todos os cenários do iOS (ver pendência abaixo).
 
 ## Pendências / coisas para prestar atenção
 
@@ -327,9 +343,11 @@ adicionada nesta sessão para atender a Belmont).
   paginação (baixo risco hoje, mas não zero).
 - **Cache do Service Worker / PWA**: já causou pelo menos três vezes a
   impressão de "bug" que na verdade era tela desatualizada em cache (ou PWA
-  preso numa URL de deploy antiga, ver item 20). Se o usuário reportar algo
-  que "sumiu" e o código/dados estão corretos, suspeitar disso primeiro —
-  pedir pra fechar e reabrir o app antes de investigar mais fundo.
+  preso numa URL de deploy antiga, ver item 20). O item 28 acima já reduz
+  bastante isso (o app agora se atualiza sozinho ao voltar ao primeiro
+  plano), mas se o usuário reportar algo que "sumiu" e o código/dados
+  estão corretos, ainda vale suspeitar disso primeiro — pedir pra fechar
+  e reabrir o app antes de investigar mais fundo.
 - **Nunca usar `git commit --amend`** nem forçar push nesse repo sem pedir —
   o usuário não é super técnico e já teve dificuldade com comandos de git
   (colar comando com caracteres estranhos, autenticação por token, etc.) — ir
