@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-20 (painel de visão geral + fix de auto-update do PWA)
+Última atualização: 2026-07-21 (ordenação por peso atual + saída fracionada de lote)
 
 ## O que é
 
@@ -58,6 +58,8 @@ Produção: **https://confinamento-nine.vercel.app**
 - `consumos_lote` — histórico de consumo diário. Cada registro "trava" a
   `dieta_fase` e o `custo_kg_mn` no momento do lançamento (copiado do
   cliente/lote), pra não mudar retroativamente se o preço mudar depois.
+- `saidas_lote` — histórico de saídas parciais (venda/abate de parte do
+  lote aos poucos, até esvaziar). Ver item 29 abaixo.
 
 Fases de dieta: `adaptacao`, `recria`, `crescimento`, `terminacao` (recria foi
 adicionada nesta sessão para atender a Belmont).
@@ -68,7 +70,8 @@ adicionada nesta sessão para atender a Belmont).
   clientes/lotes/pesagens/consumos.
 - Cliente (via `clientes_usuarios`): vê e edita lotes da própria fazenda, lê e
   insere pesagens/consumos, mas **não edita nem exclui** pesagens/consumos já
-  lançados (só o consultor pode).
+  lançados (só o consultor pode). `saidas_lote` segue a mesma regra restrita
+  de `pesagens_lote`: cliente insere e vê, só o consultor exclui.
 
 ## O que foi feito nesta sessão (ordem cronológica)
 
@@ -297,6 +300,40 @@ adicionada nesta sessão para atender a Belmont).
     assume o controle (`controllerchange`, com guarda contra loop).
     Reduz bastante a necessidade de excluir/reinstalar, mas não elimina
     100% em todos os cenários do iOS (ver pendência abaixo).
+29. **Ordenação por peso atual na aba Lotes ativos**: duas novas opções no
+    dropdown de ordenação (só nessa tela, `OPCOES_ORDENACAO_ATIVOS` em
+    `ConfinamentoTab.jsx`) — "Peso atual (maior-menor)" e "(menor-maior)",
+    usando o `pesoEsperadoHoje` já calculado por lote. Não entrou no array
+    `OPCOES_ORDENACAO` compartilhado porque as outras telas que o reusam
+    (lançar consumo em massa, gráficos) não carregam esse indicador.
+30. **Saída fracionada de lote** (cliente ia tirando boi aos poucos até
+    esvaziar o lote inteiro, sem jeito de registrar isso — só dava pra
+    finalizar tudo de uma vez): nova tabela `saidas_lote` (`lote_id`, `data`,
+    `num_cabecas`, `peso_saida_vivo`, `observacoes`) — uma linha por
+    retirada parcial. `lib/confinamento.js` → `calcularResumoSaidas(lote,
+    saidas)` soma as retiradas e devolve `cabecasRestantes`. Quando as
+    retiradas somam o `num_cabecas` inteiro do lote, o app **finaliza o
+    lote sozinho**: preenche `data_saida` (data da última retirada) e
+    `peso_saida_vivo` (média ponderada pelas cabeças de cada retirada) —
+    é por isso que o lote passa a aparecer em "Lotes finalizados" sem
+    precisar editar nada à mão. Excluir a saída que fechou o lote reabre
+    ele automaticamente (`sincronizarFinalizacaoLote` em
+    `useDadosConfinamento.js`, espelhado localmente em
+    `app/portal/page.js`). Na tela do lote: nova seção "Saídas
+    registradas" (histórico + botão "+ Saída"), campo "Nº de cabeças"
+    mostra "X restantes de Y" quando há saída parcial, e a lista de
+    "Lotes ativos" mostra "X de Y cab." no lugar do total bruto. O Painel
+    (cabeças ativas, peso médio, custo por animal dos ativos) passa a
+    somar/ponderar pelas cabeças **restantes**, não mais pelo total
+    original — inclusive no painel consultoria-wide (`PainelGeral` em
+    `ClientesTab.jsx`). RLS de `saidas_lote` espelha `pesagens_lote`:
+    cliente insere e vê, só o consultor exclui (registrar saída errada
+    exige pedir pro consultor apagar). **Limitação conhecida**: o consumo
+    de ração por cabeça (`consumoMS`/custo diário) continua dividindo pelo
+    `num_cabecas` **original** do lote, não pelo que resta após uma saída
+    parcial — corrigir isso exigiria saber quantas cabeças existiam em
+    cada dia específico de consumo lançado, o que não foi implementado
+    nesta sessão.
 
 ## Pendências / coisas para prestar atenção
 
@@ -348,6 +385,11 @@ adicionada nesta sessão para atender a Belmont).
   plano), mas se o usuário reportar algo que "sumiu" e o código/dados
   estão corretos, ainda vale suspeitar disso primeiro — pedir pra fechar
   e reabrir o app antes de investigar mais fundo.
+- **Custo/consumo por cabeça após saída parcial** (item 30): continua
+  dividindo pelo `num_cabecas` original do lote, não pelo que resta depois
+  de uma saída parcial — o custo/consumo por animal fica um pouco
+  subestimado nos dias após a primeira retirada. Corrigir direito exigiria
+  saber a contagem de cabeças válida em cada data de consumo lançada.
 - **Nunca usar `git commit --amend`** nem forçar push nesse repo sem pedir —
   o usuário não é super técnico e já teve dificuldade com comandos de git
   (colar comando com caracteres estranhos, autenticação por token, etc.) — ir

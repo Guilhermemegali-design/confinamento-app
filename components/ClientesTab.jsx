@@ -5,12 +5,14 @@ import { Trash2 } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryButton } from "./UI";
 import ConfinamentoTab from "./ConfinamentoTab";
+import { calcularResumoSaidas } from "@/lib/confinamento";
 
 export default function ClientesTab({
-  clientes, lotes, pesagens, consumos, leiturasCocho = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
+  clientes, lotes, pesagens, consumos, saidas = [], leiturasCocho = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
+  onAddSaida, onDeleteSaida,
   onAddConsumo, onUpdateConsumo, onDeleteConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais, onMoverLoteParaCurral,
@@ -25,6 +27,7 @@ export default function ClientesTab({
     const loteIdsCliente = new Set(lotesCliente.map((l) => l.id));
     const pesagensCliente = pesagens.filter((p) => loteIdsCliente.has(p.lote_id));
     const consumosCliente = consumos.filter((c) => loteIdsCliente.has(c.lote_id));
+    const saidasCliente = saidas.filter((s) => loteIdsCliente.has(s.lote_id));
     const leiturasCochoCliente = leiturasCocho.filter((l) => loteIdsCliente.has(l.lote_id));
     const curraisCliente = currais.filter((c) => c.cliente_id === cliente.id);
     const curralIdsCliente = new Set(curraisCliente.map((c) => c.id));
@@ -35,6 +38,7 @@ export default function ClientesTab({
         lotes={lotesCliente}
         pesagens={pesagensCliente}
         consumos={consumosCliente}
+        saidas={saidasCliente}
         leiturasCocho={leiturasCochoCliente}
         currais={curraisCliente}
         curralOcupacoes={curralOcupacoesCliente}
@@ -43,6 +47,8 @@ export default function ClientesTab({
         onExcluir={onDeleteLote}
         onAdicionarPesagem={onAddPesagem}
         onExcluirPesagem={onDeletePesagem}
+        onAdicionarSaida={onAddSaida}
+        onExcluirSaida={onDeleteSaida}
         onAdicionarConsumo={onAddConsumo}
         onAtualizarConsumo={onUpdateConsumo}
         onExcluirConsumo={onDeleteConsumo}
@@ -193,7 +199,7 @@ export default function ClientesTab({
       </div>
 
       {abaGeral === "painel" ? (
-        <PainelGeral clientes={clientes} lotes={lotes} setView={setView} />
+        <PainelGeral clientes={clientes} lotes={lotes} saidas={saidas} setView={setView} />
       ) : (
         <>
           <ListHeader title="Clientes" actionLabel="Novo cliente" onAction={() => setView({ screen: "novo-cliente" })} />
@@ -213,17 +219,28 @@ export default function ClientesTab({
   );
 }
 
-function PainelGeral({ clientes, lotes, setView }) {
+function PainelGeral({ clientes, lotes, saidas, setView }) {
   const ativos = lotes.filter((l) => !l.data_saida);
   if (ativos.length === 0) return <EmptyHint text="Nenhum lote ativo ainda." />;
 
-  const totalCabecas = ativos.reduce((soma, l) => soma + (l.num_cabecas || 0), 0);
+  // Cabeças restantes já descontam saídas parciais lançadas (lote que vai
+  // esvaziando aos poucos) — pra lote sem nenhuma saída, é igual a num_cabecas.
+  const saidasPorLote = new Map();
+  for (const s of saidas) {
+    if (!saidasPorLote.has(s.lote_id)) saidasPorLote.set(s.lote_id, []);
+    saidasPorLote.get(s.lote_id).push(s);
+  }
+  const cabecasRestantesPorLote = new Map(
+    ativos.map((l) => [l.id, calcularResumoSaidas(l, saidasPorLote.get(l.id) || []).cabecasRestantes])
+  );
+
+  const totalCabecas = ativos.reduce((soma, l) => soma + (cabecasRestantesPorLote.get(l.id) || 0), 0);
 
   const porCliente = new Map();
   for (const lote of ativos) {
     const atual = porCliente.get(lote.cliente_id) || { lotes: 0, cabecas: 0 };
     atual.lotes += 1;
-    atual.cabecas += lote.num_cabecas || 0;
+    atual.cabecas += cabecasRestantesPorLote.get(lote.id) || 0;
     porCliente.set(lote.cliente_id, atual);
   }
 

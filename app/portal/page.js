@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { styles } from "@/lib/styles";
 import { LogOut } from "lucide-react";
 import ConfinamentoTab from "@/components/ConfinamentoTab";
+import { calcularResumoSaidas } from "@/lib/confinamento";
 
 export default function PortalCliente() {
   const [sessao, setSessao] = useState(undefined);
@@ -173,6 +174,7 @@ function PainelCliente({ cliente }) {
   const [lotes, setLotes] = useState([]);
   const [pesagens, setPesagens] = useState([]);
   const [consumos, setConsumos] = useState([]);
+  const [saidas, setSaidas] = useState([]);
   const [leiturasCocho, setLeiturasCocho] = useState([]);
   const [currais, setCurrais] = useState([]);
   const [curralOcupacoes, setCurralOcupacoes] = useState([]);
@@ -186,11 +188,14 @@ function PainelCliente({ cliente }) {
       setPesagens(p || []);
       const { data: c } = await supabase.from("consumos_lote").select("*").in("lote_id", loteIds);
       setConsumos(c || []);
+      const { data: s } = await supabase.from("saidas_lote").select("*").in("lote_id", loteIds);
+      setSaidas(s || []);
       const { data: lc } = await supabase.from("leituras_cocho").select("*").in("lote_id", loteIds);
       setLeiturasCocho(lc || []);
     } else {
       setPesagens([]);
       setConsumos([]);
+      setSaidas([]);
       setLeiturasCocho([]);
     }
     const { data: cu } = await supabase.from("currais").select("*").eq("cliente_id", cliente.id);
@@ -239,6 +244,31 @@ function PainelCliente({ cliente }) {
       .single();
     if (error) throw error;
     setPesagens((ps) => [...ps, data]);
+    return data;
+  }
+
+  // Se essa saída esvaziar o lote inteiro, preenche data_saida/peso_saida_vivo
+  // automaticamente (mesma lógica do lado do consultor) — assim o lote já
+  // aparece em "Lotes finalizados" sem precisar pedir pro consultor editar.
+  async function adicionarSaida(loteId, dados) {
+    const { data, error } = await supabase
+      .from("saidas_lote")
+      .insert({ ...dados, lote_id: loteId, consultor_id: cliente.consultor_id })
+      .select()
+      .single();
+    if (error) throw error;
+    const novasSaidas = [...saidas, data];
+    setSaidas(novasSaidas);
+    const lote = lotes.find((l) => l.id === loteId);
+    if (lote) {
+      const { finalizadoPorSaidas, dataSaidaCalculada, pesoSaidaVivoCalculado } = calcularResumoSaidas(
+        lote,
+        novasSaidas.filter((s) => s.lote_id === loteId)
+      );
+      if (finalizadoPorSaidas) {
+        await atualizarLote(loteId, { data_saida: dataSaidaCalculada, peso_saida_vivo: pesoSaidaVivoCalculado });
+      }
+    }
     return data;
   }
 
@@ -383,12 +413,14 @@ function PainelCliente({ cliente }) {
           lotes={lotes}
           pesagens={pesagens}
           consumos={consumos}
+          saidas={saidas}
           leiturasCocho={leiturasCocho}
           currais={currais}
           curralOcupacoes={curralOcupacoes}
           onAdicionar={adicionarLote}
           onAtualizar={atualizarLote}
           onAdicionarPesagem={adicionarPesagem}
+          onAdicionarSaida={adicionarSaida}
           onAdicionarConsumo={adicionarConsumo}
           onAtualizarConsumo={atualizarConsumo}
           onExcluirConsumo={excluirConsumo}
