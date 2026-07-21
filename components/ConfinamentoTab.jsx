@@ -32,6 +32,15 @@ const OPCOES_ORDENACAO = [
   { value: "cabecas_desc", label: "Nº de cabeças" },
 ];
 
+// Só a lista de lotes ativos tem o peso atual (estimado) calculado por
+// lote — por isso essa opção não entra no array acima, usado também em
+// telas (lançamento em massa, gráficos) que não carregam esse indicador.
+const OPCOES_ORDENACAO_ATIVOS = [
+  ...OPCOES_ORDENACAO,
+  { value: "peso_desc", label: "Peso atual (maior-menor)" },
+  { value: "peso_asc", label: "Peso atual (menor-maior)" },
+];
+
 // Lembra a ordenação escolhida pelo usuário (por cliente) entre uma
 // visita e outra — sem isso, toda vez que abre a tela teria que
 // escolher "Nome (A-Z)"/etc de novo.
@@ -60,6 +69,8 @@ function compararLotes(ordenacao) {
     if (ordenacao === "nome") return a.lote.nome.localeCompare(b.lote.nome, "pt-BR", { numeric: true });
     if (ordenacao === "cabecas_desc") return Number(b.lote.num_cabecas || 0) - Number(a.lote.num_cabecas || 0);
     if (ordenacao === "entrada_asc") return a.lote.data_entrada.localeCompare(b.lote.data_entrada);
+    if (ordenacao === "peso_desc") return Number(b.pesoEsperadoHoje || 0) - Number(a.pesoEsperadoHoje || 0);
+    if (ordenacao === "peso_asc") return Number(a.pesoEsperadoHoje || 0) - Number(b.pesoEsperadoHoje || 0);
     return b.lote.data_entrada.localeCompare(a.lote.data_entrada);
   };
 }
@@ -418,7 +429,7 @@ export default function ConfinamentoTab({
               onChange={(e) => setOrdenacao(e.target.value)}
               style={{ fontSize: 12, color: "#5C5C58", background: "#F1EFE8", border: "none", borderRadius: 8, padding: "5px 8px", fontFamily: "inherit" }}
             >
-              {OPCOES_ORDENACAO.map((o) => (
+              {OPCOES_ORDENACAO_ATIVOS.map((o) => (
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
