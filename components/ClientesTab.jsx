@@ -175,6 +175,7 @@ export default function ClientesTab({
 
   return (
     <div>
+      <PainelGeral clientes={clientes} lotes={lotes} setView={setView} />
       <ListHeader title="Clientes" actionLabel="Novo cliente" onAction={() => setView({ screen: "novo-cliente" })} />
       {ordenados.length === 0 && <EmptyHint text="Cadastre seu primeiro cliente para começar." />}
       {ordenados.map((c) => (
@@ -187,6 +188,51 @@ export default function ClientesTab({
         </button>
       ))}
     </div>
+  );
+}
+
+function PainelGeral({ clientes, lotes, setView }) {
+  const ativos = lotes.filter((l) => !l.data_saida);
+  if (ativos.length === 0) return null;
+
+  const totalCabecas = ativos.reduce((soma, l) => soma + (l.num_cabecas || 0), 0);
+
+  const porCliente = new Map();
+  for (const lote of ativos) {
+    const atual = porCliente.get(lote.cliente_id) || { lotes: 0, cabecas: 0 };
+    atual.lotes += 1;
+    atual.cabecas += lote.num_cabecas || 0;
+    porCliente.set(lote.cliente_id, atual);
+  }
+
+  const linhas = [...porCliente.entries()]
+    .map(([clienteId, dados]) => ({ cliente: clientes.find((c) => c.id === clienteId), ...dados }))
+    .filter((linha) => linha.cliente)
+    .sort((a, b) => b.cabecas - a.cabecas);
+
+  return (
+    <>
+      <SectionTitle>Confinamento — visão geral</SectionTitle>
+      <div style={{ ...styles.card, padding: "16px", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: 12.5, color: "#9A9A94" }}>Animais confinados agora</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: "#1F4D45" }}>{totalCabecas.toLocaleString("pt-BR")}</div>
+        </div>
+        <div style={{ textAlign: "right", fontSize: 12.5, color: "#9A9A94" }}>
+          {ativos.length} lote(s) ativo(s)<br />{linhas.length} cliente(s)
+        </div>
+      </div>
+      {linhas.map(({ cliente, lotes: numLotes, cabecas }) => (
+        <button key={cliente.id} style={styles.listItem} onClick={() => setView({ screen: "cliente-detalhe", id: cliente.id })}>
+          <div style={styles.avatar}>{cliente.nome.charAt(0)}</div>
+          <div style={{ flex: 1, textAlign: "left" }}>
+            <div style={styles.listItemTitle}>{cliente.nome}</div>
+            <div style={styles.listItemSub}>{numLotes} lote(s) ativo(s)</div>
+          </div>
+          <div style={{ fontWeight: 700, color: "#1F4D45", fontSize: 15 }}>{cabecas.toLocaleString("pt-BR")}</div>
+        </button>
+      ))}
+    </>
   );
 }
 
