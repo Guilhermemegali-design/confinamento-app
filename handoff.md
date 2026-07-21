@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-21 (ordenação por peso atual + saída fracionada de lote)
+Última atualização: 2026-07-21 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4)
 
 ## O que é
 
@@ -347,6 +347,17 @@ adicionada nesta sessão para atender a Belmont).
     saída de 20 de 50 cabeças): 6.00 kg MS/cab/dia antes da saída (÷50) e
     10.00 kg MS/cab/dia depois (÷30), confirmado tanto na prévia do
     formulário quanto no histórico salvo.
+32. **Escore de leitura de cocho ampliado de -2/+2 para -4/+4**: `NOTAS_LEITURA_COCHO`
+    em `lib/confinamento.js` agora tem 9 notas (-4 a 4), cada uma com
+    ajuste de 5% no trato (-20% a +20%, mesmo passo de antes, só
+    estendido). Os 9 botões da aba "Leitura de cocho" e a validação do
+    importador de planilha (`ImportarLeituraCochoPlanilha`) vêm direto
+    desse array, então não precisou mexer em mais nada na lógica — só os
+    textos/mensagens que citavam "-2 a 2" na tela de import. Migration na
+    tabela `leituras_cocho`: `CHECK (nota = ANY (ARRAY[-4,-3,-2,-1,0,1,2,3,4]))`
+    (antes só aceitava -2 a 2). Testado visualmente em mobile (375px) — os
+    9 botões cabem numa linha só sem quebrar — e o cálculo do ajuste
+    (nota +4 → +20% → quantidade esperada correta).
 
 ## Pendências / coisas para prestar atenção
 

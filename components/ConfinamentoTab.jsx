@@ -1671,7 +1671,7 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
   );
 }
 
-// Importa a leitura de cocho (nota de -2 a 2 por lote/dia) de uma planilha —
+// Importa a leitura de cocho (nota de -4 a 4 por lote/dia) de uma planilha —
 // mesmo modelo de colunas "Data"/"Lote" do importador de consumo, mais uma
 // coluna de nota/escore. O consumo de referência e a quantidade esperada de
 // cada linha são recalculados a partir do consumo já lançado no app antes
@@ -1789,7 +1789,7 @@ function ImportarLeituraCochoPlanilha({ lotes, leiturasCocho, consumosPorLote, o
       <div style={styles.card}>
         <div style={{ fontSize: 13, color: "#5C5C58", padding: "10px 0" }}>
           Planilha Excel (.xlsx) com uma linha por lote/data e colunas "Data",
-          "Lote" e "Nota" (escore de -2 a 2, igual aos botões da leitura
+          "Lote" e "Nota" (escore de -4 a 4, igual aos botões da leitura
           manual). O nome do lote na planilha precisa bater com o do app (ex:
           "3" reconhece "Lote 3"). Cada linha usa como referência o consumo já
           lançado no app antes daquela data — sem consumo lançado antes, a
@@ -1831,7 +1831,7 @@ function ImportarLeituraCochoPlanilha({ lotes, leiturasCocho, consumosPorLote, o
               )}
               {resultado.notasInvalidas.length > 0 && (
                 <div style={{ color: "#B8763E", marginTop: 4 }}>
-                  Nota fora do intervalo -2 a 2: {resultado.notasInvalidas.join(", ")}
+                  Nota fora do intervalo -4 a 4: {resultado.notasInvalidas.join(", ")}
                 </div>
               )}
             </div>
@@ -2011,7 +2011,7 @@ async function exportarGraficosPDF(itens, tituloGrafico) {
 }
 
 // Leitura de cocho: pra cada lote ativo, mostra o consumo de referência
-// (último lançamento até ontem) e 5 botões de nota (-2 a 2) que decidem o
+// (último lançamento até ontem) e 9 botões de nota (-4 a 4) que decidem o
 // ajuste do trato de hoje. Uma leitura por lote/dia — clicar em outra nota
 // no mesmo dia substitui a anterior (upsert), corrigindo clique errado sem
 // precisar excluir nada.
