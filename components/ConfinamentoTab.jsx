@@ -293,7 +293,12 @@ export default function ConfinamentoTab({
         onEditar={() => setTela({ modo: "editar", id: lote.id })}
         onNovaPesagem={onAdicionarPesagem && (() => setTela({ modo: "nova-pesagem", loteId: lote.id }))}
         onExcluirPesagem={onExcluirPesagem}
-        onNovaSaida={onAdicionarSaida && indicadores.cabecasRestantes > 0 && (() => setTela({ modo: "nova-saida", loteId: lote.id }))}
+        onNovaSaida={
+          onAdicionarSaida &&
+          indicadores.status === "Ativo" &&
+          indicadores.cabecasRestantes > 0 &&
+          (() => setTela({ modo: "nova-saida", loteId: lote.id }))
+        }
         onExcluirSaida={onExcluirSaida}
         onNovoConsumo={onAdicionarConsumo && (() => setTela({ modo: "novo-consumo", loteId: lote.id }))}
         onEditarConsumo={onAtualizarConsumo && ((consumoId) => setTela({ modo: "editar-consumo", loteId: lote.id, consumoId }))}
@@ -465,7 +470,7 @@ export default function ConfinamentoTab({
           </div>
           {ativos.length === 0 && <EmptyHint text="Nenhum lote ativo." />}
           {ativos.map((item, index) => {
-            const { lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje, custoAcumuladoAnimal, cabecasRestantes, cabecasSaidas } = item;
+            const { lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje, custoAcumuladoAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate } = item;
             return (
               <div key={lote.id} style={styles.listItem}>
                 {ordenacao === "manual" && (
@@ -499,6 +504,11 @@ export default function ConfinamentoTab({
                     {custoAcumuladoAnimal != null && (
                       <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
                         Custo acum. {formatBRL(custoAcumuladoAnimal)}/animal
+                      </div>
+                    )}
+                    {dataProvavelAbate != null && (
+                      <div style={{ fontSize: 11.5, color: "#1F4D45", marginTop: 2 }}>
+                        Abate previsto: {formatDataBR(dataProvavelAbate)}
                       </div>
                     )}
                   </div>
@@ -621,6 +631,7 @@ function LoteDetalhe({
         <Field label="Data de entrada" value={formatDataBR(lote.data_entrada)} />
         <Field label="Peso de entrada" value={`${lote.peso_entrada} kg`} />
         {lote.gmd_esperado != null && <Field label="GMD esperado" value={`${lote.gmd_esperado} kg/dia`} />}
+        {lote.peso_esperado_abate != null && <Field label="Peso esperado de abate" value={`${lote.peso_esperado_abate} kg`} />}
         {lote.custo_kg_mn_adaptacao != null && (
           <Field label="Custo MN — Adaptação (atual)" value={formatBRL(lote.custo_kg_mn_adaptacao)} />
         )}
@@ -644,6 +655,9 @@ function LoteDetalhe({
               label="GMD acumulado"
               value={indicadores.gmdAcumulado != null ? `${indicadores.gmdAcumulado.toFixed(2)} kg/dia` : "—"}
             />
+            {indicadores.dataProvavelAbate != null && (
+              <Field label="Data provável de abate" value={formatDataBR(indicadores.dataProvavelAbate)} />
+            )}
           </>
         ) : (
           <>
@@ -653,6 +667,9 @@ function LoteDetalhe({
               label="GMD entrada-saída"
               value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(2)} kg/dia` : "—"}
             />
+            {lote.rendimento_carcaca != null && (
+              <Field label="Rendimento de carcaça" value={`${lote.rendimento_carcaca}%`} />
+            )}
           </>
         )}
         {lote.observacoes && <Field label="Observações" value={lote.observacoes} multiline />}
@@ -677,6 +694,7 @@ function LoteDetalhe({
                   <div style={{ fontWeight: 600, fontSize: 13.5 }}>{formatDataBR(s.data)}</div>
                   <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
                     {s.num_cabecas} cab.{s.peso_saida_vivo != null ? ` · ${s.peso_saida_vivo} kg vivo/cab.` : ""}
+                    {s.rendimento_carcaca != null ? ` · ${s.rendimento_carcaca}% carcaça` : ""}
                     {s.observacoes ? ` · ${s.observacoes}` : ""}
                   </div>
                 </div>
@@ -933,12 +951,14 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
   const [numCabecas, setNumCabecas] = useState(lote?.num_cabecas != null ? String(lote.num_cabecas) : "");
   const [pesoEntrada, setPesoEntrada] = useState(lote?.peso_entrada != null ? String(lote.peso_entrada) : "");
   const [gmdEsperado, setGmdEsperado] = useState(lote?.gmd_esperado != null ? String(lote.gmd_esperado) : "");
+  const [pesoEsperadoAbate, setPesoEsperadoAbate] = useState(lote?.peso_esperado_abate != null ? String(lote.peso_esperado_abate) : "");
   const [custoAdaptacao, setCustoAdaptacao] = useState(lote?.custo_kg_mn_adaptacao != null ? String(lote.custo_kg_mn_adaptacao) : "");
   const [custoRecria, setCustoRecria] = useState(lote?.custo_kg_mn_recria != null ? String(lote.custo_kg_mn_recria) : "");
   const [custoCrescimento, setCustoCrescimento] = useState(lote?.custo_kg_mn_crescimento != null ? String(lote.custo_kg_mn_crescimento) : "");
   const [custoTerminacao, setCustoTerminacao] = useState(lote?.custo_kg_mn_terminacao != null ? String(lote.custo_kg_mn_terminacao) : "");
   const [dataSaida, setDataSaida] = useState(lote?.data_saida || "");
   const [pesoSaidaVivo, setPesoSaidaVivo] = useState(lote?.peso_saida_vivo != null ? String(lote.peso_saida_vivo) : "");
+  const [rendimentoCarcaca, setRendimentoCarcaca] = useState(lote?.rendimento_carcaca != null ? String(lote.rendimento_carcaca) : "");
   const [observacoes, setObservacoes] = useState(lote?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
 
@@ -953,12 +973,14 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
         num_cabecas: Number(numCabecas),
         peso_entrada: Number(pesoEntrada),
         gmd_esperado: gmdEsperado !== "" ? Number(gmdEsperado) : null,
+        peso_esperado_abate: pesoEsperadoAbate !== "" ? Number(pesoEsperadoAbate) : null,
         custo_kg_mn_adaptacao: custoAdaptacao !== "" ? Number(custoAdaptacao) : null,
         custo_kg_mn_recria: custoRecria !== "" ? Number(custoRecria) : null,
         custo_kg_mn_crescimento: custoCrescimento !== "" ? Number(custoCrescimento) : null,
         custo_kg_mn_terminacao: custoTerminacao !== "" ? Number(custoTerminacao) : null,
         data_saida: dataSaida || null,
         peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
+        rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
         observacoes: observacoes || null,
       });
     } finally {
@@ -975,6 +997,13 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
         <InputField label="Nº de cabeças *" type="number" value={numCabecas} onChange={setNumCabecas} placeholder="Ex: 130" />
         <InputField label="Peso de entrada (kg) *" type="number" value={pesoEntrada} onChange={setPesoEntrada} placeholder="Ex: 410" />
         <InputField label="GMD esperado (kg/dia)" type="number" value={gmdEsperado} onChange={setGmdEsperado} placeholder="Ex: 1.5" />
+        <InputField
+          label="Peso esperado de abate (kg)"
+          type="number"
+          value={pesoEsperadoAbate}
+          onChange={setPesoEsperadoAbate}
+          placeholder="Ex: 550"
+        />
       </div>
 
       <SectionTitle>Custo do kg de MN por fase</SectionTitle>
@@ -992,6 +1021,13 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
       <div style={styles.card}>
         <InputField label="Data de saída" type="date" value={dataSaida} onChange={setDataSaida} />
         <InputField label="Peso de saída vivo (kg)" type="number" value={pesoSaidaVivo} onChange={setPesoSaidaVivo} />
+        <InputField
+          label="Rendimento de carcaça (%)"
+          type="number"
+          value={rendimentoCarcaca}
+          onChange={setRendimentoCarcaca}
+          placeholder="Ex: 54.5"
+        />
       </div>
 
       <div style={styles.card}>
@@ -1047,6 +1083,7 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
   const [numCabecas, setNumCabecas] = useState(cabecasRestantes != null ? String(cabecasRestantes) : "");
   const [pesoSaidaVivo, setPesoSaidaVivo] = useState("");
+  const [rendimentoCarcaca, setRendimentoCarcaca] = useState("");
   const [observacoes, setObservacoes] = useState("");
   const [salvando, setSalvando] = useState(false);
   const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= cabecasRestantes;
@@ -1059,6 +1096,7 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
         data,
         num_cabecas: Number(numCabecas),
         peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
+        rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
         observacoes: observacoes || null,
       });
     } finally {
@@ -1084,6 +1122,13 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
           </div>
         )}
         <InputField label="Peso de saída vivo (kg/cab.)" type="number" value={pesoSaidaVivo} onChange={setPesoSaidaVivo} placeholder="Ex: 540" />
+        <InputField
+          label="Rendimento de carcaça (%)"
+          type="number"
+          value={rendimentoCarcaca}
+          onChange={setRendimentoCarcaca}
+          placeholder="Ex: 54.5"
+        />
       </div>
       <div style={styles.card}>
         <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: venda parcial, frigorífico X" />

@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-21 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4)
+Última atualização: 2026-07-21 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4 + rendimento de carcaça/peso e data de abate esperados)
 
 ## O que é
 
@@ -358,6 +358,35 @@ adicionada nesta sessão para atender a Belmont).
     (antes só aceitava -2 a 2). Testado visualmente em mobile (375px) — os
     9 botões cabem numa linha só sem quebrar — e o cálculo do ajuste
     (nota +4 → +20% → quantidade esperada correta).
+33. **Rendimento de carcaça + peso esperado de abate + data provável de abate**:
+    3 campos novos, pensados pro fluxo de abate. `lotes_confinamento` ganha
+    `peso_esperado_abate` (kg vivo alvo, preenchido no cadastro/edição do
+    lote, campo novo perto de "GMD esperado") e `rendimento_carcaca` (%,
+    preenchido na seção "Saída" do `FormLote` — usado quando o lote é
+    finalizado de uma vez só). `saidas_lote` também ganha
+    `rendimento_carcaca` (usado no `FormSaida`, já que a saída fracionada
+    tem uma finalização por retirada, não uma única). Nova função
+    `calcularDataProvavelAbate` em `lib/confinamento.js` (dentro de
+    `calcularIndicadoresLote`, campo `dataProvavelAbate`): projeta a partir
+    da última pesagem (ou peso de entrada) usando o GMD esperado até
+    atingir o peso esperado de abate — só calculado pra lote ativo com
+    GMD esperado e peso esperado de abate preenchidos; se o peso já foi
+    atingido, retorna hoje. Aparece em dois lugares: no detalhe do lote
+    ("Data provável de abate", só quando ativo) e na lista de "Lotes
+    ativos" ("Abate previsto: DD/MM/AAAA"). "Rendimento de carcaça"
+    aparece no detalhe do lote finalizado (ao lado de "Peso de saída
+    vivo"/"GMD entrada-saída") e em cada linha do histórico de "Saídas
+    registradas", quando preenchido. **Bug encontrado e corrigido durante
+    o teste**: o botão "+ Saída" (saída fracionada) aparecia mesmo em
+    lotes já finalizados pelo método antigo (data_saída preenchida
+    direto no cadastro) — a condição só checava `cabecasRestantes > 0`
+    (que dá o `num_cabecas` inteiro quando não há nenhuma saída parcial
+    lançada), sem checar se o lote já estava `Finalizado`. Corrigido
+    adicionando `indicadores.status === "Ativo"` à condição. Testado com
+    um lote ativo (GMD 1.5, peso entrada 400, abate esperado 550 →
+    projetou 09/09/2026 corretamente) e um lote finalizado (rendimento
+    54.2% aparecendo no detalhe); confirmado que "+ Saída" some no lote
+    já finalizado.
 
 ## Pendências / coisas para prestar atenção
 
