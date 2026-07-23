@@ -16,7 +16,7 @@ export default function ClientesTab({
   onAddConsumo, onUpdateConsumo, onDeleteConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais, onMoverLoteParaCurral,
-  onRemoveAcessoCliente,
+  onRemoveAcessoCliente, onUpdateAcessoCliente,
 }) {
   const [abaGeral, setAbaGeral] = useState("clientes");
 
@@ -131,9 +131,22 @@ export default function ClientesTab({
         {pessoasComAcesso.length > 0 && (
           <>
             <SectionTitle>Pessoas com acesso</SectionTitle>
+            <div style={{ fontSize: 11.5, color: "#9A9A94", padding: "0 4px 8px", marginTop: -6 }}>
+              "Leitor" só vê os dados — não cria/edita lote, não lança pesagem, consumo, saída, leitura de cocho nem mexe no mapa de currais.
+            </div>
             {pessoasComAcesso.map((pessoa) => (
               <div key={pessoa.id} style={styles.rowCard}>
                 <div style={{ flex: 1 }}>{pessoa.email || "—"}</div>
+                {onUpdateAcessoCliente && (
+                  <select
+                    value={pessoa.papel || "editor"}
+                    onChange={(e) => onUpdateAcessoCliente(pessoa.id, { papel: e.target.value })}
+                    style={{ fontSize: 12, color: "#5C5C58", background: "#F1EFE8", border: "none", borderRadius: 8, padding: "5px 8px", fontFamily: "inherit", marginRight: 6 }}
+                  >
+                    <option value="editor">Editor</option>
+                    <option value="leitor">Leitor</option>
+                  </select>
+                )}
                 {onRemoveAcessoCliente && (
                   <button
                     onClick={() => {

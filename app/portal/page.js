@@ -10,6 +10,7 @@ import { calcularResumoSaidas } from "@/lib/confinamento";
 export default function PortalCliente() {
   const [sessao, setSessao] = useState(undefined);
   const [cliente, setCliente] = useState(undefined);
+  const [papel, setPapel] = useState("editor");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSessao(data.session));
@@ -21,13 +22,14 @@ export default function PortalCliente() {
     if (!sessao) return;
     const { data: vinculo } = await supabase
       .from("clientes_usuarios")
-      .select("cliente_id")
+      .select("cliente_id, papel")
       .eq("auth_user_id", sessao.user.id)
       .maybeSingle();
     if (!vinculo) {
       setCliente(null);
       return;
     }
+    setPapel(vinculo.papel || "editor");
     const { data } = await supabase.from("clientes").select("*").eq("id", vinculo.cliente_id).maybeSingle();
     setCliente(data || null);
   }, [sessao]);
@@ -40,7 +42,7 @@ export default function PortalCliente() {
   if (!sessao) return <TelaLoginCliente />;
   if (cliente === undefined) return <div style={styles.loadingScreen}>Carregando...</div>;
   if (cliente === null) return <TelaVincularConvite onVinculado={carregarCliente} />;
-  return <PainelCliente cliente={cliente} />;
+  return <PainelCliente cliente={cliente} somenteLeitura={papel === "leitor"} />;
 }
 
 // ---------- Login ----------
@@ -170,7 +172,7 @@ function TelaVincularConvite({ onVinculado }) {
 }
 
 // ---------- Painel principal ----------
-function PainelCliente({ cliente }) {
+function PainelCliente({ cliente, somenteLeitura }) {
   const [lotes, setLotes] = useState([]);
   const [pesagens, setPesagens] = useState([]);
   const [consumos, setConsumos] = useState([]);
@@ -399,7 +401,7 @@ function PainelCliente({ cliente }) {
         <div style={styles.topbarRow}>
           <div>
             <div style={styles.brand}>{cliente.nome}</div>
-            <div style={styles.brandSub}>Portal do cliente</div>
+            <div style={styles.brandSub}>Portal do cliente{somenteLeitura ? " · Somente leitura" : ""}</div>
           </div>
           <button onClick={() => supabase.auth.signOut()} style={styles.iconBtn} title="Sair">
             <LogOut size={16} />
@@ -417,20 +419,20 @@ function PainelCliente({ cliente }) {
           leiturasCocho={leiturasCocho}
           currais={currais}
           curralOcupacoes={curralOcupacoes}
-          onAdicionar={adicionarLote}
-          onAtualizar={atualizarLote}
-          onAdicionarPesagem={adicionarPesagem}
-          onAdicionarSaida={adicionarSaida}
-          onAdicionarConsumo={adicionarConsumo}
-          onAtualizarConsumo={atualizarConsumo}
-          onExcluirConsumo={excluirConsumo}
-          onRegistrarLeituraCocho={registrarLeituraCocho}
-          onImportarLeiturasCocho={importarLeiturasCochoEmLote}
-          onAdicionarCurral={adicionarCurral}
-          onAtualizarCurral={atualizarCurral}
-          onExcluirCurral={excluirCurral}
-          onImportarCurrais={importarCurraisEmLote}
-          onMoverLoteParaCurral={moverLoteParaCurral}
+          onAdicionar={somenteLeitura ? undefined : adicionarLote}
+          onAtualizar={somenteLeitura ? undefined : atualizarLote}
+          onAdicionarPesagem={somenteLeitura ? undefined : adicionarPesagem}
+          onAdicionarSaida={somenteLeitura ? undefined : adicionarSaida}
+          onAdicionarConsumo={somenteLeitura ? undefined : adicionarConsumo}
+          onAtualizarConsumo={somenteLeitura ? undefined : atualizarConsumo}
+          onExcluirConsumo={somenteLeitura ? undefined : excluirConsumo}
+          onRegistrarLeituraCocho={somenteLeitura ? undefined : registrarLeituraCocho}
+          onImportarLeiturasCocho={somenteLeitura ? undefined : importarLeiturasCochoEmLote}
+          onAdicionarCurral={somenteLeitura ? undefined : adicionarCurral}
+          onAtualizarCurral={somenteLeitura ? undefined : atualizarCurral}
+          onExcluirCurral={somenteLeitura ? undefined : excluirCurral}
+          onImportarCurrais={somenteLeitura ? undefined : importarCurraisEmLote}
+          onMoverLoteParaCurral={somenteLeitura ? undefined : moverLoteParaCurral}
         />
       </div>
     </div>

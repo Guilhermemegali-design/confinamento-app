@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-21 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4 + rendimento de carcaça/peso e data de abate esperados)
+Última atualização: 2026-07-22 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4 + rendimento de carcaça/peso e data de abate esperados + papel editor/leitor por pessoa)
 
 ## O que é
 
@@ -50,7 +50,8 @@ Produção: **https://confinamento-nine.vercel.app**
   fase (`ms_adaptacao`, `ms_recria`, `ms_crescimento`, `ms_terminacao`).
 - `clientes_usuarios` — **várias pessoas por fazenda** (substituiu o antigo
   `clientes.auth_user_id` único). Cada linha é um login vinculado a um
-  cliente. O código de convite é o mesmo pra todo mundo da fazenda.
+  cliente. O código de convite é o mesmo pra todo mundo da fazenda. Tem
+  `papel` (`editor`/`leitor`, default `editor`) — ver item 34 abaixo.
 - `lotes_confinamento` — um lote/curral. Tem `gmd_esperado`, custo do kg de
   MN por fase (`custo_kg_mn_adaptacao/recria/crescimento/terminacao`), e
   `ordem` (posição na ordenação manual da lista de ativos).
@@ -71,7 +72,9 @@ adicionada nesta sessão para atender a Belmont).
 - Cliente (via `clientes_usuarios`): vê e edita lotes da própria fazenda, lê e
   insere pesagens/consumos, mas **não edita nem exclui** pesagens/consumos já
   lançados (só o consultor pode). `saidas_lote` segue a mesma regra restrita
-  de `pesagens_lote`: cliente insere e vê, só o consultor exclui.
+  de `pesagens_lote`: cliente insere e vê, só o consultor exclui. Tudo isso
+  vale só pra `papel = 'editor'` — `papel = 'leitor'` só tem as políticas de
+  `SELECT` (ver item 34).
 
 ## O que foi feito nesta sessão (ordem cronológica)
 
@@ -387,6 +390,28 @@ adicionada nesta sessão para atender a Belmont).
     projetou 09/09/2026 corretamente) e um lote finalizado (rendimento
     54.2% aparecendo no detalhe); confirmado que "+ Saída" some no lote
     já finalizado.
+34. **Papel editor/leitor por pessoa da fazenda**: até então, toda pessoa
+    vinculada via `clientes_usuarios` tinha acesso de edição completo — não
+    dava pra convidar alguém só pra acompanhar sem poder mexer em nada.
+    Nova coluna `clientes_usuarios.papel` (`editor`/`leitor`, default
+    `editor` — ninguém que já tinha acesso perdeu permissão). Todas as
+    políticas de RLS que davam INSERT/UPDATE/DELETE pro cliente (12 no
+    total, em `lotes_confinamento`, `pesagens_lote`, `consumos_lote`,
+    `saidas_lote`, `leituras_cocho`, `currais`, `curral_ocupacoes`) agora
+    exigem `papel = 'editor'` — `leitor` só tem as políticas de `SELECT`
+    (que não mudaram). Na tela do cliente (`ClientesTab.jsx`, seção
+    "Pessoas com acesso"), cada pessoa tem um `<select>` Editor/Leitor
+    (`atualizarAcessoCliente` em `useDadosConfinamento.js`). No portal
+    (`app/portal/page.js`), o próprio login busca o `papel` do vínculo e,
+    se for `leitor`, **não passa nenhum handler de escrita** pro
+    `ConfinamentoTab` (`onAdicionar`, `onAtualizar`, `onAdicionarPesagem`,
+    etc. viram `undefined`) — como esses botões só aparecem quando o
+    handler existe, o leitor nunca vê "+ Novo lote"/"+ Pesagem"/"+
+    Consumo"/etc, sem precisar duplicar lógica de UI; a RLS é quem
+    garante de verdade, a UI só evita ele clicar em algo que ia falhar.
+    Mostra "Portal do cliente · Somente leitura" no topo quando aplicável.
+    Testado com dois usuários fictícios (editor/leitor) na tela de acesso,
+    trocando o papel pelo select e confirmando que persiste.
 
 ## Pendências / coisas para prestar atenção
 

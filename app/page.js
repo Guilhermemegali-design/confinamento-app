@@ -176,6 +176,10 @@ export default function Home() {
             await dados.excluirAcessoCliente(id);
             mostrarToast("Acesso removido");
           }}
+          onUpdateAcessoCliente={async (id, dadosAcesso) => {
+            await dados.atualizarAcessoCliente(id, dadosAcesso);
+            mostrarToast("Permissão atualizada");
+          }}
         />
       </div>
 
