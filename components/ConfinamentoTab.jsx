@@ -7,7 +7,7 @@ import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import {
   calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo,
-  calcularResumoSaidas, calcularCabecasNaData,
+  calcularResumoSaidas, calcularCabecasNaData, calcularFechamentoCusto,
   NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, obterConsumoReferenciaAntesDe,
   ajustePercentualDaNota, calcularHistoricoEsperadoRealizado, montarTabelaConsumoEsperado,
 } from "@/lib/confinamento";
@@ -630,6 +630,8 @@ function LoteDetalhe({
         />
         <Field label="Data de entrada" value={formatDataBR(lote.data_entrada)} />
         <Field label="Peso de entrada" value={`${lote.peso_entrada} kg`} />
+        {lote.rendimento_entrada != null && <Field label="Rendimento de entrada" value={`${lote.rendimento_entrada}%`} />}
+        {lote.preco_arroba_entrada != null && <Field label="Preço da arroba na entrada" value={formatBRL(lote.preco_arroba_entrada)} />}
         {lote.gmd_esperado != null && <Field label="GMD esperado" value={`${lote.gmd_esperado} kg/dia`} />}
         {lote.peso_esperado_abate != null && <Field label="Peso esperado de abate" value={`${lote.peso_esperado_abate} kg`} />}
         {lote.custo_kg_mn_adaptacao != null && (
@@ -662,7 +664,7 @@ function LoteDetalhe({
         ) : (
           <>
             <Field label="Data de saída" value={formatDataBR(lote.data_saida)} />
-            <Field label="Peso de saída vivo" value={`${lote.peso_saida_vivo} kg`} />
+            {lote.peso_saida_vivo != null && <Field label="Peso de saída vivo" value={`${lote.peso_saida_vivo} kg`} />}
             <Field
               label="GMD entrada-saída"
               value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(2)} kg/dia` : "—"}
@@ -670,10 +672,16 @@ function LoteDetalhe({
             {lote.rendimento_carcaca != null && (
               <Field label="Rendimento de carcaça" value={`${lote.rendimento_carcaca}%`} />
             )}
+            {lote.preco_venda_arroba != null && <Field label="Preço de venda da arroba" value={formatBRL(lote.preco_venda_arroba)} />}
+            {lote.custo_operacional != null && <Field label="Custo operacional" value={formatBRL(lote.custo_operacional)} />}
           </>
         )}
         {lote.observacoes && <Field label="Observações" value={lote.observacoes} multiline />}
       </div>
+
+      {indicadores.status === "Finalizado" && (
+        <FechamentoCustoCard lote={lote} indicadores={indicadores} saidas={saidas} />
+      )}
 
       {(onNovaSaida || saidasOrdenadas.length > 0) && (
         <>
@@ -944,6 +952,34 @@ function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45", tendenc
   );
 }
 
+function FechamentoCustoCard({ lote, indicadores, saidas }) {
+  const f = calcularFechamentoCusto(lote, indicadores, saidas);
+  const semDados =
+    f.valorCompraTotal == null && f.custoAlimentarTotal == null && f.receitaTotal == null && f.custoOperacionalTotal == null;
+  if (semDados) return null;
+
+  return (
+    <>
+      <SectionTitle>Fechamento de custo</SectionTitle>
+      <div style={styles.card}>
+        {f.valorCompraTotal != null && <Field label="Valor de compra (entrada)" value={formatBRL(f.valorCompraTotal)} />}
+        {f.custoAlimentarTotal != null && <Field label="Custo de alimentação" value={formatBRL(f.custoAlimentarTotal)} />}
+        {f.custoOperacionalTotal != null && <Field label="Custo operacional" value={formatBRL(f.custoOperacionalTotal)} />}
+        {f.custoTotalGeral != null && <Field label="Custo total" value={formatBRL(f.custoTotalGeral)} />}
+        {f.receitaTotal != null && <Field label="Receita de venda" value={formatBRL(f.receitaTotal)} />}
+        {f.resultadoTotal != null && (
+          <Field
+            label="Resultado"
+            value={`${formatBRL(f.resultadoTotal)}${f.resultadoPorCabeca != null ? ` (${formatBRL(f.resultadoPorCabeca)}/cab.)` : ""}`}
+            highlight
+          />
+        )}
+        {f.resultadoPorArroba != null && <Field label="Resultado por arroba produzida" value={formatBRL(f.resultadoPorArroba)} />}
+      </div>
+    </>
+  );
+}
+
 function FormLote({ lote, onCancel, onSave, onDelete }) {
   const editando = Boolean(lote);
   const [nome, setNome] = useState(lote?.nome || "");
@@ -952,6 +988,8 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
   const [pesoEntrada, setPesoEntrada] = useState(lote?.peso_entrada != null ? String(lote.peso_entrada) : "");
   const [gmdEsperado, setGmdEsperado] = useState(lote?.gmd_esperado != null ? String(lote.gmd_esperado) : "");
   const [pesoEsperadoAbate, setPesoEsperadoAbate] = useState(lote?.peso_esperado_abate != null ? String(lote.peso_esperado_abate) : "");
+  const [precoArrobaEntrada, setPrecoArrobaEntrada] = useState(lote?.preco_arroba_entrada != null ? String(lote.preco_arroba_entrada) : "");
+  const [rendimentoEntrada, setRendimentoEntrada] = useState(lote?.rendimento_entrada != null ? String(lote.rendimento_entrada) : "");
   const [custoAdaptacao, setCustoAdaptacao] = useState(lote?.custo_kg_mn_adaptacao != null ? String(lote.custo_kg_mn_adaptacao) : "");
   const [custoRecria, setCustoRecria] = useState(lote?.custo_kg_mn_recria != null ? String(lote.custo_kg_mn_recria) : "");
   const [custoCrescimento, setCustoCrescimento] = useState(lote?.custo_kg_mn_crescimento != null ? String(lote.custo_kg_mn_crescimento) : "");
@@ -959,6 +997,8 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
   const [dataSaida, setDataSaida] = useState(lote?.data_saida || "");
   const [pesoSaidaVivo, setPesoSaidaVivo] = useState(lote?.peso_saida_vivo != null ? String(lote.peso_saida_vivo) : "");
   const [rendimentoCarcaca, setRendimentoCarcaca] = useState(lote?.rendimento_carcaca != null ? String(lote.rendimento_carcaca) : "");
+  const [precoVendaArroba, setPrecoVendaArroba] = useState(lote?.preco_venda_arroba != null ? String(lote.preco_venda_arroba) : "");
+  const [custoOperacional, setCustoOperacional] = useState(lote?.custo_operacional != null ? String(lote.custo_operacional) : "");
   const [observacoes, setObservacoes] = useState(lote?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
 
@@ -974,6 +1014,8 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
         peso_entrada: Number(pesoEntrada),
         gmd_esperado: gmdEsperado !== "" ? Number(gmdEsperado) : null,
         peso_esperado_abate: pesoEsperadoAbate !== "" ? Number(pesoEsperadoAbate) : null,
+        preco_arroba_entrada: precoArrobaEntrada !== "" ? Number(precoArrobaEntrada) : null,
+        rendimento_entrada: rendimentoEntrada !== "" ? Number(rendimentoEntrada) : null,
         custo_kg_mn_adaptacao: custoAdaptacao !== "" ? Number(custoAdaptacao) : null,
         custo_kg_mn_recria: custoRecria !== "" ? Number(custoRecria) : null,
         custo_kg_mn_crescimento: custoCrescimento !== "" ? Number(custoCrescimento) : null,
@@ -981,6 +1023,8 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
         data_saida: dataSaida || null,
         peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
         rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
+        preco_venda_arroba: precoVendaArroba !== "" ? Number(precoVendaArroba) : null,
+        custo_operacional: custoOperacional !== "" ? Number(custoOperacional) : null,
         observacoes: observacoes || null,
       });
     } finally {
@@ -1003,6 +1047,20 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
           value={pesoEsperadoAbate}
           onChange={setPesoEsperadoAbate}
           placeholder="Ex: 550"
+        />
+        <InputField
+          label="Preço da arroba na entrada (R$/@)"
+          type="number"
+          value={precoArrobaEntrada}
+          onChange={setPrecoArrobaEntrada}
+          placeholder="Ex: 280"
+        />
+        <InputField
+          label="Rendimento de entrada (%)"
+          type="number"
+          value={rendimentoEntrada}
+          onChange={setRendimentoEntrada}
+          placeholder="Ex: 50"
         />
       </div>
 
@@ -1027,6 +1085,20 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
           value={rendimentoCarcaca}
           onChange={setRendimentoCarcaca}
           placeholder="Ex: 54.5"
+        />
+        <InputField
+          label="Preço de venda da arroba (R$/@)"
+          type="number"
+          value={precoVendaArroba}
+          onChange={setPrecoVendaArroba}
+          placeholder="Ex: 310"
+        />
+        <InputField
+          label="Custo operacional (R$)"
+          type="number"
+          value={custoOperacional}
+          onChange={setCustoOperacional}
+          placeholder="Frete, comissão, sanidade..."
         />
       </div>
 
@@ -1084,6 +1156,8 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
   const [numCabecas, setNumCabecas] = useState(cabecasRestantes != null ? String(cabecasRestantes) : "");
   const [pesoSaidaVivo, setPesoSaidaVivo] = useState("");
   const [rendimentoCarcaca, setRendimentoCarcaca] = useState("");
+  const [precoVendaArroba, setPrecoVendaArroba] = useState("");
+  const [custoOperacional, setCustoOperacional] = useState("");
   const [observacoes, setObservacoes] = useState("");
   const [salvando, setSalvando] = useState(false);
   const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= cabecasRestantes;
@@ -1097,6 +1171,8 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
         num_cabecas: Number(numCabecas),
         peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
         rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
+        preco_venda_arroba: precoVendaArroba !== "" ? Number(precoVendaArroba) : null,
+        custo_operacional: custoOperacional !== "" ? Number(custoOperacional) : null,
         observacoes: observacoes || null,
       });
     } finally {
@@ -1128,6 +1204,20 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
           value={rendimentoCarcaca}
           onChange={setRendimentoCarcaca}
           placeholder="Ex: 54.5"
+        />
+        <InputField
+          label="Preço de venda da arroba (R$/@)"
+          type="number"
+          value={precoVendaArroba}
+          onChange={setPrecoVendaArroba}
+          placeholder="Ex: 310"
+        />
+        <InputField
+          label="Custo operacional (R$)"
+          type="number"
+          value={custoOperacional}
+          onChange={setCustoOperacional}
+          placeholder="Frete, comissão, sanidade..."
         />
       </div>
       <div style={styles.card}>

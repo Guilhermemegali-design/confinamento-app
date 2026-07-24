@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-22 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4 + rendimento de carcaça/peso e data de abate esperados + papel editor/leitor por pessoa)
+Última atualização: 2026-07-23 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4 + rendimento de carcaça/peso e data de abate esperados + papel editor/leitor por pessoa + preço da arroba/custo operacional/fechamento de custo)
 
 ## O que é
 
@@ -53,14 +53,19 @@ Produção: **https://confinamento-nine.vercel.app**
   cliente. O código de convite é o mesmo pra todo mundo da fazenda. Tem
   `papel` (`editor`/`leitor`, default `editor`) — ver item 34 abaixo.
 - `lotes_confinamento` — um lote/curral. Tem `gmd_esperado`, custo do kg de
-  MN por fase (`custo_kg_mn_adaptacao/recria/crescimento/terminacao`), e
-  `ordem` (posição na ordenação manual da lista de ativos).
+  MN por fase (`custo_kg_mn_adaptacao/recria/crescimento/terminacao`),
+  `ordem` (posição na ordenação manual da lista de ativos),
+  `peso_esperado_abate`/`preco_arroba_entrada`/`rendimento_entrada`
+  (entrada) e `rendimento_carcaca`/`preco_venda_arroba`/`custo_operacional`
+  (saída, usados quando o lote é finalizado de uma vez só — ver item 35).
 - `pesagens_lote` — histórico de pesagens (peso ao longo do tempo).
 - `consumos_lote` — histórico de consumo diário. Cada registro "trava" a
   `dieta_fase` e o `custo_kg_mn` no momento do lançamento (copiado do
   cliente/lote), pra não mudar retroativamente se o preço mudar depois.
 - `saidas_lote` — histórico de saídas parciais (venda/abate de parte do
-  lote aos poucos, até esvaziar). Ver item 29 abaixo.
+  lote aos poucos, até esvaziar). Ver item 29 abaixo. Tem
+  `rendimento_carcaca`/`preco_venda_arroba`/`custo_operacional` por saída
+  (ver item 35).
 
 Fases de dieta: `adaptacao`, `recria`, `crescimento`, `terminacao` (recria foi
 adicionada nesta sessão para atender a Belmont).
@@ -412,6 +417,43 @@ adicionada nesta sessão para atender a Belmont).
     Mostra "Portal do cliente · Somente leitura" no topo quando aplicável.
     Testado com dois usuários fictícios (editor/leitor) na tela de acesso,
     trocando o papel pelo select e confirmando que persiste.
+35. **Preço da arroba (entrada/saída), rendimento de entrada e custo
+    operacional + fechamento de custo**: `lotes_confinamento` ganha
+    `preco_arroba_entrada` (R$/@, preenchido perto de "Peso esperado de
+    abate" no cadastro) e `rendimento_entrada` (%) — junto com
+    `peso_entrada`, dá o valor de compra do lote em arrobas. Na seção
+    "Saída" do `FormLote` (finalização de uma vez só) e no `FormSaida`
+    (saída fracionada), dois campos novos: `preco_venda_arroba` (R$/@) e
+    `custo_operacional` (R$, valor total pra aquela saída — frete,
+    comissão, sanidade etc; **não** é por cabeça). Ambas as colunas foram
+    replicadas em `lotes_confinamento` (fluxo de uma vez só) e `saidas_lote`
+    (fluxo fracionado), igual já era feito com `rendimento_carcaca`. Nova
+    função `calcularFechamentoCusto(lote, indicadores, saidas)` em
+    `lib/confinamento.js`: converte peso vivo em arrobas usando o
+    rendimento de cada ponta (1 @ = 15 kg de carcaça) e cruza valor de
+    compra (entrada) + custo de alimentação acumulado
+    (`indicadores.custoAcumuladoAnimal × num_cabecas`) + custo operacional
+    somado de todas as saídas contra a receita de venda somada de todas as
+    saídas, retornando custo total, receita total, resultado (R$ e R$/cab.)
+    e resultado por arroba produzida. Se o lote foi finalizado de uma vez
+    só (nenhuma linha em `saidas_lote`), a função monta uma "saída virtual"
+    a partir dos campos do próprio lote — não precisa duplicar a conta.
+    Card "Fechamento de custo" aparece no detalhe do lote **só quando
+    `indicadores.status === "Finalizado"`** (ou seja, `data_saida`
+    preenchida) — igual ao resto do app, uma saída fracionada que zera as
+    cabeças não muda esse status sozinha, o consultor ainda precisa editar
+    o lote e preencher "Data de saída" pra fechar de vez (é o mesmo
+    comportamento já existente do botão "+ Saída", ver item 33). Cada
+    campo do card só aparece se os dados necessários pra calculá-lo
+    estiverem preenchidos (não força R$ 0,00 quando falta informação).
+    Também corrigido, de passagem, um bug pré-existente: "Peso de saída
+    vivo" mostrava `undefined kg` no detalhe de um lote finalizado via
+    saída fracionada (sem esse campo preenchido direto no lote) — faltava
+    o mesmo guard `!= null` que os outros campos da seção já tinham.
+    Testado com dois lotes fictícios (saída única e saída fracionada em
+    duas partes com preços/rendimentos diferentes) — os totais de compra,
+    alimentação, operacional, receita e resultado bateram na mão em ambos
+    os casos.
 
 ## Pendências / coisas para prestar atenção
 
