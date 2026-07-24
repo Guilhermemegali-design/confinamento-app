@@ -33,3 +33,105 @@ input, textarea, select {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* Layout amplo para notebook/desktop. O mobile continua usando os estilos
+   inline originais; estas regras só entram quando há espaço de verdade. */
+@media (min-width: 900px) {
+  .app-shell {
+    max-width: 1440px !important;
+    min-height: 100vh;
+    background: #F7F6F3;
+  }
+
+  .app-content {
+    padding: 24px 30px 48px !important;
+    overflow: visible !important;
+  }
+
+  .confinamento-screen > div:first-child {
+    max-width: 1180px;
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+
+  .desktop-workspace {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr);
+    align-items: start;
+    gap: 22px;
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+
+  .main-navigation {
+    grid-template-columns: 1fr !important;
+    position: sticky !important;
+    top: 82px !important;
+    padding: 8px !important;
+    gap: 4px !important;
+    margin: 0 !important;
+  }
+
+  .main-navigation-button {
+    flex-direction: row !important;
+    justify-content: flex-start !important;
+    padding: 11px 12px !important;
+    gap: 10px !important;
+    font-size: 13px !important;
+  }
+
+  .desktop-main-content {
+    min-width: 0;
+  }
+
+  .desktop-summary-grid {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px !important;
+  }
+
+  .desktop-summary-grid > * {
+    min-width: 0 !important;
+  }
+
+  .desktop-lotes-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+  }
+
+  .desktop-clients-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+  }
+
+  .desktop-client-card {
+    min-width: 0;
+    height: 100%;
+    margin-bottom: 0 !important;
+  }
+
+  .desktop-lote-card {
+    min-width: 0;
+    height: 100%;
+    margin-bottom: 0 !important;
+  }
+
+  .desktop-graphs-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 4px 18px;
+  }
+
+  .desktop-map {
+    height: 620px !important;
+  }
+}
+
+@media (min-width: 1180px) {
+  .desktop-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}

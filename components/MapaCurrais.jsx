@@ -480,7 +480,7 @@ export default function MapaCurrais({ cliente, lotes, currais, curralOcupacoes =
       )}
 
       <div style={{ borderRadius: 14, overflow: "hidden", border: "1px solid #ECEAE3" }}>
-        <div ref={mapaRef} style={{ width: "100%", height: 420, background: "#E4EFE9" }} />
+        <div ref={mapaRef} className="desktop-map" style={{ width: "100%", height: 420, background: "#E4EFE9" }} />
       </div>
 
       {novoLocal && (

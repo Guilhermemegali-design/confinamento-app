@@ -58,7 +58,7 @@ export default function Home() {
   }
 
   return (
-    <div style={styles.app}>
+    <div style={styles.app} className="app-shell">
       <div style={styles.topbar}>
         <div style={styles.topbarRow}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -74,7 +74,7 @@ export default function Home() {
         </div>
       </div>
 
-      <div style={styles.content}>
+      <div style={styles.content} className="app-content">
         <ClientesTab
           clientes={dados.clientes}
           lotes={dados.lotes}

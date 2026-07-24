@@ -381,7 +381,7 @@ export default function ConfinamentoTab({
   }
 
   return (
-    <div>
+    <div className="confinamento-screen">
       <div style={{ marginBottom: 14 }}>
         <div style={styles.backHeaderRow}>
           {onBack ? <BackHeader title={cliente.nome} onBack={onBack} semMargem /> : <h1 style={styles.h1}>{cliente.nome}</h1>}
@@ -417,35 +417,37 @@ export default function ConfinamentoTab({
         </div>
       </div>
 
-      <div style={styles.mainNav} aria-label="Áreas do confinamento">
-        <NavArea icon={LayoutDashboard} label="Resumo" active={aba === "painel"} onClick={() => setAba("painel")} />
-        <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos" || aba === "lotes-finalizados"} onClick={() => setAba("lotes-ativos")} />
-        <NavArea icon={ClipboardList} label="Rotina" active={aba === "cocho" || aba === "esperado"} onClick={() => setAba(onRegistrarLeituraCocho ? "cocho" : "esperado")} />
-        <NavArea icon={BarChart3} label="Análises" active={aba === "graficos"} onClick={() => setAba("graficos")} />
-        <NavArea icon={Map} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
-      </div>
+      <div className="desktop-workspace">
+        <nav style={styles.mainNav} className="main-navigation" aria-label="Áreas do confinamento">
+          <NavArea icon={LayoutDashboard} label="Resumo" active={aba === "painel"} onClick={() => setAba("painel")} />
+          <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos" || aba === "lotes-finalizados"} onClick={() => setAba("lotes-ativos")} />
+          <NavArea icon={ClipboardList} label="Rotina" active={aba === "cocho" || aba === "esperado"} onClick={() => setAba(onRegistrarLeituraCocho ? "cocho" : "esperado")} />
+          <NavArea icon={BarChart3} label="Análises" active={aba === "graficos"} onClick={() => setAba("graficos")} />
+          <NavArea icon={Map} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
+        </nav>
 
-      {(aba === "lotes-ativos" || aba === "lotes-finalizados") && (
-        <SubNav
-          options={[
-            { value: "lotes-ativos", label: `Ativos (${ativos.length})` },
-            { value: "lotes-finalizados", label: `Finalizados (${finalizados.length})` },
-          ]}
-          value={aba}
-          onChange={setAba}
-        />
-      )}
+        <main className="desktop-main-content">
+          {(aba === "lotes-ativos" || aba === "lotes-finalizados") && (
+            <SubNav
+              options={[
+                { value: "lotes-ativos", label: `Ativos (${ativos.length})` },
+                { value: "lotes-finalizados", label: `Finalizados (${finalizados.length})` },
+              ]}
+              value={aba}
+              onChange={setAba}
+            />
+          )}
 
-      {(aba === "cocho" || aba === "esperado") && (
-        <SubNav
-          options={[
-            ...(onRegistrarLeituraCocho ? [{ value: "cocho", label: "Leitura de cocho" }] : []),
-            { value: "esperado", label: "Consumo esperado" },
-          ]}
-          value={aba}
-          onChange={setAba}
-        />
-      )}
+          {(aba === "cocho" || aba === "esperado") && (
+            <SubNav
+              options={[
+                ...(onRegistrarLeituraCocho ? [{ value: "cocho", label: "Leitura de cocho" }] : []),
+                { value: "esperado", label: "Consumo esperado" },
+              ]}
+              value={aba}
+              onChange={setAba}
+            />
+          )}
 
       {aba === "graficos" ? (
         <AbaGraficos lotes={lotes} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} clienteId={cliente?.id} />
@@ -488,6 +490,7 @@ export default function ConfinamentoTab({
             </select>
           </div>
           {ativos.length === 0 && <EmptyHint text="Nenhum lote ativo." />}
+          <div className="desktop-lotes-grid">
           {ativos.map((item, index) => {
             const {
               lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje,
@@ -497,7 +500,7 @@ export default function ConfinamentoTab({
             const faixaMSUltimo = faixaConsumoMS(consumoMSPercentualPV);
             const faixaMSMedio = faixaConsumoMS(consumoMSPercentualPVMedio);
             return (
-              <div key={lote.id} style={styles.listItem}>
+              <div key={lote.id} style={styles.listItem} className="desktop-lote-card">
                 {ordenacao === "manual" && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     <button
@@ -570,13 +573,15 @@ export default function ConfinamentoTab({
               </div>
             );
           })}
+          </div>
         </>
       ) : aba === "lotes-finalizados" ? (
         <>
           <SectionTitle>Lotes finalizados</SectionTitle>
           {finalizados.length === 0 && <EmptyHint text="Nenhum lote finalizado ainda." />}
+          <div className="desktop-lotes-grid">
           {finalizados.map(({ lote, diasConfinamento, gmdVivoEntradaSaida, consumoMS }) => (
-            <button key={lote.id} style={styles.listItem} onClick={() => setTela({ modo: "lote", id: lote.id })}>
+            <button key={lote.id} style={styles.listItem} className="desktop-lote-card" onClick={() => setTela({ modo: "lote", id: lote.id })}>
               <div style={{ ...styles.avatar, background: "#F1EFE8", color: "#5C5C58" }}>{lote.nome.charAt(0)}</div>
               <div style={{ flex: 1, textAlign: "left" }}>
                 <div style={styles.listItemTitle}>{lote.nome}</div>
@@ -599,11 +604,12 @@ export default function ConfinamentoTab({
               </div>
             </button>
           ))}
+          </div>
         </>
       ) : (
         <>
           <SectionTitle>Painel</SectionTitle>
-          <div style={styles.gestaoGrid}>
+          <div style={styles.gestaoGrid} className="desktop-summary-grid">
             <PainelCard label="Total de lotes" valor={painel.totalLotes} />
             <PainelCard label="Lotes ativos" valor={painel.lotesAtivos} />
             <PainelCard label="Lotes finalizados" valor={painel.lotesFinalizados} />
@@ -653,13 +659,15 @@ export default function ConfinamentoTab({
           </div>
         </>
       )}
+        </main>
+      </div>
     </div>
   );
 }
 
 function NavArea({ icon: Icon, label, active, onClick }) {
   return (
-    <button onClick={onClick} style={{ ...styles.mainNavBtn, ...(active ? styles.mainNavBtnActive : {}) }}>
+    <button onClick={onClick} className="main-navigation-button" style={{ ...styles.mainNavBtn, ...(active ? styles.mainNavBtnActive : {}) }}>
       <Icon size={18} strokeWidth={active ? 2.4 : 1.9} />
       <span>{label}</span>
     </button>
@@ -2195,6 +2203,7 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = 
           <Download size={14} /> {exportando ? "Gerando PDF..." : "Exportar PDF"}
         </button>
       </div>
+      <div className="desktop-graphs-grid">
       {comDados.map(({ lote, pontosPV, svgId }) => (
         <div key={lote.id} style={{ marginBottom: 26 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5, margin: "0 4px 10px" }}>{lote.nome}</div>
@@ -2215,6 +2224,7 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = 
           )}
         </div>
       ))}
+      </div>
     </div>
   );
 }

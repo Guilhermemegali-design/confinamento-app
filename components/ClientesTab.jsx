@@ -235,8 +235,9 @@ export default function ClientesTab({
           {ordenados.length === 0 && (
             <EmptyHint text={clientes.length === 0 ? "Cadastre seu primeiro cliente para começar." : "Nenhum cliente encontrado."} />
           )}
+          <div className="desktop-clients-grid">
           {ordenados.map((c) => (
-            <div key={c.id} style={styles.clientListRow}>
+            <div key={c.id} style={styles.clientListRow} className="desktop-client-card">
               <button style={styles.clientMainBtn} onClick={() => setView({ screen: "confinamento", id: c.id })}>
                 <div style={styles.avatar}>{c.nome.charAt(0)}</div>
                 <div style={{ flex: 1, textAlign: "left" }}>
@@ -254,6 +255,7 @@ export default function ClientesTab({
               </button>
             </div>
           ))}
+          </div>
         </>
       )}
     </div>
@@ -302,8 +304,9 @@ function PainelGeral({ clientes, lotes, saidas, setView }) {
           {ativos.length} lote(s) ativo(s)<br />{linhas.length} cliente(s)
         </div>
       </div>
+      <div className="desktop-clients-grid">
       {linhas.map(({ cliente, lotes: numLotes, cabecas }) => (
-        <button key={cliente.id} style={styles.listItem} onClick={() => setView({ screen: "confinamento", id: cliente.id })}>
+        <button key={cliente.id} style={styles.listItem} className="desktop-client-card" onClick={() => setView({ screen: "confinamento", id: cliente.id })}>
           <div style={styles.avatar}>{cliente.nome.charAt(0)}</div>
           <div style={{ flex: 1, textAlign: "left" }}>
             <div style={styles.listItemTitle}>{cliente.nome}</div>
@@ -312,6 +315,7 @@ function PainelGeral({ clientes, lotes, saidas, setView }) {
           <div style={{ fontWeight: 700, color: "#1F4D45", fontSize: 15 }}>{cabecas.toLocaleString("pt-BR")}</div>
         </button>
       ))}
+      </div>
     </>
   );
 }

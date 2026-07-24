@@ -396,7 +396,7 @@ function PainelCliente({ cliente, somenteLeitura }) {
   }
 
   return (
-    <div style={styles.app}>
+    <div style={styles.app} className="app-shell">
       <div style={styles.topbar}>
         <div style={styles.topbarRow}>
           <div>
@@ -409,7 +409,7 @@ function PainelCliente({ cliente, somenteLeitura }) {
         </div>
       </div>
 
-      <div style={styles.content}>
+      <div style={styles.content} className="app-content">
         <ConfinamentoTab
           cliente={cliente}
           lotes={lotes}
