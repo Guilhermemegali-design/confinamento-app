@@ -482,7 +482,7 @@ export default function ConfinamentoTab({
           </div>
           {ativos.length === 0 && <EmptyHint text="Nenhum lote ativo." />}
           {ativos.map((item, index) => {
-            const { lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje, custoAcumuladoAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate } = item;
+            const { lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje, consumoMS, custoAcumuladoAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate } = item;
             return (
               <div key={lote.id} style={styles.listItem}>
                 {ordenacao === "manual" && (
@@ -513,6 +513,11 @@ export default function ConfinamentoTab({
                     <div style={styles.listItemSub}>
                       {cabecasSaidas > 0 ? `${cabecasRestantes} de ${lote.num_cabecas} cab.` : `${lote.num_cabecas} cab.`} · entrada {formatDataBR(lote.data_entrada)} · {diasConfinamento}d
                     </div>
+                    {consumoMS != null && (
+                      <div style={{ fontSize: 11.5, color: "#1F4D45", marginTop: 2, fontWeight: 600 }}>
+                        MS {consumoMS.toFixed(2)} kg/cab/dia
+                      </div>
+                    )}
                     {custoAcumuladoAnimal != null && (
                       <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
                         Custo acum. {formatBRL(custoAcumuladoAnimal)}/animal
@@ -541,7 +546,7 @@ export default function ConfinamentoTab({
         <>
           <SectionTitle>Lotes finalizados</SectionTitle>
           {finalizados.length === 0 && <EmptyHint text="Nenhum lote finalizado ainda." />}
-          {finalizados.map(({ lote, diasConfinamento, gmdVivoEntradaSaida }) => (
+          {finalizados.map(({ lote, diasConfinamento, gmdVivoEntradaSaida, consumoMS }) => (
             <button key={lote.id} style={styles.listItem} onClick={() => setTela({ modo: "lote", id: lote.id })}>
               <div style={{ ...styles.avatar, background: "#F1EFE8", color: "#5C5C58" }}>{lote.nome.charAt(0)}</div>
               <div style={{ flex: 1, textAlign: "left" }}>
@@ -557,6 +562,11 @@ export default function ConfinamentoTab({
                 <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
                   {gmdVivoEntradaSaida != null ? `GMD ${gmdVivoEntradaSaida.toFixed(2)}` : "—"}
                 </div>
+                {consumoMS != null && (
+                  <div style={{ fontSize: 11.5, color: "#1F4D45", marginTop: 2 }}>
+                    MS {consumoMS.toFixed(2)} kg/cab/dia
+                  </div>
+                )}
               </div>
             </button>
           ))}
@@ -580,6 +590,10 @@ export default function ConfinamentoTab({
             <PainelCard
               label="Peso médio geral"
               valor={painel.pesoMedioGeral != null ? `${painel.pesoMedioGeral.toFixed(1)} kg` : "—"}
+            />
+            <PainelCard
+              label="Consumo médio de MS (ativos)"
+              valor={painel.consumoMSMedioAtivos != null ? `${painel.consumoMSMedioAtivos.toFixed(2)} kg/cab/dia` : "—"}
             />
             <PainelCard
               label="Custo acumulado (ativos)"
