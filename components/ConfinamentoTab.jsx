@@ -2,7 +2,10 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import { Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload } from "lucide-react";
+import {
+  Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
+  LayoutDashboard, Beef, ClipboardList, BarChart3, Map, Settings2,
+} from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import {
@@ -58,6 +61,21 @@ function usarOrdenacaoPersistida(clienteId) {
   return [ordenacao, setOrdenacao];
 }
 
+function usarAbaPersistida(clienteId) {
+  const chave = `confinamento_aba_${clienteId || "geral"}`;
+  const abasValidas = ["painel", "lotes-ativos", "lotes-finalizados", "cocho", "esperado", "graficos", "mapa"];
+  const [aba, setAbaState] = useState(() => {
+    if (typeof window === "undefined") return "painel";
+    const salva = window.localStorage.getItem(chave);
+    return abasValidas.includes(salva) ? salva : "painel";
+  });
+  function setAba(valor) {
+    setAbaState(valor);
+    if (typeof window !== "undefined") window.localStorage.setItem(chave, valor);
+  }
+  return [aba, setAba];
+}
+
 function compararLotes(ordenacao) {
   return (a, b) => {
     if (ordenacao === "manual") {
@@ -107,10 +125,10 @@ export default function ConfinamentoTab({
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onMoverLoteParaCurral, onAtualizarCliente,
-  onBack,
+  onBack, onGerenciarCliente,
 }) {
   const [tela, setTela] = useState({ modo: "lista" });
-  const [aba, setAba] = useState("painel");
+  const [aba, setAba] = usarAbaPersistida(cliente?.id);
   const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(cliente?.id);
   const [movendo, setMovendo] = useState(false);
 
@@ -357,76 +375,70 @@ export default function ConfinamentoTab({
 
   return (
     <div>
-      <div style={styles.backHeaderRow}>
-        {onBack ? <BackHeader title="Confinamento" onBack={onBack} semMargem /> : <h1 style={styles.h1}>Confinamento</h1>}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {onAdicionarConsumo && (
-            <button onClick={() => setTela({ modo: "lancar-consumo" })} style={styles.editLinkBtn}>
-              + Consumo
-            </button>
-          )}
-          {onImportarConsumos && (
-            <button onClick={() => setTela({ modo: "importar-consumo" })} style={styles.editLinkBtn}>
-              Importar planilha
-            </button>
-          )}
-          {onAdicionar && (
-            <button onClick={() => setTela({ modo: "novo" })} style={styles.editLinkBtn}>
-              + Novo lote
-            </button>
-          )}
+      <div style={{ marginBottom: 14 }}>
+        <div style={styles.backHeaderRow}>
+          {onBack ? <BackHeader title={cliente.nome} onBack={onBack} semMargem /> : <h1 style={styles.h1}>{cliente.nome}</h1>}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {onGerenciarCliente && (
+              <button onClick={onGerenciarCliente} style={styles.iconActionBtn} title="Cadastro e acessos do cliente" aria-label="Cadastro e acessos do cliente">
+                <Settings2 size={17} />
+              </button>
+            )}
+            {(aba === "cocho" || aba === "esperado") && onAdicionarConsumo && (
+              <button onClick={() => setTela({ modo: "lancar-consumo" })} style={styles.editLinkBtn}>
+                + Consumo
+              </button>
+            )}
+            {(aba === "cocho" || aba === "esperado") && onImportarConsumos && (
+              <button onClick={() => setTela({ modo: "importar-consumo" })} style={styles.secondaryActionBtn}>
+                Importar
+              </button>
+            )}
+            {(aba === "lotes-ativos" || aba === "lotes-finalizados") && onAdicionar && (
+              <button onClick={() => setTela({ modo: "novo" })} style={styles.editLinkBtn}>
+                + Novo lote
+              </button>
+            )}
+          </div>
+        </div>
+        <div style={styles.contextLabel}>
+          {aba === "painel" && "Resumo da operação"}
+          {(aba === "lotes-ativos" || aba === "lotes-finalizados") && "Gestão dos lotes"}
+          {(aba === "cocho" || aba === "esperado") && "Consumo e leitura diária"}
+          {aba === "graficos" && "Indicadores e evolução"}
+          {aba === "mapa" && "Localização dos currais"}
         </div>
       </div>
-      {onBack && (
-        <div style={{ fontSize: 13, color: "#9A9A94", marginTop: -8, marginBottom: 14 }}>{cliente.nome}</div>
+
+      <div style={styles.mainNav} aria-label="Áreas do confinamento">
+        <NavArea icon={LayoutDashboard} label="Resumo" active={aba === "painel"} onClick={() => setAba("painel")} />
+        <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos" || aba === "lotes-finalizados"} onClick={() => setAba("lotes-ativos")} />
+        <NavArea icon={ClipboardList} label="Rotina" active={aba === "cocho" || aba === "esperado"} onClick={() => setAba(onRegistrarLeituraCocho ? "cocho" : "esperado")} />
+        <NavArea icon={BarChart3} label="Análises" active={aba === "graficos"} onClick={() => setAba("graficos")} />
+        <NavArea icon={Map} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
+      </div>
+
+      {(aba === "lotes-ativos" || aba === "lotes-finalizados") && (
+        <SubNav
+          options={[
+            { value: "lotes-ativos", label: `Ativos (${ativos.length})` },
+            { value: "lotes-finalizados", label: `Finalizados (${finalizados.length})` },
+          ]}
+          value={aba}
+          onChange={setAba}
+        />
       )}
 
-      <div style={{ ...styles.viewToggle, flexWrap: "wrap" }}>
-        <button
-          onClick={() => setAba("painel")}
-          style={{ ...styles.viewToggleBtn, ...(aba === "painel" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
-        >
-          Painel
-        </button>
-        <button
-          onClick={() => setAba("lotes-ativos")}
-          style={{ ...styles.viewToggleBtn, ...(aba === "lotes-ativos" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
-        >
-          Lotes ativos
-        </button>
-        <button
-          onClick={() => setAba("lotes-finalizados")}
-          style={{ ...styles.viewToggleBtn, ...(aba === "lotes-finalizados" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
-        >
-          Lotes finalizados
-        </button>
-        <button
-          onClick={() => setAba("graficos")}
-          style={{ ...styles.viewToggleBtn, ...(aba === "graficos" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
-        >
-          Gráficos
-        </button>
-        {onRegistrarLeituraCocho && (
-          <button
-            onClick={() => setAba("cocho")}
-            style={{ ...styles.viewToggleBtn, ...(aba === "cocho" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
-          >
-            Leitura de cocho
-          </button>
-        )}
-        <button
-          onClick={() => setAba("esperado")}
-          style={{ ...styles.viewToggleBtn, ...(aba === "esperado" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
-        >
-          Consumo esperado
-        </button>
-        <button
-          onClick={() => setAba("mapa")}
-          style={{ ...styles.viewToggleBtn, ...(aba === "mapa" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
-        >
-          Mapa
-        </button>
-      </div>
+      {(aba === "cocho" || aba === "esperado") && (
+        <SubNav
+          options={[
+            ...(onRegistrarLeituraCocho ? [{ value: "cocho", label: "Leitura de cocho" }] : []),
+            { value: "esperado", label: "Consumo esperado" },
+          ]}
+          value={aba}
+          onChange={setAba}
+        />
+      )}
 
       {aba === "graficos" ? (
         <AbaGraficos lotes={lotes} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} clienteId={cliente?.id} />
@@ -588,6 +600,31 @@ export default function ConfinamentoTab({
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function NavArea({ icon: Icon, label, active, onClick }) {
+  return (
+    <button onClick={onClick} style={{ ...styles.mainNavBtn, ...(active ? styles.mainNavBtnActive : {}) }}>
+      <Icon size={18} strokeWidth={active ? 2.4 : 1.9} />
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function SubNav({ options, value, onChange }) {
+  return (
+    <div style={styles.subNav}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          style={{ ...styles.subNavBtn, ...(value === option.value ? styles.subNavBtnActive : {}) }}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }

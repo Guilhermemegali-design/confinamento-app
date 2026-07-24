@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Trash2, Search, Settings2 } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryButton } from "./UI";
 import ConfinamentoTab from "./ConfinamentoTab";
@@ -19,6 +19,7 @@ export default function ClientesTab({
   onRemoveAcessoCliente, onUpdateAcessoCliente,
 }) {
   const [abaGeral, setAbaGeral] = useState("clientes");
+  const [buscaCliente, setBuscaCliente] = useState("");
 
   if (view.screen === "confinamento") {
     const cliente = clientes.find((c) => c.id === view.id);
@@ -61,7 +62,8 @@ export default function ClientesTab({
         onImportarCurrais={onImportarCurrais}
         onMoverLoteParaCurral={onMoverLoteParaCurral}
         onAtualizarCliente={onUpdateCliente}
-        onBack={() => setView({ screen: "cliente-detalhe", id: cliente.id })}
+        onBack={() => setView({ screen: "list" })}
+        onGerenciarCliente={() => setView({ screen: "cliente-detalhe", id: cliente.id })}
       />
     );
   }
@@ -192,7 +194,10 @@ export default function ClientesTab({
     );
   }
 
-  const ordenados = [...clientes].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  const termoBusca = buscaCliente.trim().toLocaleLowerCase("pt-BR");
+  const ordenados = [...clientes]
+    .filter((cliente) => !termoBusca || cliente.nome.toLocaleLowerCase("pt-BR").includes(termoBusca))
+    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
 
   return (
     <div>
@@ -216,15 +221,38 @@ export default function ClientesTab({
       ) : (
         <>
           <ListHeader title="Clientes" actionLabel="Novo cliente" onAction={() => setView({ screen: "novo-cliente" })} />
-          {ordenados.length === 0 && <EmptyHint text="Cadastre seu primeiro cliente para começar." />}
+          {clientes.length > 0 && (
+            <label style={styles.searchBox}>
+              <Search size={16} color="#8A8A86" />
+              <input
+                value={buscaCliente}
+                onChange={(e) => setBuscaCliente(e.target.value)}
+                placeholder="Buscar fazenda ou cliente"
+                style={styles.searchInput}
+              />
+            </label>
+          )}
+          {ordenados.length === 0 && (
+            <EmptyHint text={clientes.length === 0 ? "Cadastre seu primeiro cliente para começar." : "Nenhum cliente encontrado."} />
+          )}
           {ordenados.map((c) => (
-            <button key={c.id} style={styles.listItem} onClick={() => setView({ screen: "cliente-detalhe", id: c.id })}>
-              <div style={styles.avatar}>{c.nome.charAt(0)}</div>
-              <div style={{ flex: 1, textAlign: "left" }}>
-                <div style={styles.listItemTitle}>{c.nome}</div>
-                <div style={styles.listItemSub}>{c.contato || "Sem contato informado"}</div>
-              </div>
-            </button>
+            <div key={c.id} style={styles.clientListRow}>
+              <button style={styles.clientMainBtn} onClick={() => setView({ screen: "confinamento", id: c.id })}>
+                <div style={styles.avatar}>{c.nome.charAt(0)}</div>
+                <div style={{ flex: 1, textAlign: "left" }}>
+                  <div style={styles.listItemTitle}>{c.nome}</div>
+                  <div style={styles.listItemSub}>{c.contato || "Abrir confinamento"}</div>
+                </div>
+              </button>
+              <button
+                onClick={() => setView({ screen: "cliente-detalhe", id: c.id })}
+                style={styles.clientSettingsBtn}
+                title="Cadastro e acessos"
+                aria-label={`Cadastro e acessos de ${c.nome}`}
+              >
+                <Settings2 size={17} />
+              </button>
+            </div>
           ))}
         </>
       )}
@@ -275,7 +303,7 @@ function PainelGeral({ clientes, lotes, saidas, setView }) {
         </div>
       </div>
       {linhas.map(({ cliente, lotes: numLotes, cabecas }) => (
-        <button key={cliente.id} style={styles.listItem} onClick={() => setView({ screen: "cliente-detalhe", id: cliente.id })}>
+        <button key={cliente.id} style={styles.listItem} onClick={() => setView({ screen: "confinamento", id: cliente.id })}>
           <div style={styles.avatar}>{cliente.nome.charAt(0)}</div>
           <div style={{ flex: 1, textAlign: "left" }}>
             <div style={styles.listItemTitle}>{cliente.nome}</div>
