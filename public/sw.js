@@ -6,7 +6,7 @@
 // dados — só garante que a interface carregue offline.
 // ============================================================
 
-const CACHE_NAME = "rastro-confinamento-cache-v2";
+const CACHE_NAME = "rastro-confinamento-cache-v3";
 
 const ARQUIVOS_ESSENCIAIS = [
   "/",
@@ -16,6 +16,13 @@ const ARQUIVOS_ESSENCIAIS = [
   "/rastro-icon-192.png",
   "/rastro-icon-512.png",
   "/gmegali-logo.png",
+  // Mantém compatibilidade com instalações antigas, que ainda apontam
+  // para estes nomes mesmo depois da troca de marca.
+  "/icon.jpg",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/apple-touch-icon.png",
+  "/logo.jpg",
 ];
 
 self.addEventListener("install", (event) => {
