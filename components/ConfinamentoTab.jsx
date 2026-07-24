@@ -94,6 +94,13 @@ function compararLotes(ordenacao) {
   };
 }
 
+function faixaConsumoMS(percentual) {
+  if (percentual == null) return null;
+  if (percentual >= 2.4) return { label: "Adequado", cor: "#247A52", fundo: "#E4F2EA" };
+  if (percentual >= 2) return { label: "Atenção", cor: "#8A6500", fundo: "#FFF3CC" };
+  return { label: "Baixo", cor: "#B43B32", fundo: "#FBE4E1" };
+}
+
 function custoKgMnDaFase(lote, fase) {
   if (fase === "adaptacao") return lote.custo_kg_mn_adaptacao;
   if (fase === "recria") return lote.custo_kg_mn_recria;
@@ -482,7 +489,8 @@ export default function ConfinamentoTab({
           </div>
           {ativos.length === 0 && <EmptyHint text="Nenhum lote ativo." />}
           {ativos.map((item, index) => {
-            const { lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje, consumoMS, custoAcumuladoAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate } = item;
+            const { lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje, consumoMS, consumoMSPercentualPV, custoAcumuladoAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate } = item;
+            const faixaMS = faixaConsumoMS(consumoMSPercentualPV);
             return (
               <div key={lote.id} style={styles.listItem}>
                 {ordenacao === "manual" && (
@@ -513,9 +521,15 @@ export default function ConfinamentoTab({
                     <div style={styles.listItemSub}>
                       {cabecasSaidas > 0 ? `${cabecasRestantes} de ${lote.num_cabecas} cab.` : `${lote.num_cabecas} cab.`} · entrada {formatDataBR(lote.data_entrada)} · {diasConfinamento}d
                     </div>
-                    {consumoMS != null && (
-                      <div style={{ fontSize: 11.5, color: "#1F4D45", marginTop: 2, fontWeight: 600 }}>
-                        MS {consumoMS.toFixed(2)} kg/cab/dia
+                    {consumoMS != null && consumoMSPercentualPV != null && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 11.5, color: "#1F4D45", fontWeight: 600 }}>
+                          MS {consumoMS.toFixed(2)} kg/cab/dia
+                        </span>
+                        <span style={{ ...styles.msStatusPill, color: faixaMS.cor, background: faixaMS.fundo }}>
+                          <span style={{ ...styles.msStatusDot, background: faixaMS.cor }} />
+                          {consumoMSPercentualPV.toFixed(2)}% PV · {faixaMS.label}
+                        </span>
                       </div>
                     )}
                     {custoAcumuladoAnimal != null && (
@@ -594,6 +608,10 @@ export default function ConfinamentoTab({
             <PainelCard
               label="Consumo médio de MS (ativos)"
               valor={painel.consumoMSMedioAtivos != null ? `${painel.consumoMSMedioAtivos.toFixed(2)} kg/cab/dia` : "—"}
+            />
+            <PainelCard
+              label="MS média sobre peso vivo (ativos)"
+              valor={painel.consumoMSPercentualPVMedioAtivos != null ? `${painel.consumoMSPercentualPVMedioAtivos.toFixed(2)}% do PV` : "—"}
             />
             <PainelCard
               label="Custo acumulado (ativos)"
