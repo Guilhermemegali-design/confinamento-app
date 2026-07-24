@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-23 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4 + rendimento de carcaça/peso e data de abate esperados + papel editor/leitor por pessoa + preço da arroba/custo operacional/fechamento de custo)
+Última atualização: 2026-07-24 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4 + rendimento de carcaça/peso e data de abate esperados + papel editor/leitor por pessoa + preço da arroba/custo operacional/fechamento de custo + fix bug de importação com lotes de nome numérico ambíguo)
 
 ## O que é
 
@@ -460,6 +460,27 @@ adicionada nesta sessão para atender a Belmont).
     duas partes com preços/rendimentos diferentes) — os totais de compra,
     alimentação, operacional, receita e resultado bateram na mão em ambos
     os casos.
+36. **Bug de importação: lotes com nome numérico ambíguo se misturavam**.
+    O Adelmilson (pasta do cliente às vezes grafada "Ademilson Buriti
+    Grande") tem 4 lotes: "Boi 1", "Boi 2", "C1", "C2". Ao importar a
+    planilha de consumo pelo app, o consumo de "Boi 1"/"Boi 2" não apareceu
+    em lugar nenhum — na verdade foi parar dentro de "C1"/"C2", porque
+    `encontrarLotePorNomeOuNumero` comparava por **número extraído do nome
+    primeiro** quando os dois lados tinham número: "Boi 1" e "C1" têm o
+    mesmo número ("1"), e como C1/C2 foram criados antes de Boi 1/Boi 2, o
+    `.find()` batia em C1 primeiro. Corrigido: agora o **texto exato bate
+    primeiro** ("Boi 1" só reconhece o lote "Boi 1"); o fallback por número
+    (pro caso documentado de planilha só ter "3" reconhecendo "Lote 3") só
+    roda se nenhum nome bateu exato E só se existir um único lote com
+    aquele número — caso contrário retorna null (não escolhe arbitrariamente
+    entre vários). Os 108 registros de `consumos_lote` que tinham ido pro
+    lote errado (C1/C2, criados às 12:56 do dia 24/07) foram apagados e os
+    164 lançamentos corretos (Boi 1: 54 dias, Boi 2: 54 dias, C1: 28 dias,
+    C2: 28 dias, extraídos direto da planilha
+    `Lancamento conf.xlsx` do OneDrive do cliente, somando os lançamentos
+    que caem no mesmo lote/dia) foram inseridos direto no banco pro
+    `cliente_id` do Adelmilson. Confirmado por soma: total por lote bateu
+    exatamente com a soma da planilha original.
 
 ## Pendências / coisas para prestar atenção
 

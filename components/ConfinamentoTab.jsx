@@ -1542,17 +1542,18 @@ function extrairNumero(valor) {
   return m ? m[0] : null;
 }
 function encontrarLotePorNomeOuNumero(valor, lotes) {
-  const numeroAlvo = extrairNumero(valor);
   const textoAlvo = normalizarTexto(valor);
   if (!textoAlvo) return null;
-  return (
-    lotes.find((l) => {
-      const numeroLote = extrairNumero(l.nome);
-      return numeroAlvo != null && numeroLote != null
-        ? numeroAlvo === numeroLote
-        : normalizarTexto(l.nome) === textoAlvo;
-    }) || null
-  );
+  // Nome exato bate primeiro ("Boi 1" só reconhece o lote "Boi 1") — o
+  // número só entra como último recurso (ex: planilha só tem "3", lote se
+  // chama "Lote 3"), e apenas se for o único lote com aquele número, senão
+  // "1" poderia casar tanto com "Boi 1" quanto com "C1" e misturar os dois.
+  const porTexto = lotes.find((l) => normalizarTexto(l.nome) === textoAlvo);
+  if (porTexto) return porTexto;
+  const numeroAlvo = extrairNumero(valor);
+  if (numeroAlvo == null) return null;
+  const porNumero = lotes.filter((l) => extrairNumero(l.nome) === numeroAlvo);
+  return porNumero.length === 1 ? porNumero[0] : null;
 }
 
 // Cabeçalho/texto sem acento, minúsculo, só letras/números separados por
