@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { styles } from "@/lib/styles";
+import MarcaDesenvolvedor from "./MarcaDesenvolvedor";
 
 export default function TelaLogin() {
   const [modo, setModo] = useState("login"); // "login" | "cadastro"
@@ -34,7 +35,7 @@ export default function TelaLogin() {
   return (
     <div style={styles.loginScreen}>
       <div style={styles.loginCard}>
-        <img src="/logo.jpg" alt="Logo" style={styles.loginLogo} />
+        <img src="/rastro-logo.png" alt="Rastro Confinamento" style={styles.rastroLoginLogo} />
         <div style={styles.loginSub}>{modo === "login" ? "Entre na sua conta" : "Crie sua conta de consultor"}</div>
 
         <form onSubmit={handleSubmit}>
@@ -57,6 +58,7 @@ export default function TelaLogin() {
         <button onClick={() => setModo(modo === "login" ? "cadastro" : "login")} style={styles.linkBtn}>
           {modo === "login" ? "Ainda não tem conta? Criar agora" : "Já tem conta? Entrar"}
         </button>
+        <MarcaDesenvolvedor compacto />
       </div>
     </div>
   );

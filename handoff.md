@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-24 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4 + rendimento de carcaça/peso e data de abate esperados + papel editor/leitor por pessoa + preço da arroba/custo operacional/fechamento de custo + fix bug de importação com lotes de nome numérico ambíguo + reimport completo do consumo do Adelmilson desde abril)
+Última atualização: 2026-07-24 (nova navegação mobile/desktop + indicadores de MS sobre PV + gráficos acessíveis no celular + nova marca Rastro Confinamento e atualização automática do PWA)
 
 ## O que é
 
@@ -510,6 +510,18 @@ adicionada nesta sessão para atender a Belmont).
     período de adaptação/crescimento também, a data de entrada dos 4 lotes
     precisa ser ajustada (e provavelmente também um peso de entrada real
     de 03/04, que não temos ainda).
+38. **Nova identidade "Rastro Confinamento" + atualização de quem já tem o
+    PWA instalado**: nome, cabeçalhos, telas de login, metadados e manifests
+    foram atualizados. Nova logo horizontal em `public/rastro-logo.png` e
+    ícones 192/512/Apple Touch com o boi integrado ao "R". A marca do
+    desenvolvedor aparece discretamente no rodapé como "Desenvolvido por
+    GMegali Consultoria". O cache do Service Worker mudou para
+    `rastro-confinamento-cache-v2`, inclui os novos assets e agora chama
+    `registration.update()` imediatamente ao abrir, além da checagem já
+    existente ao voltar ao primeiro plano. Assim, o conteúdo de quem já
+    instalou atualiza sem novo link/reinstalação; o nome/ícone exibido pelo
+    sistema operacional ainda pode demorar a mudar em alguns iPhones/Macs,
+    pois essa parte é controlada pelo próprio sistema.
 
 ## Pendências / coisas para prestar atenção
 

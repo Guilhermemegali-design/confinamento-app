@@ -1,6 +1,6 @@
 {
-  "name": "Portal do Cliente - Confinamento",
-  "short_name": "Confinamento",
+  "name": "Rastro Confinamento - Portal do Cliente",
+  "short_name": "Rastro",
   "description": "Acompanhe o confinamento dos seus lotes: pesagens e consumo",
   "start_url": "/portal",
   "display": "standalone",
@@ -8,7 +8,7 @@
   "theme_color": "#1F4D45",
   "orientation": "portrait",
   "icons": [
-    { "src": "/icon.jpg", "sizes": "192x192", "type": "image/jpeg" },
-    { "src": "/icon.jpg", "sizes": "512x512", "type": "image/jpeg" }
+    { "src": "/rastro-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/rastro-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

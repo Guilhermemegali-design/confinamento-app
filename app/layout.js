@@ -2,7 +2,7 @@ import RegistroServiceWorker from "@/components/RegistroServiceWorker";
 import "./globals.css";
 
 export const metadata = {
-  title: "Confinamento - Painel do Consultor",
+  title: "Rastro Confinamento",
   description: "Cadastro de clientes e acompanhamento de lotes de confinamento",
   manifest: "/manifest.json",
 };
@@ -20,7 +20,7 @@ export default function RootLayout({ children }) {
       <head>
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-        <link rel="apple-touch-icon" href="/icon.jpg" />
+        <link rel="apple-touch-icon" href="/rastro-apple-touch-icon.png" />
       </head>
       <body>
         <RegistroServiceWorker />

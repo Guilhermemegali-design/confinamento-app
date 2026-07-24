@@ -1,6 +1,6 @@
 {
-  "name": "Confinamento - Painel do Consultor",
-  "short_name": "Confinamento",
+  "name": "Rastro Confinamento",
+  "short_name": "Rastro",
   "description": "Cadastro de clientes e acompanhamento de lotes de confinamento",
   "start_url": "/",
   "display": "standalone",
@@ -8,7 +8,7 @@
   "theme_color": "#1F4D45",
   "orientation": "portrait",
   "icons": [
-    { "src": "/icon.jpg", "sizes": "192x192", "type": "image/jpeg" },
-    { "src": "/icon.jpg", "sizes": "512x512", "type": "image/jpeg" }
+    { "src": "/rastro-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/rastro-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

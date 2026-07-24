@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { styles } from "@/lib/styles";
 import { LogOut } from "lucide-react";
 import ConfinamentoTab from "@/components/ConfinamentoTab";
+import MarcaDesenvolvedor from "@/components/MarcaDesenvolvedor";
 import { calcularResumoSaidas } from "@/lib/confinamento";
 
 export default function PortalCliente() {
@@ -84,7 +85,7 @@ function TelaLoginCliente() {
   return (
     <div style={styles.loginScreen}>
       <div style={styles.loginCard}>
-        <img src="/logo.jpg" alt="Logo" style={styles.loginLogo} />
+        <img src="/rastro-logo.png" alt="Rastro Confinamento" style={styles.rastroLoginLogo} />
         <div style={{ fontWeight: 700, fontSize: 15, color: "#1F4D45", textAlign: "center", marginTop: 8 }}>Portal do Cliente</div>
         <div style={styles.loginSub}>{modo === "login" ? "Acesse o confinamento dos seus lotes" : "Crie sua conta de acesso"}</div>
         <form onSubmit={handleSubmit}>
@@ -104,6 +105,7 @@ function TelaLoginCliente() {
         <button onClick={() => setModo(modo === "login" ? "cadastro" : "login")} style={styles.linkBtn}>
           {modo === "login" ? "Recebeu um código do seu consultor? Criar conta" : "Já tem conta? Entrar"}
         </button>
+        <MarcaDesenvolvedor compacto />
       </div>
     </div>
   );
@@ -399,9 +401,12 @@ function PainelCliente({ cliente, somenteLeitura }) {
     <div style={styles.app} className="app-shell">
       <div style={styles.topbar}>
         <div style={styles.topbarRow}>
-          <div>
-            <div style={styles.brand}>{cliente.nome}</div>
-            <div style={styles.brandSub}>Portal do cliente{somenteLeitura ? " · Somente leitura" : ""}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <img src="/rastro-icon-192.png" alt="Rastro Confinamento" style={styles.topbarLogo} />
+            <div>
+              <div style={styles.brand}>Rastro Confinamento</div>
+              <div style={styles.brandSub}>{cliente.nome}{somenteLeitura ? " · Somente leitura" : ""}</div>
+            </div>
           </div>
           <button onClick={() => supabase.auth.signOut()} style={styles.iconBtn} title="Sair">
             <LogOut size={16} />
@@ -435,6 +440,7 @@ function PainelCliente({ cliente, somenteLeitura }) {
           onMoverLoteParaCurral={somenteLeitura ? undefined : moverLoteParaCurral}
         />
       </div>
+      <MarcaDesenvolvedor />
     </div>
   );
 }

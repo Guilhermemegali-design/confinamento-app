@@ -7,6 +7,7 @@ import { useDadosConfinamento } from "@/lib/useDadosConfinamento";
 import TelaLogin from "@/components/TelaLogin";
 import ClientesTab from "@/components/ClientesTab";
 import Toast from "@/components/Toast";
+import MarcaDesenvolvedor from "@/components/MarcaDesenvolvedor";
 import { styles } from "@/lib/styles";
 
 const CONSULTOR_UID = "0db4e2fd-9cef-4e3f-9fb7-f974d4d22e02";
@@ -62,9 +63,9 @@ export default function Home() {
       <div style={styles.topbar}>
         <div style={styles.topbarRow}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <img src="/logo.jpg" alt="Logo" style={styles.topbarLogo} />
+            <img src="/rastro-icon-192.png" alt="Rastro Confinamento" style={styles.topbarLogo} />
             <div>
-              <div style={styles.brand}>Confinamento</div>
+              <div style={styles.brand}>Rastro Confinamento</div>
               <div style={styles.brandSub}>Painel do consultor</div>
             </div>
           </div>
@@ -182,6 +183,7 @@ export default function Home() {
           }}
         />
       </div>
+      <MarcaDesenvolvedor />
 
       {toast && <Toast text={toast} />}
     </div>

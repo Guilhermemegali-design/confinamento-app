@@ -6,11 +6,16 @@
 // dados — só garante que a interface carregue offline.
 // ============================================================
 
-const CACHE_NAME = "confinamento-cache-v1";
+const CACHE_NAME = "rastro-confinamento-cache-v2";
 
 const ARQUIVOS_ESSENCIAIS = [
   "/",
   "/manifest.json",
+  "/manifest-portal.json",
+  "/rastro-logo.png",
+  "/rastro-icon-192.png",
+  "/rastro-icon-512.png",
+  "/gmegali-logo.png",
 ];
 
 self.addEventListener("install", (event) => {
