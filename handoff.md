@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-24 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4 + rendimento de carcaça/peso e data de abate esperados + papel editor/leitor por pessoa + preço da arroba/custo operacional/fechamento de custo + fix bug de importação com lotes de nome numérico ambíguo)
+Última atualização: 2026-07-24 (ordenação por peso atual + saída fracionada de lote + escore de cocho -4 a 4 + rendimento de carcaça/peso e data de abate esperados + papel editor/leitor por pessoa + preço da arroba/custo operacional/fechamento de custo + fix bug de importação com lotes de nome numérico ambíguo + reimport completo do consumo do Adelmilson desde abril)
 
 ## O que é
 
@@ -481,9 +481,46 @@ adicionada nesta sessão para atender a Belmont).
     que caem no mesmo lote/dia) foram inseridos direto no banco pro
     `cliente_id` do Adelmilson. Confirmado por soma: total por lote bateu
     exatamente com a soma da planilha original.
+37. **Reimport do consumo do Adelmilson com mais dias (planilha ampliada
+    até abril)**: o cliente atualizou `Lancamento conf.xlsx` com o
+    histórico completo — 890 linhas, cobrindo 03/04/2026 a 24/07/2026 nas
+    3 fases (`Adaptacao`, `Crescimento`, `Terminacao`), não só a
+    `Terminacao` do item 36. Comparei cada (lote, data) da planilha contra
+    o que já estava no banco: 161 dias já lançados batiam exatamente, 3
+    dias (01/06, Boi 1/Boi 2/C2) tinham uma linha nova na planilha que
+    ainda não estava importada — **atualizados** para o novo total — e 223
+    (lote, data) novos (basicamente todo o período de 03/04 a 31/05, que
+    ainda não existia no banco) foram **inseridos**, com `dieta_fase` e
+    `ms_dieta` batendo o que a própria planilha trazia por linha
+    (adaptação/crescimento têm MS diferente da terminação). Conferido de
+    novo por soma total por lote (Boi 1: 142.230, Boi 2: 131.760, C1:
+    86.745, C2: 82.060) — bate exatamente com a soma da planilha inteira.
+    **Atenção**: os lotes continuam com `data_entrada = 01/06/2026`
+    cadastrada — os lançamentos de 03/04 a 31/05 (adaptação/crescimento)
+    ficam visíveis no histórico de nutrição, mas **não entram** no cálculo
+    de custo acumulado nem na projeção de peso (que só andam a partir da
+    `data_entrada`), porque essas contas em `lib/confinamento.js` sempre
+    partiram do princípio de que `data_entrada` é o primeiro dia do lote.
+    Perguntei ao usuário se a data de entrada devia ser corrigida pra
+    03/04 (já que a planilha mostra claramente um programa de 3 fases
+    começando nessa data) — a pergunta foi dispensada sem resposta direta,
+    então **não mexi na `data_entrada` nem no `peso_entrada`** dos 4 lotes;
+    só garanti que o consumo lançado bate com a planilha. Se o usuário
+    quiser que o custo acumulado e a projeção de peso considerem esse
+    período de adaptação/crescimento também, a data de entrada dos 4 lotes
+    precisa ser ajustada (e provavelmente também um peso de entrada real
+    de 03/04, que não temos ainda).
 
 ## Pendências / coisas para prestar atenção
 
+- **Data de entrada dos 4 lotes do Adelmilson (Boi 1, Boi 2, C1, C2) pode
+  estar errada**: cadastrada como 01/06/2026, mas a planilha de consumo
+  mostra claramente adaptação começando 03/04/2026 e crescimento até
+  25/05, só virando terminação em 26/05. Perguntei se a data de entrada
+  devia mudar pra 03/04 e a pergunta foi dispensada sem resposta — ver
+  item 37. Enquanto isso não for decidido, custo acumulado e projeção de
+  peso desses 4 lotes ignoram os ~2 meses de adaptação/crescimento já
+  lançados (só contam a partir de 01/06).
 - **Mapa de currais dos outros clientes**: só a Belmont tem
   `mapa_centro_lat`/`mapa_centro_lng` preenchidos (calculado a partir do
   `Belmont.kml` que o usuário mandou) e nenhum cliente tem currais
