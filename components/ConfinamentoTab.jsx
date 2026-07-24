@@ -673,7 +673,9 @@ function LoteDetalhe({
               <Field label="Rendimento de carcaça" value={`${lote.rendimento_carcaca}%`} />
             )}
             {lote.preco_venda_arroba != null && <Field label="Preço de venda da arroba" value={formatBRL(lote.preco_venda_arroba)} />}
-            {lote.custo_operacional != null && <Field label="Custo operacional" value={formatBRL(lote.custo_operacional)} />}
+            {lote.custo_operacional != null && (
+              <Field label="Custo operacional" value={`${formatBRL(lote.custo_operacional)}/cab/dia`} />
+            )}
           </>
         )}
         {lote.observacoes && <Field label="Observações" value={lote.observacoes} multiline />}
@@ -1094,11 +1096,11 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
           placeholder="Ex: 310"
         />
         <InputField
-          label="Custo operacional (R$)"
+          label="Custo operacional (R$/cab/dia)"
           type="number"
           value={custoOperacional}
           onChange={setCustoOperacional}
-          placeholder="Frete, comissão, sanidade..."
+          placeholder="Ex: 0.50"
         />
       </div>
 
@@ -1213,11 +1215,11 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
           placeholder="Ex: 310"
         />
         <InputField
-          label="Custo operacional (R$)"
+          label="Custo operacional (R$/cab/dia)"
           type="number"
           value={custoOperacional}
           onChange={setCustoOperacional}
-          placeholder="Frete, comissão, sanidade..."
+          placeholder="Ex: 0.50"
         />
       </div>
       <div style={styles.card}>

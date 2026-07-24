@@ -424,20 +424,26 @@ adicionada nesta sessão para atender a Belmont).
     `peso_entrada`, dá o valor de compra do lote em arrobas. Na seção
     "Saída" do `FormLote` (finalização de uma vez só) e no `FormSaida`
     (saída fracionada), dois campos novos: `preco_venda_arroba` (R$/@) e
-    `custo_operacional` (R$, valor total pra aquela saída — frete,
-    comissão, sanidade etc; **não** é por cabeça). Ambas as colunas foram
-    replicadas em `lotes_confinamento` (fluxo de uma vez só) e `saidas_lote`
-    (fluxo fracionado), igual já era feito com `rendimento_carcaca`. Nova
-    função `calcularFechamentoCusto(lote, indicadores, saidas)` em
+    `custo_operacional` — esse último é uma **taxa diária por cabeça**
+    (R$/cab/dia: mão de obra, depreciação, sanidade etc., ratejados no
+    dia), não um valor total. Ambas as colunas foram replicadas em
+    `lotes_confinamento` (fluxo de uma vez só) e `saidas_lote` (fluxo
+    fracionado), igual já era feito com `rendimento_carcaca`. Nova função
+    `calcularFechamentoCusto(lote, indicadores, saidas)` em
     `lib/confinamento.js`: converte peso vivo em arrobas usando o
-    rendimento de cada ponta (1 @ = 15 kg de carcaça) e cruza valor de
-    compra (entrada) + custo de alimentação acumulado
-    (`indicadores.custoAcumuladoAnimal × num_cabecas`) + custo operacional
-    somado de todas as saídas contra a receita de venda somada de todas as
-    saídas, retornando custo total, receita total, resultado (R$ e R$/cab.)
-    e resultado por arroba produzida. Se o lote foi finalizado de uma vez
-    só (nenhuma linha em `saidas_lote`), a função monta uma "saída virtual"
-    a partir dos campos do próprio lote — não precisa duplicar a conta.
+    rendimento de cada ponta (1 @ = 15 kg de carcaça); o custo operacional
+    de cada saída é `taxa × dias confinados daquele lote de cabeças (da
+    entrada até a data daquela saída) × nº de cabeças da saída` — numa
+    saída fracionada, cada lote de boi que saiu em datas diferentes tem
+    seus próprios dias confinados. Cruza valor de compra (entrada) + custo
+    de alimentação acumulado (`indicadores.custoAcumuladoAnimal ×
+    num_cabecas`) + custo operacional (somado de todas as saídas) contra a
+    receita de venda somada de todas as saídas, retornando custo total,
+    receita total, resultado (R$ e R$/cab.) e resultado por arroba
+    produzida. Se o lote foi finalizado de uma vez só (nenhuma linha em
+    `saidas_lote`), a função monta uma "saída virtual" a partir dos campos
+    do próprio lote (incluindo a `data_saida` do lote, usada pro cálculo
+    de dias) — não precisa duplicar a conta.
     Card "Fechamento de custo" aparece no detalhe do lote **só quando
     `indicadores.status === "Finalizado"`** (ou seja, `data_saida`
     preenchida) — igual ao resto do app, uma saída fracionada que zera as
