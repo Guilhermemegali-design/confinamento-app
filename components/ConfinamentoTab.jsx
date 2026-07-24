@@ -958,16 +958,35 @@ function calcularRegressaoLinear(valores) {
   return { a, b }; // valor previsto no índice i = a + b*i
 }
 
-function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45", tendencia = false, id }) {
+function GraficoLinha({
+  pontos, valueKey, unidade = "", cor = "#1F4D45", tendencia = false, id,
+  gradeDetalhada = false, consultaPorDia = false,
+}) {
   const largura = 320;
-  const altura = 120;
+  const altura = gradeDetalhada ? 170 : 120;
   const paddingEsquerda = 34;
   const paddingDireita = 10;
   const paddingY = 16;
+  const [dataConsultada, setDataConsultada] = useState(pontos[pontos.length - 1]?.data || "");
 
   const valores = pontos.map((p) => p[valueKey]);
-  const min = Math.min(...valores);
-  const max = Math.max(...valores);
+  const menorValor = Math.min(...valores);
+  const maiorValor = Math.max(...valores);
+  let min = menorValor;
+  let max = maiorValor;
+  let marcasEixo = [];
+  if (gradeDetalhada) {
+    const amplitude = maiorValor - menorValor;
+    const passo = amplitude <= 0.8 ? 0.1 : amplitude <= 1.6 ? 0.2 : amplitude <= 3 ? 0.5 : 1;
+    min = Math.floor(menorValor / passo) * passo;
+    max = Math.ceil(maiorValor / passo) * passo;
+    if (max === min) max = min + passo;
+    for (let valor = max; valor >= min - passo / 10; valor -= passo) {
+      marcasEixo.push(Number(valor.toFixed(3)));
+    }
+  } else {
+    marcasEixo = [max, (min + max) / 2, min];
+  }
   const meio = (min + max) / 2;
   const span = max - min || 1;
 
@@ -981,7 +1000,9 @@ function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45", tendenc
   });
 
   const linha = coords.map((c) => `${c.x},${c.y}`).join(" ");
-  const formatEixo = (v) => `${Number.isInteger(v) ? v : v.toFixed(1)} ${unidade}`;
+  const formatEixo = (v) => `${Number.isInteger(v) ? v : v.toFixed(gradeDetalhada ? 2 : 1)} ${unidade}`;
+  const yDe = (valor) => altura - paddingY - ((valor - min) / span) * (altura - paddingY * 2);
+  const pontoConsultado = pontos.find((p) => p.data === dataConsultada) || pontos[pontos.length - 1];
 
   const regressao = tendencia ? calcularRegressaoLinear(valores) : null;
   const linhaTendencia =
@@ -1000,26 +1021,30 @@ function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45", tendenc
   return (
     <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #ECEAE3", padding: "14px 10px 10px" }}>
       <svg id={id} viewBox={`0 0 ${largura} ${altura}`} style={{ width: "100%", height: altura, display: "block" }}>
-        <line x1={paddingEsquerda} y1={paddingY} x2={largura - paddingDireita} y2={paddingY} stroke="#F1EFE8" strokeWidth="1" />
-        <line
-          x1={paddingEsquerda}
-          y1={altura / 2}
-          x2={largura - paddingDireita}
-          y2={altura / 2}
-          stroke="#F1EFE8"
-          strokeWidth="1"
-        />
-        <line
-          x1={paddingEsquerda}
-          y1={altura - paddingY}
-          x2={largura - paddingDireita}
-          y2={altura - paddingY}
-          stroke="#F1EFE8"
-          strokeWidth="1"
-        />
-        <text x={0} y={paddingY + 3} fontSize="9" fill="#ABA9A0">{formatEixo(max)}</text>
-        <text x={0} y={altura / 2 + 3} fontSize="9" fill="#ABA9A0">{formatEixo(meio)}</text>
-        <text x={0} y={altura - paddingY + 3} fontSize="9" fill="#ABA9A0">{formatEixo(min)}</text>
+        {marcasEixo.map((marca) => {
+          const y = yDe(marca);
+          return (
+            <g key={marca}>
+              <line x1={paddingEsquerda} y1={y} x2={largura - paddingDireita} y2={y} stroke="#E8E6DF" strokeWidth="1" />
+              <text x={0} y={y + 3} fontSize="8.5" fill="#8F8D84">{formatEixo(marca)}</text>
+            </g>
+          );
+        })}
+        {gradeDetalhada && [2, 2.4].map((limite) => (
+          limite >= min && limite <= max ? (
+            <line
+              key={`limite-${limite}`}
+              x1={paddingEsquerda}
+              y1={yDe(limite)}
+              x2={largura - paddingDireita}
+              y2={yDe(limite)}
+              stroke={limite === 2.4 ? "#247A52" : "#B43B32"}
+              strokeWidth="1.2"
+              strokeDasharray="3 3"
+              opacity="0.8"
+            />
+          ) : null
+        ))}
         {linhaTendencia && (
           <line
             x1={linhaTendencia.x1}
@@ -1045,6 +1070,25 @@ function GraficoLinha({ pontos, valueKey, unidade = "", cor = "#1F4D45", tendenc
       </div>
       {linhaTendencia && (
         <div style={{ fontSize: 10.5, color: "#9A9A94", padding: "4px 6px 0 34px" }}>- - - linha de tendência</div>
+      )}
+      {consultaPorDia && pontoConsultado && (
+        <label style={styles.chartDayPicker}>
+          <span style={{ fontSize: 11.5, color: "#7A7A75" }}>Consultar dia</span>
+          <select
+            value={pontoConsultado.data}
+            onChange={(e) => setDataConsultada(e.target.value)}
+            style={styles.chartDaySelect}
+          >
+            {[...pontos].reverse().map((ponto) => (
+              <option key={ponto.data} value={ponto.data}>
+                {formatDataBR(ponto.data)} — {Number(ponto[valueKey]).toFixed(2)}{unidade}
+              </option>
+            ))}
+          </select>
+          <strong style={{ color: faixaConsumoMS(pontoConsultado[valueKey])?.cor || cor }}>
+            {Number(pontoConsultado[valueKey]).toFixed(2)}{unidade}
+          </strong>
+        </label>
       )}
     </div>
   );
@@ -2156,7 +2200,16 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = 
           <div style={{ fontWeight: 700, fontSize: 14.5, margin: "0 4px 10px" }}>{lote.nome}</div>
           <div style={{ ...styles.sectionTitle, margin: "0 4px 6px" }}>Consumo de MS em relação ao peso vivo (%)</div>
           {pontosPV.length > 1 ? (
-            <GraficoLinha pontos={pontosPV} valueKey="percentualPV" unidade="%" cor="#1F4D45" tendencia id={svgId} />
+            <GraficoLinha
+              pontos={pontosPV}
+              valueKey="percentualPV"
+              unidade="%"
+              cor="#1F4D45"
+              tendencia
+              gradeDetalhada
+              consultaPorDia
+              id={svgId}
+            />
           ) : (
             <EmptyHint text="Falta a % de MS em pelo menos 2 lançamentos para montar este gráfico." />
           )}
