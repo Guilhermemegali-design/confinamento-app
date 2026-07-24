@@ -489,8 +489,13 @@ export default function ConfinamentoTab({
           </div>
           {ativos.length === 0 && <EmptyHint text="Nenhum lote ativo." />}
           {ativos.map((item, index) => {
-            const { lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje, consumoMS, consumoMSPercentualPV, custoAcumuladoAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate } = item;
-            const faixaMS = faixaConsumoMS(consumoMSPercentualPV);
+            const {
+              lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje,
+              consumoMS, consumoMSPercentualPV, consumoMSPercentualPVMedio,
+              custoAcumuladoAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate,
+            } = item;
+            const faixaMSUltimo = faixaConsumoMS(consumoMSPercentualPV);
+            const faixaMSMedio = faixaConsumoMS(consumoMSPercentualPVMedio);
             return (
               <div key={lote.id} style={styles.listItem}>
                 {ordenacao === "manual" && (
@@ -521,15 +526,25 @@ export default function ConfinamentoTab({
                     <div style={styles.listItemSub}>
                       {cabecasSaidas > 0 ? `${cabecasRestantes} de ${lote.num_cabecas} cab.` : `${lote.num_cabecas} cab.`} · entrada {formatDataBR(lote.data_entrada)} · {diasConfinamento}d
                     </div>
-                    {consumoMS != null && consumoMSPercentualPV != null && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 11.5, color: "#1F4D45", fontWeight: 600 }}>
-                          MS {consumoMS.toFixed(2)} kg/cab/dia
-                        </span>
-                        <span style={{ ...styles.msStatusPill, color: faixaMS.cor, background: faixaMS.fundo }}>
-                          <span style={{ ...styles.msStatusDot, background: faixaMS.cor }} />
-                          {consumoMSPercentualPV.toFixed(2)}% PV · {faixaMS.label}
-                        </span>
+                    {consumoMS != null && (
+                      <div style={{ fontSize: 11.5, color: "#1F4D45", fontWeight: 600, marginTop: 3 }}>
+                        MS {consumoMS.toFixed(2)} kg/cab/dia
+                      </div>
+                    )}
+                    {(faixaMSUltimo || faixaMSMedio) && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, flexWrap: "wrap" }}>
+                        {faixaMSUltimo && (
+                          <span style={{ ...styles.msStatusPill, color: faixaMSUltimo.cor, background: faixaMSUltimo.fundo }}>
+                            <span style={{ ...styles.msStatusDot, background: faixaMSUltimo.cor }} />
+                            Último {consumoMSPercentualPV.toFixed(2)}%
+                          </span>
+                        )}
+                        {faixaMSMedio && (
+                          <span style={{ ...styles.msStatusPill, color: faixaMSMedio.cor, background: faixaMSMedio.fundo }}>
+                            <span style={{ ...styles.msStatusDot, background: faixaMSMedio.cor }} />
+                            Média {consumoMSPercentualPVMedio.toFixed(2)}%
+                          </span>
+                        )}
                       </div>
                     )}
                     {custoAcumuladoAnimal != null && (
@@ -610,8 +625,14 @@ export default function ConfinamentoTab({
               valor={painel.consumoMSMedioAtivos != null ? `${painel.consumoMSMedioAtivos.toFixed(2)} kg/cab/dia` : "—"}
             />
             <PainelCard
-              label="MS média sobre peso vivo (ativos)"
+              label="MS sobre PV — último lançamento"
               valor={painel.consumoMSPercentualPVMedioAtivos != null ? `${painel.consumoMSPercentualPVMedioAtivos.toFixed(2)}% do PV` : "—"}
+              faixa={faixaConsumoMS(painel.consumoMSPercentualPVMedioAtivos)}
+            />
+            <PainelCard
+              label="MS média histórica sobre PV"
+              valor={painel.consumoMSPercentualPVHistoricoAtivos != null ? `${painel.consumoMSPercentualPVHistoricoAtivos.toFixed(2)}% do PV` : "—"}
+              faixa={faixaConsumoMS(painel.consumoMSPercentualPVHistoricoAtivos)}
             />
             <PainelCard
               label="Custo acumulado (ativos)"
@@ -661,13 +682,19 @@ function SubNav({ options, value, onChange }) {
   );
 }
 
-function PainelCard({ label, valor }) {
+function PainelCard({ label, valor, faixa }) {
   return (
-    <div style={styles.gestaoCard}>
+    <div style={{ ...styles.gestaoCard, ...(faixa ? { borderColor: faixa.cor } : {}) }}>
       <div style={styles.gestaoCardHeader}>
         <span>{label}</span>
       </div>
       <div style={styles.gestaoCardValor}>{valor}</div>
+      {faixa && (
+        <div style={{ ...styles.msStatusPill, color: faixa.cor, background: faixa.fundo, marginTop: 7 }}>
+          <span style={{ ...styles.msStatusDot, background: faixa.cor }} />
+          {faixa.label}
+        </div>
+      )}
     </div>
   );
 }
