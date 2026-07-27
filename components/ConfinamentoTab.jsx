@@ -2350,6 +2350,9 @@ function ListaLeituraCocho({ ativos, consumosPorLote, leiturasCochoPorLote, onRe
 
   return (
     <div>
+      <div style={{ fontSize: 12.5, color: "#5C5C58", background: "#F1EFE8", borderRadius: 10, padding: "9px 12px", marginBottom: 12 }}>
+        Nota negativa aumenta a comida · Nota positiva diminui a comida · Nota 0 mantém o trato.
+      </div>
       {ativos.map((lote) => {
         const referencia = obterConsumoReferenciaCocho(consumosPorLote[lote.id] || []);
         const historico = [...(leiturasCochoPorLote[lote.id] || [])].sort((a, b) => a.data.localeCompare(b.data));

@@ -522,6 +522,12 @@ adicionada nesta sessão para atender a Belmont).
     instalou atualiza sem novo link/reinstalação; o nome/ícone exibido pelo
     sistema operacional ainda pode demorar a mudar em alguns iPhones/Macs,
     pois essa parte é controlada pelo próprio sistema.
+39. **Sentido das notas de leitura de cocho corrigido**: notas negativas
+    agora aumentam a quantidade fornecida (-1 = +5% até -4 = +20%); notas
+    positivas diminuem (+1 = -5% até +4 = -20%); nota zero mantém o trato.
+    A tela mostra uma legenda explícita com essa convenção. A correção vale
+    para novos lançamentos; históricos já salvos preservam o ajuste e a
+    quantidade esperada registrados na época.
 
 ## Pendências / coisas para prestar atenção
 
