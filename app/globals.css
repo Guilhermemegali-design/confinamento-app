@@ -54,6 +54,65 @@ input, textarea, select {
   height: 22px;
 }
 
+.cocho-legend {
+  padding: 11px;
+  margin-bottom: 14px;
+  background: #F1EFE8;
+  border-radius: 12px;
+}
+
+.cocho-legend-title {
+  margin-bottom: 8px;
+  color: #5C5C58;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.cocho-legend-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.cocho-legend-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 10.5px;
+}
+
+.cocho-legend-item strong {
+  font-size: 11px;
+}
+
+.cocho-legend-increase {
+  color: #247A52;
+  background: #E4F2EA;
+  border-color: #C8E3D3;
+}
+
+.cocho-legend-decrease {
+  color: #A85A2A;
+  background: #FBEBDF;
+  border-color: #F0D3BE;
+}
+
+.cocho-legend-keep {
+  color: #5C5C58;
+  background: #FFFFFF;
+  border-color: #DEDCD4;
+}
+
+.cocho-legend-help {
+  margin-top: 8px;
+  color: #7A7A75;
+  font-size: 10.5px;
+  text-align: center;
+}
+
 /* Respeita usuários que preferem menos animação */
 @media (prefers-reduced-motion: reduce) {
   * {
@@ -160,6 +219,10 @@ input, textarea, select {
 
   .desktop-map {
     height: 620px !important;
+  }
+
+  .cocho-legend-grid {
+    grid-template-columns: repeat(9, minmax(0, 1fr));
   }
 }
 

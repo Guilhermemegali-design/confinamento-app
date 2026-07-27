@@ -525,9 +525,11 @@ adicionada nesta sessão para atender a Belmont).
 39. **Sentido das notas de leitura de cocho corrigido**: notas negativas
     agora aumentam a quantidade fornecida (-1 = +5% até -4 = +20%); notas
     positivas diminuem (+1 = -5% até +4 = -20%); nota zero mantém o trato.
-    A tela mostra uma legenda explícita com essa convenção. A correção vale
-    para novos lançamentos; históricos já salvos preservam o ajuste e a
-    quantidade esperada registrados na época.
+    A tela mostra uma legenda visual completa (verde = aumenta, cinza =
+    mantém, laranja = diminui), com cada nota e seu percentual exato; são
+    três colunas no celular e nove no computador. A correção vale para novos
+    lançamentos; históricos já salvos preservam o ajuste e a quantidade
+    esperada registrados na época.
 
 ## Pendências / coisas para prestar atenção
 

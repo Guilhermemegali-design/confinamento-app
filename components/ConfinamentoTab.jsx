@@ -2350,9 +2350,7 @@ function ListaLeituraCocho({ ativos, consumosPorLote, leiturasCochoPorLote, onRe
 
   return (
     <div>
-      <div style={{ fontSize: 12.5, color: "#5C5C58", background: "#F1EFE8", borderRadius: 10, padding: "9px 12px", marginBottom: 12 }}>
-        Nota negativa aumenta a comida · Nota positiva diminui a comida · Nota 0 mantém o trato.
-      </div>
+      <LegendaAjustesCocho />
       {ativos.map((lote) => {
         const referencia = obterConsumoReferenciaCocho(consumosPorLote[lote.id] || []);
         const historico = [...(leiturasCochoPorLote[lote.id] || [])].sort((a, b) => a.data.localeCompare(b.data));
@@ -2406,6 +2404,31 @@ function ListaLeituraCocho({ ativos, consumosPorLote, leiturasCochoPorLote, onRe
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function LegendaAjustesCocho() {
+  return (
+    <div className="cocho-legend">
+      <div className="cocho-legend-title">Como a nota altera o próximo trato</div>
+      <div className="cocho-legend-grid">
+        {NOTAS_LEITURA_COCHO.map(({ nota, ajuste }) => {
+          const tipo = ajuste > 0 ? "increase" : ajuste < 0 ? "decrease" : "keep";
+          return (
+            <div key={nota} className={`cocho-legend-item cocho-legend-${tipo}`}>
+              <strong>Nota {nota > 0 ? `+${nota}` : nota}</strong>
+              <span>
+                {ajuste > 0 ? "↑" : ajuste < 0 ? "↓" : "＝"} {ajuste > 0 ? "+" : ""}
+                {ajuste}% comida
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="cocho-legend-help">
+        Nota negativa aumenta · Nota positiva diminui · Nota 0 mantém
+      </div>
     </div>
   );
 }
