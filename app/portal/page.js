@@ -305,6 +305,20 @@ function PainelCliente({ cliente, somenteLeitura }) {
     setConsumos((cs) => cs.filter((c) => c.id !== consumoId));
   }
 
+  // Mesma importação disponível no painel do consultor: recebe os consumos
+  // já consolidados por lote/data e ignora dias que já existem.
+  async function importarConsumosEmLote(linhas) {
+    if (linhas.length === 0) return [];
+    const paraInserir = linhas.map((l) => ({ ...l, consultor_id: cliente.consultor_id }));
+    const { data, error } = await supabase
+      .from("consumos_lote")
+      .upsert(paraInserir, { onConflict: "lote_id,data", ignoreDuplicates: true })
+      .select();
+    if (error) throw error;
+    setConsumos((cs) => [...cs, ...(data || [])]);
+    return data || [];
+  }
+
   // Upsert: uma leitura por lote/dia — clicar em outra nota no mesmo dia
   // substitui a anterior.
   async function registrarLeituraCocho(loteId, dados) {
@@ -431,6 +445,7 @@ function PainelCliente({ cliente, somenteLeitura }) {
           onAdicionarConsumo={somenteLeitura ? undefined : adicionarConsumo}
           onAtualizarConsumo={somenteLeitura ? undefined : atualizarConsumo}
           onExcluirConsumo={somenteLeitura ? undefined : excluirConsumo}
+          onImportarConsumos={somenteLeitura ? undefined : importarConsumosEmLote}
           onRegistrarLeituraCocho={somenteLeitura ? undefined : registrarLeituraCocho}
           onImportarLeiturasCocho={somenteLeitura ? undefined : importarLeiturasCochoEmLote}
           onAdicionarCurral={somenteLeitura ? undefined : adicionarCurral}

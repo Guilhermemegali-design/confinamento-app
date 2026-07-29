@@ -542,6 +542,11 @@ adicionada nesta sessão para atender a Belmont).
     `(lote_id, data)`. Novas importações ignoram conflitos, então repetir o
     arquivo não duplica nem sobrescreve um consumo diário já confirmado.
     Lançamentos manuais também não substituem uma data existente.
+41. **Importação liberada no portal do cliente**: o botão não aparecia porque
+    `app/portal/page.js` não passava `onImportarConsumos` ao confinamento. O
+    portal agora faz a mesma importação em lote do consultor, ignorando
+    conflitos em `(lote_id, data)`. A função só é fornecida para papéis com
+    edição; usuários `leitor` continuam sem o botão.
 
 ## Pendências / coisas para prestar atenção
 
