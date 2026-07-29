@@ -584,6 +584,11 @@ adicionada nesta sessão para atender a Belmont).
     arquivo tiver renumerado esses códigos, usa o caminho alternativo
     `CARGAS.IdAutonomo -> AUTONOMOS.Receta -> RECETAS.Nombre`, evitando que
     cargas válidas apareçam como “receita não encontrada”.
+48. **Normalização forte dos códigos da planilha**: IDs de carga, receita e
+    autônomo agora removem apóstrofos e caracteres invisíveis e tratam `4`,
+    `04`, `4.0` e `4,0` como o mesmo código. Também há tentativa direta do
+    `IdAutonomo` como ID de receita para arquivos que trocaram essas colunas
+    ao serem filtrados/reexportados.
 
 ## Pendências / coisas para prestar atenção
 

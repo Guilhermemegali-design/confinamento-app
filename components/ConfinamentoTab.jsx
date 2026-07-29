@@ -1833,6 +1833,20 @@ function normalizarNumeroPlanilha(valor) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Identificadores de receita/autônomo podem mudar de representação ao passar
+// pelo Excel: 4, "04", "'4", "4.0" e "4,0" devem apontar para o mesmo ID.
+function normalizarCodigoPlanilha(valor) {
+  let texto = String(valor ?? "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim()
+    .replace(/^['"`´’]+/, "")
+    .trim();
+  if (!texto) return "";
+  const numero = texto.replace(",", ".");
+  if (/^[+-]?\d+(?:\.0+)?$/.test(numero)) return String(Number(numero));
+  return texto;
+}
+
 function encontrarLinhaCabecalho(linhas, camposObrigatorios) {
   return linhas.findIndex((linha) => {
     const campos = (linha || []).map((valor) => normalizarCabecalho(valor).replace(/\s+/g, ""));
@@ -2182,7 +2196,7 @@ function montarReceitasPlanilha(workbook) {
   const receitas = new Map();
   const receitasPorNome = new Map();
   for (const linha of linhas.slice(idxCabecalho + 1)) {
-    const id = String(linha?.[idxId] ?? "").trim();
+    const id = normalizarCodigoPlanilha(linha?.[idxId]);
     if (!id) continue;
     const itens = [];
     for (const par of pares) {
@@ -2210,7 +2224,7 @@ function montarReceitasPorAutonomo(workbook) {
   const idxReceita = cabecalho.indexOf("receta");
   const resultado = new Map();
   for (const linha of linhas.slice(idxCabecalho + 1)) {
-    const id = String(linha?.[idxId] ?? "").trim();
+    const id = normalizarCodigoPlanilha(linha?.[idxId]);
     const receita = normalizarTexto(linha?.[idxReceita]);
     if (id && receita) resultado.set(id, receita);
   }
@@ -2245,15 +2259,19 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
 
   for (const linha of linhas.slice(idxCabecalho + 1)) {
     if (!linha || linha.every((v) => v == null || v === "")) continue;
-    const cargaCodigo = String(linha[idxId] ?? "").trim();
+    const cargaCodigo = normalizarCodigoPlanilha(linha[idxId]);
     const data = normalizarDataPlanilha(linha[idxData]);
-    const receitaId = String(linha[idxReceita] ?? "").trim();
-    const autonomoId = idxAutonomo !== -1 ? String(linha[idxAutonomo] ?? "").trim() : "";
+    const receitaId = normalizarCodigoPlanilha(linha[idxReceita]);
+    const autonomoId = idxAutonomo !== -1 ? normalizarCodigoPlanilha(linha[idxAutonomo]) : "";
     // Alguns modelos filtrados/reexportados mudam os códigos da coluna
     // "Numero". Quando o ID direto não bate, usa IdAutonomo -> AUTONOMOS.Receta
     // -> RECETAS.Nombre, que representa a mesma formulação.
     const nomeReceitaAutonomo = receitaPorAutonomo.get(autonomoId);
-    const receita = receitas.get(receitaId) || (nomeReceitaAutonomo ? receitasPorNome.get(nomeReceitaAutonomo) : null);
+    const receita =
+      receitas.get(receitaId) ||
+      // Alguns arquivos trocam o identificador da receita pelo autônomo.
+      receitas.get(autonomoId) ||
+      (nomeReceitaAutonomo ? receitasPorNome.get(nomeReceitaAutonomo) : null);
     if (!cargaCodigo || !data || !receita || receitaId === "0") {
       if (receitaId && receitaId !== "0" && !receita) receitasAusentes.add(receitaId);
       ignoradas++;
@@ -2304,7 +2322,13 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
   }
 
   novos.sort((a, b) => a.data.localeCompare(b.data) || String(a.hora || "").localeCompare(String(b.hora || "")));
-  return { novos, ignoradas, jaExistentes, receitasAusentes: [...receitasAusentes] };
+  return {
+    novos,
+    ignoradas,
+    jaExistentes,
+    receitasAusentes: [...receitasAusentes],
+    receitasDisponiveis: [...receitas.keys()],
+  };
 }
 
 function ImportarCargasPlanilha({ cargasExistentes, onCancel, onImportar, onConcluido }) {
@@ -2365,7 +2389,12 @@ function ImportarCargasPlanilha({ cargasExistentes, onCancel, onImportar, onConc
             {resultado.jaExistentes > 0 && <div>{resultado.jaExistentes} já existiam e não serão duplicadas</div>}
             {resultado.ignoradas > 0 && <div>{resultado.ignoradas} registro(s) sem carga/receita válida, ignorado(s)</div>}
             {resultado.receitasAusentes.length > 0 && (
-              <div style={{ color: "#B8763E" }}>Receitas não encontradas: {resultado.receitasAusentes.join(", ")}</div>
+              <>
+                <div style={{ color: "#B8763E" }}>Receitas não encontradas: {resultado.receitasAusentes.join(", ")}</div>
+                <div style={{ color: "#8A6A4A" }}>
+                  Códigos encontrados na aba RECETAS: {resultado.receitasDisponiveis.length ? resultado.receitasDisponiveis.join(", ") : "nenhum"}
+                </div>
+              </>
             )}
           </div>
           <PrimaryButton disabled={!resultado.novos.length || importando} onClick={confirmar}>
