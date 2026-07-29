@@ -134,8 +134,10 @@ export default function Home() {
             mostrarToast("Consumo registrado");
           }}
           onImportarConsumos={async (linhas) => {
-            await dados.importarConsumosEmLote(linhas);
-            mostrarToast(`${linhas.length} lançamento${linhas.length > 1 ? "s" : ""} importado${linhas.length > 1 ? "s" : ""}`);
+            const importados = await dados.importarConsumosEmLote(linhas);
+            const quantidade = importados?.length || 0;
+            mostrarToast(`${quantidade} lançamento${quantidade !== 1 ? "s" : ""} importado${quantidade !== 1 ? "s" : ""}`);
+            return importados;
           }}
           onUpdateConsumo={async (id, c) => {
             await dados.atualizarConsumo(id, c);

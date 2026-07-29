@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
+import { read as lerArquivoExcel, utils as xlsxUtils } from "xlsx";
 import {
   Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
   LayoutDashboard, Beef, ClipboardList, BarChart3, Map, Settings2,
@@ -1767,9 +1768,208 @@ function normalizarNumeroPlanilha(valor) {
   return Number.isFinite(n) ? n : null;
 }
 
+function encontrarLinhaCabecalho(linhas, camposObrigatorios) {
+  return linhas.findIndex((linha) => {
+    const campos = (linha || []).map((valor) => normalizarCabecalho(valor).replace(/\s+/g, ""));
+    return camposObrigatorios.every((campo) => campos.includes(campo));
+  });
+}
+
+function encontrarLoteDescarga(valor, lotes) {
+  const textoAlvo = normalizarTexto(valor);
+  if (!textoAlvo) return null;
+  const porTexto = lotes.find((l) => normalizarTexto(l.nome) === textoAlvo);
+  if (porTexto) return porTexto;
+
+  // No arquivo bruto, códigos como "3B" podem representar outro curral e
+  // não devem cair acidentalmente no "Lote 3". Já zeros à esquerda ("08")
+  // são apenas outra escrita para o mesmo número.
+  if (!/^\d+$/.test(textoAlvo)) return null;
+  const numeroAlvo = String(Number(textoAlvo));
+  const porNumero = lotes.filter((l) => {
+    const numero = extrairNumero(l.nome);
+    return numero != null && String(Number(numero)) === numeroAlvo;
+  });
+  return porNumero.length === 1 ? porNumero[0] : null;
+}
+
+function adicionarAoGrupo(grupos, lote, data, valor, fase, ms) {
+  const chave = `${lote.id}|${data}`;
+  if (grupos.has(chave)) {
+    const grupo = grupos.get(chave);
+    grupo.consumoTotalLote += valor;
+    grupo.linhas += 1;
+    if (grupo.fase == null) grupo.fase = fase;
+    if (grupo.ms == null) grupo.ms = ms;
+    return true;
+  }
+  grupos.set(chave, {
+    loteId: lote.id,
+    loteNome: lote.nome,
+    data,
+    consumoTotalLote: valor,
+    fase,
+    ms,
+    linhas: 1,
+  });
+  return false;
+}
+
+function montarResultadoImportacao(grupos, existentes, detalhes = {}) {
+  const novos = [];
+  let jaExistentes = 0;
+  for (const [chave, grupo] of grupos) {
+    if (existentes.has(chave)) jaExistentes++;
+    else novos.push(grupo);
+  }
+  novos.sort((a, b) => a.data.localeCompare(b.data) || a.loteNome.localeCompare(b.loteNome, "pt-BR", { numeric: true }));
+  return { novos, jaExistentes, ...detalhes };
+}
+
+function processarPlanilhaSimples(workbook, lotes, existentes) {
+  const aba = workbook.Sheets[workbook.SheetNames[0]];
+  const linhas = xlsxUtils.sheet_to_json(aba, { header: 1, defval: null });
+  if (linhas.length < 2) throw new Error("Planilha vazia ou sem linhas de dados.");
+
+  const cabecalho = linhas[0];
+  const idxData = indiceColuna(cabecalho, ["data"]);
+  const idxLote = indiceColuna(cabecalho, ["lote", "curral"]);
+  const idxQuant = indiceColuna(cabecalho, ["quanti", "quantidade", "consumo"]);
+  const idxDieta = indiceColuna(cabecalho, ["dieta", "fase"]);
+  const idxMs = indiceColuna(cabecalho, ["ms"]);
+  const faltando = [];
+  if (idxData === -1) faltando.push("Data");
+  if (idxLote === -1) faltando.push("Lote");
+  if (idxQuant === -1) faltando.push("Quantidade");
+  if (faltando.length > 0) {
+    throw new Error(`Não encontrei a coluna de ${faltando.join(" / ")} na planilha — confira os cabeçalhos.`);
+  }
+
+  const grupos = new Map();
+  const naoReconhecidos = new Set();
+  let linhasIgnoradas = 0;
+  let totalLinhasSomadas = 0;
+  for (const linha of linhas.slice(1)) {
+    if (!linha || linha.every((v) => v == null || v === "")) continue;
+    const data = normalizarDataPlanilha(linha[idxData]);
+    const lote = encontrarLotePorNomeOuNumero(linha[idxLote], lotes);
+    const valor = normalizarNumeroPlanilha(linha[idxQuant]);
+    if (!data || !lote || valor == null) {
+      if (!lote && linha[idxLote] != null && linha[idxLote] !== "") naoReconhecidos.add(String(linha[idxLote]));
+      linhasIgnoradas++;
+      continue;
+    }
+    const fase = idxDieta !== -1 ? normalizarFasePlanilha(linha[idxDieta]) : null;
+    const ms = idxMs !== -1 ? normalizarNumeroPlanilha(linha[idxMs]) : null;
+    if (adicionarAoGrupo(grupos, lote, data, valor, fase, ms)) totalLinhasSomadas++;
+  }
+
+  return montarResultadoImportacao(grupos, existentes, {
+    formato: "Planilha de consumo",
+    naoReconhecidos: [...naoReconhecidos],
+    linhasIgnoradas,
+    totalLinhasSomadas,
+  });
+}
+
+function linhasDaAba(workbook, nome) {
+  const nomeReal = workbook.SheetNames.find((n) => normalizarCabecalho(n).replace(/\s+/g, "") === nome);
+  if (!nomeReal) return null;
+  return xlsxUtils.sheet_to_json(workbook.Sheets[nomeReal], { header: 1, defval: null });
+}
+
+function montarFasesPorCarga(workbook) {
+  const linhasCargas = linhasDaAba(workbook, "cargas");
+  const linhasAutonomos = linhasDaAba(workbook, "autonomos");
+  if (!linhasCargas || !linhasAutonomos) return new Map();
+
+  const cabAut = encontrarLinhaCabecalho(linhasAutonomos, ["id", "receta"]);
+  const cabCarga = encontrarLinhaCabecalho(linhasCargas, ["id", "idautonomo"]);
+  if (cabAut === -1 || cabCarga === -1) return new Map();
+
+  const hAut = linhasAutonomos[cabAut].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxAutId = hAut.indexOf("id");
+  const idxReceita = hAut.indexOf("receta");
+  const fasePorAutonomo = new Map();
+  for (const linha of linhasAutonomos.slice(cabAut + 1)) {
+    const id = String(linha?.[idxAutId] ?? "").trim();
+    const fase = normalizarFasePlanilha(linha?.[idxReceita]);
+    if (id && fase) fasePorAutonomo.set(id, fase);
+  }
+
+  const hCarga = linhasCargas[cabCarga].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxCargaId = hCarga.indexOf("id");
+  const idxAutonomo = hCarga.indexOf("idautonomo");
+  const fasePorCarga = new Map();
+  for (const linha of linhasCargas.slice(cabCarga + 1)) {
+    const cargaId = String(linha?.[idxCargaId] ?? "").trim();
+    const autonomoId = String(linha?.[idxAutonomo] ?? "").trim();
+    const fase = fasePorAutonomo.get(autonomoId);
+    if (cargaId && fase) fasePorCarga.set(cargaId, fase);
+  }
+  return fasePorCarga;
+}
+
+function processarPlanilhaVagao(workbook, lotes, existentes) {
+  const linhas = linhasDaAba(workbook, "descargas");
+  if (!linhas) throw new Error('Não encontrei a aba "DESCARGAS" no arquivo do vagão.');
+
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["data", "idcarga"]);
+  if (idxCabecalho === -1) throw new Error('Não encontrei as colunas "Data" e "id_carga" na aba DESCARGAS.');
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxData = cabecalho.indexOf("data");
+  const idxCarga = cabecalho.indexOf("idcarga");
+  const pares = [];
+  for (let numero = 1; numero <= 15; numero++) {
+    const idxLote = cabecalho.indexOf(`ing${numero}`);
+    const idxPeso = cabecalho.indexOf(`peso${numero}`);
+    if (idxLote !== -1 && idxPeso !== -1) pares.push({ idxLote, idxPeso });
+  }
+  if (pares.length === 0) throw new Error("Não encontrei os pares de lote e peso na aba DESCARGAS.");
+
+  const fasePorCarga = montarFasesPorCarga(workbook);
+  const grupos = new Map();
+  const naoReconhecidos = new Set();
+  let linhasIgnoradas = 0;
+  let totalLinhasSomadas = 0;
+  let descargasLidas = 0;
+
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    if (!linha || linha.every((v) => v == null || v === "")) continue;
+    const data = normalizarDataPlanilha(linha[idxData]);
+    if (!data) {
+      linhasIgnoradas++;
+      continue;
+    }
+    const fase = fasePorCarga.get(String(linha[idxCarga] ?? "").trim()) || null;
+    let descargaValida = false;
+    for (const { idxLote, idxPeso } of pares) {
+      const codigoLote = linha[idxLote];
+      const valor = normalizarNumeroPlanilha(linha[idxPeso]);
+      if (codigoLote == null || codigoLote === "" || valor == null || valor <= 0) continue;
+      const lote = encontrarLoteDescarga(codigoLote, lotes);
+      if (!lote) {
+        naoReconhecidos.add(String(codigoLote).trim());
+        linhasIgnoradas++;
+        continue;
+      }
+      descargaValida = true;
+      if (adicionarAoGrupo(grupos, lote, data, valor, fase, null)) totalLinhasSomadas++;
+    }
+    if (descargaValida) descargasLidas++;
+  }
+
+  return montarResultadoImportacao(grupos, existentes, {
+    formato: "Arquivo bruto do vagão",
+    naoReconhecidos: [...naoReconhecidos].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+    linhasIgnoradas,
+    totalLinhasSomadas,
+    descargasLidas,
+  });
+}
+
 // Importa consumo diário de vários lotes de uma vez a partir de uma planilha
-// Excel no mesmo formato de pivot table que já vem do sistema do cliente:
-// uma coluna de data e uma coluna por lote (cabeçalho = nome/número do lote).
+// Excel simples ou diretamente do arquivo bruto gerado pelo vagão.
 function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImportar, onConcluido }) {
   const [processando, setProcessando] = useState(false);
   const [erro, setErro] = useState(null);
@@ -1786,76 +1986,14 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
     setResultado(null);
     setConcluido(null);
     try {
-      const XLSX = await import("xlsx");
       const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-      const aba = workbook.Sheets[workbook.SheetNames[0]];
-      const linhas = XLSX.utils.sheet_to_json(aba, { header: 1, defval: null });
-      if (linhas.length < 2) throw new Error("Planilha vazia ou sem linhas de dados.");
-
-      const cabecalho = linhas[0];
-      const idxData = indiceColuna(cabecalho, ["data"]);
-      const idxLote = indiceColuna(cabecalho, ["lote", "curral"]);
-      const idxQuant = indiceColuna(cabecalho, ["quanti", "quantidade", "consumo"]);
-      const idxDieta = indiceColuna(cabecalho, ["dieta", "fase"]);
-      const idxMs = indiceColuna(cabecalho, ["ms"]);
-      const faltando = [];
-      if (idxData === -1) faltando.push("Data");
-      if (idxLote === -1) faltando.push("Lote");
-      if (idxQuant === -1) faltando.push("Quantidade");
-      if (faltando.length > 0) {
-        throw new Error(`Não encontrei a coluna de ${faltando.join(" / ")} na planilha — confira os cabeçalhos.`);
-      }
-
-      // Junta linhas do mesmo lote+data (ex: dois tratos no mesmo dia) somando
-      // a quantidade — a fase/MS ficam com o primeiro valor preenchido do grupo.
-      const grupos = new Map();
-      const naoReconhecidos = new Set();
-      let linhasIgnoradas = 0;
-      let totalLinhasSomadas = 0;
-
-      for (const linha of linhas.slice(1)) {
-        if (!linha || linha.every((v) => v == null || v === "")) continue;
-        const data = normalizarDataPlanilha(linha[idxData]);
-        const lote = encontrarLotePorNomeOuNumero(linha[idxLote], lotes);
-        const valor = normalizarNumeroPlanilha(linha[idxQuant]);
-        if (!data || !lote || valor == null) {
-          if (!lote && linha[idxLote] != null && linha[idxLote] !== "") naoReconhecidos.add(String(linha[idxLote]));
-          linhasIgnoradas++;
-          continue;
-        }
-        const chave = `${lote.id}|${data}`;
-        const fase = idxDieta !== -1 ? normalizarFasePlanilha(linha[idxDieta]) : null;
-        const ms = idxMs !== -1 ? normalizarNumeroPlanilha(linha[idxMs]) : null;
-        if (grupos.has(chave)) {
-          const grupo = grupos.get(chave);
-          grupo.consumoTotalLote += valor;
-          grupo.linhas += 1;
-          if (grupo.fase == null) grupo.fase = fase;
-          if (grupo.ms == null) grupo.ms = ms;
-          totalLinhasSomadas++;
-        } else {
-          grupos.set(chave, { loteId: lote.id, loteNome: lote.nome, data, consumoTotalLote: valor, fase, ms, linhas: 1 });
-        }
-      }
-
-      const novos = [];
-      let jaExistentes = 0;
-      for (const [chave, grupo] of grupos) {
-        if (existentes.has(chave)) {
-          jaExistentes++;
-          continue;
-        }
-        novos.push(grupo);
-      }
-
-      setResultado({
-        novos,
-        naoReconhecidos: [...naoReconhecidos],
-        jaExistentes,
-        linhasIgnoradas,
-        totalLinhasSomadas,
-      });
+      const workbook = lerArquivoExcel(buffer, { type: "array", cellDates: true });
+      const temDescargas = workbook.SheetNames.some((nome) => normalizarCabecalho(nome).replace(/\s+/g, "") === "descargas");
+      setResultado(
+        temDescargas
+          ? processarPlanilhaVagao(workbook, lotes, existentes)
+          : processarPlanilhaSimples(workbook, lotes, existentes)
+      );
     } catch (e) {
       setErro(e.message || "Não foi possível ler essa planilha.");
     } finally {
@@ -1881,8 +2019,8 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
           custo_kg_mn: n.fase ? custoKgMnDaFase(lote, n.fase) : null,
         };
       });
-      await onImportar(linhas);
-      setConcluido(linhas.length);
+      const importados = await onImportar(linhas);
+      setConcluido(Array.isArray(importados) ? importados.length : linhas.length);
     } finally {
       setImportando(false);
     }
@@ -1894,11 +2032,9 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
 
       <div style={styles.card}>
         <div style={{ fontSize: 13, color: "#5C5C58", padding: "10px 0" }}>
-          Planilha Excel (.xlsx) com uma linha por lote/data e colunas "Data",
-          "Lote", "Quantidade" (ou "Consumo") — "Dieta" e "MS" são opcionais.
-          O nome do lote na planilha precisa bater com o do app (ex: "3"
-          reconhece "Lote 3"). Se o mesmo lote aparecer mais de uma vez no
-          mesmo dia, as quantidades são somadas num único lançamento diário.
+          Aceita a planilha simples de consumo ou o arquivo bruto exportado
+          pelo vagão, com as abas CARGAS e DESCARGAS. As descargas do mesmo
+          lote são somadas automaticamente num único consumo diário.
         </div>
         <input
           type="file"
@@ -1916,6 +2052,8 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
           <div style={{ ...styles.card, marginTop: 10 }}>
             <div style={{ fontSize: 13.5, fontWeight: 600, padding: "10px 0 4px" }}>Resumo da planilha</div>
             <div style={{ fontSize: 13, color: "#5C5C58", lineHeight: 1.6 }}>
+              <div>{resultado.formato}</div>
+              {resultado.descargasLidas != null && <div>{resultado.descargasLidas} descarga(s) válida(s) lida(s)</div>}
               {resultado.novos.length} lançamento{resultado.novos.length !== 1 ? "s" : ""} novo
               {resultado.novos.length !== 1 ? "s" : ""} pronto{resultado.novos.length !== 1 ? "s" : ""} pra importar
               {resultado.totalLinhasSomadas > 0 && (
@@ -1925,7 +2063,7 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
                 <div>{resultado.jaExistentes} já existiam no app (não serão duplicados)</div>
               )}
               {resultado.linhasIgnoradas > 0 && (
-                <div>{resultado.linhasIgnoradas} linha(s) sem data/lote/quantidade válidos, ignorada(s)</div>
+                <div>{resultado.linhasIgnoradas} registro(s) sem data/lote/quantidade válidos, ignorado(s)</div>
               )}
               {resultado.naoReconhecidos.length > 0 && (
                 <div style={{ color: "#B8763E", marginTop: 4 }}>
@@ -1978,11 +2116,10 @@ function ImportarLeituraCochoPlanilha({ lotes, leiturasCocho, consumosPorLote, o
     setResultado(null);
     setConcluido(null);
     try {
-      const XLSX = await import("xlsx");
       const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+      const workbook = lerArquivoExcel(buffer, { type: "array", cellDates: true });
       const aba = workbook.Sheets[workbook.SheetNames[0]];
-      const linhas = XLSX.utils.sheet_to_json(aba, { header: 1, defval: null });
+      const linhas = xlsxUtils.sheet_to_json(aba, { header: 1, defval: null });
       if (linhas.length < 2) throw new Error("Planilha vazia ou sem linhas de dados.");
 
       const cabecalho = linhas[0];

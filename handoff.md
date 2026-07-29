@@ -530,6 +530,17 @@ adicionada nesta sessão para atender a Belmont).
     três colunas no celular e nove no computador. A correção vale para novos
     lançamentos; históricos já salvos preservam o ajuste e a quantidade
     esperada registrados na época.
+40. **Importação direta do arquivo bruto do vagão e consumo diário único**:
+    o importador reconhece automaticamente a aba `DESCARGAS`, encontra os
+    pares lote/peso, soma todas as descargas do mesmo lote no mesmo dia e
+    tenta identificar a fase pelas abas `CARGAS` e `AUTONOMOS`. Códigos com
+    zero à esquerda (ex.: `08`) são reconhecidos, enquanto códigos distintos
+    (ex.: `3B`) não são misturados com o lote numérico. O leitor XLSX passou
+    a ser importado estaticamente, corrigindo a falha do Safari/PWA. No banco,
+    a migration `garantir_consumo_unico_por_lote_data` removeu 80 repetições
+    antigas mantendo o lançamento mais recente e criou uma restrição única em
+    `(lote_id, data)`. Novas importações ignoram conflitos, então repetir o
+    arquivo não duplica nem sobrescreve um consumo diário já confirmado.
 
 ## Pendências / coisas para prestar atenção
 
