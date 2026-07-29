@@ -4,7 +4,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
-  LayoutDashboard, Beef, ClipboardList, BarChart3, Map, Settings2,
+  LayoutDashboard, Beef, ClipboardList, BarChart3, Map as MapIcon, Settings2,
 } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
@@ -460,7 +460,7 @@ export default function ConfinamentoTab({
           <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos" || aba === "lotes-finalizados"} onClick={() => setAba("lotes-ativos")} />
           <NavArea icon={ClipboardList} label="Rotina" active={aba === "cocho" || aba === "esperado"} onClick={() => setAba(onRegistrarLeituraCocho ? "cocho" : "esperado")} />
           <NavArea icon={BarChart3} label="Análises" active={aba === "graficos"} onClick={() => setAba("graficos")} />
-          <NavArea icon={Map} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
+          <NavArea icon={MapIcon} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
         </nav>
 
         <main className="desktop-main-content">

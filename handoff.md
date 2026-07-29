@@ -554,6 +554,11 @@ adicionada nesta sessão para atender a Belmont).
     transformação do Next/Webpack. Tanto consumo quanto leitura de cocho usam
     esse mesmo carregador e exibem uma mensagem amigável se o arquivo não
     puder ser carregado.
+43. **Conflito entre ícone e estrutura `Map` corrigido**: o ícone `Map` do
+    Lucide sombreava o `Map` nativo do JavaScript dentro do importador. Por
+    isso, ao agrupar lotes, o navegador tentava instanciar o componente do
+    ícone e mostrava `Object is not a constructor (evaluating 'new u.Z')`.
+    O ícone passou a se chamar `MapIcon`, preservando o `Map` nativo.
 
 ## Pendências / coisas para prestar atenção
 
