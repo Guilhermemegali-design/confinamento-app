@@ -541,6 +541,7 @@ adicionada nesta sessão para atender a Belmont).
     antigas mantendo o lançamento mais recente e criou uma restrição única em
     `(lote_id, data)`. Novas importações ignoram conflitos, então repetir o
     arquivo não duplica nem sobrescreve um consumo diário já confirmado.
+    Lançamentos manuais também não substituem uma data existente.
 
 ## Pendências / coisas para prestar atenção
 
