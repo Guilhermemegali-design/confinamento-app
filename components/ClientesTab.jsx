@@ -15,7 +15,7 @@ export default function ClientesTab({
   onAddSaida, onDeleteSaida,
   onAddConsumo, onUpdateConsumo, onDeleteConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
-  onImportarCargas, onSalvarMsIngrediente,
+  onImportarCargas, onSalvarMsIngrediente, onSincronizarCustosMs,
   onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais, onMoverLoteParaCurral,
   onRemoveAcessoCliente, onUpdateAcessoCliente,
 }) {
@@ -63,6 +63,7 @@ export default function ClientesTab({
         onImportarLeiturasCocho={onImportarLeiturasCocho}
         onImportarCargas={onImportarCargas && ((linhas) => onImportarCargas(cliente.id, linhas))}
         onSalvarMsIngrediente={onSalvarMsIngrediente && ((ingrediente) => onSalvarMsIngrediente(cliente.id, ingrediente))}
+        onSincronizarCustosMs={onSincronizarCustosMs}
         onAdicionarCurral={onAddCurral}
         onAtualizarCurral={onUpdateCurral}
         onExcluirCurral={onDeleteCurral}

@@ -166,6 +166,11 @@ export default function Home() {
             await dados.salvarMsIngrediente(clienteId, ingrediente);
             mostrarToast("Matéria seca atualizada");
           }}
+          onSincronizarCustosMs={async (atualizacoes) => {
+            const sincronizados = await dados.sincronizarCustosMsConsumos(atualizacoes);
+            mostrarToast(`${sincronizados.length} consumo${sincronizados.length !== 1 ? "s" : ""} sincronizado${sincronizados.length !== 1 ? "s" : ""}`);
+            return sincronizados;
+          }}
           onAddCurral={async (clienteId, c) => {
             await dados.adicionarCurral(clienteId, c);
             mostrarToast("Curral marcado");

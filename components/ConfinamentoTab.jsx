@@ -100,7 +100,7 @@ function usarOrdenacaoPersistida(clienteId) {
 
 function usarAbaPersistida(clienteId) {
   const chave = `confinamento_aba_${clienteId || "geral"}`;
-  const abasValidas = ["painel", "lotes-ativos", "lotes-finalizados", "cocho", "esperado", "graficos", "mapa"];
+  const abasValidas = ["painel", "lotes-ativos", "lotes-finalizados", "cocho", "esperado", "graficos", "cargas", "mapa"];
   const [aba, setAbaState] = useState(() => {
     if (typeof window === "undefined") return "painel";
     const salva = window.localStorage.getItem(chave);
@@ -168,7 +168,7 @@ export default function ConfinamentoTab({
   onAdicionarSaida, onExcluirSaida,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
-  onImportarCargas, onSalvarMsIngrediente,
+  onImportarCargas, onSalvarMsIngrediente, onSincronizarCustosMs,
   onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onMoverLoteParaCurral, onAtualizarCliente,
   onBack, onGerenciarCliente,
 }) {
@@ -340,8 +340,12 @@ export default function ConfinamentoTab({
     return (
       <ImportarCargasPlanilha
         cargasExistentes={cargasVagao}
+        lotes={lotes}
+        consumos={consumos}
+        ingredientesMs={ingredientesMs}
         onCancel={() => setTela({ modo: "lista" })}
         onImportar={onImportarCargas}
+        onSincronizar={onSincronizarCustosMs}
         onConcluido={() => {
           setTela({ modo: "lista" });
           setAba("cargas");
@@ -524,7 +528,10 @@ export default function ConfinamentoTab({
         <AbaCargas
           cargas={cargasVagao}
           ingredientesMs={ingredientesMs}
+          lotes={lotes}
+          consumos={consumos}
           onSalvarMs={onSalvarMsIngrediente}
+          onSincronizar={onSincronizarCustosMs}
           onImportar={onImportarCargas && (() => setTela({ modo: "importar-cargas" }))}
         />
       ) : aba === "mapa" ? (
@@ -2231,6 +2238,37 @@ function montarReceitasPorAutonomo(workbook) {
   return resultado;
 }
 
+function montarDescargasPorCarga(workbook) {
+  const linhas = linhasDaAba(workbook, "descargas");
+  if (!linhas) return new Map();
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["data", "idcarga"]);
+  if (idxCabecalho === -1) return new Map();
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxData = cabecalho.indexOf("data");
+  const idxCarga = cabecalho.indexOf("idcarga");
+  const pares = [];
+  for (let numero = 1; numero <= 15; numero++) {
+    const idxLote = cabecalho.indexOf(`ing${numero}`);
+    const idxPeso = cabecalho.indexOf(`peso${numero}`);
+    if (idxLote !== -1 && idxPeso !== -1) pares.push({ idxLote, idxPeso });
+  }
+  const descargas = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const cargaCodigo = normalizarCodigoPlanilha(linha?.[idxCarga]);
+    const data = normalizarDataPlanilha(linha?.[idxData]);
+    if (!cargaCodigo || !data) continue;
+    const itens = descargas.get(cargaCodigo) || [];
+    for (const { idxLote, idxPeso } of pares) {
+      const loteCodigo = String(linha?.[idxLote] ?? "").trim();
+      const peso = normalizarNumeroPlanilha(linha?.[idxPeso]);
+      if (!loteCodigo || loteCodigo === "0" || peso == null || peso <= 0) continue;
+      itens.push({ data, lote_codigo: loteCodigo, peso });
+    }
+    if (itens.length) descargas.set(cargaCodigo, itens);
+  }
+  return descargas;
+}
+
 function processarCargasPlanilha(workbook, cargasExistentes) {
   const linhas = linhasDaAba(workbook, "cargas");
   if (!linhas) throw new Error('Não encontrei a aba "CARGAS" no arquivo do vagão.');
@@ -2251,7 +2289,8 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
 
   const { receitas, receitasPorNome } = montarReceitasPlanilha(workbook);
   const receitaPorAutonomo = montarReceitasPorAutonomo(workbook);
-  const existentes = new Set(cargasExistentes.map((c) => String(c.carga_codigo)));
+  const descargasPorCarga = montarDescargasPorCarga(workbook);
+  const existentes = new Map(cargasExistentes.map((c) => [String(c.carga_codigo), c]));
   const novos = [];
   const receitasAusentes = new Set();
   let ignoradas = 0;
@@ -2277,7 +2316,8 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
       ignoradas++;
       continue;
     }
-    if (existentes.has(cargaCodigo)) {
+    const cargaExistente = existentes.get(cargaCodigo);
+    if (cargaExistente && Array.isArray(cargaExistente.descargas) && cargaExistente.descargas.length > 0) {
       jaExistentes++;
       continue;
     }
@@ -2318,6 +2358,7 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
       peso_real: totalReal,
       peso_previsto: totalProgramado * fator,
       itens,
+      descargas: descargasPorCarga.get(cargaCodigo) || [],
     });
   }
 
@@ -2331,7 +2372,65 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
   };
 }
 
-function ImportarCargasPlanilha({ cargasExistentes, onCancel, onImportar, onConcluido }) {
+function calcularComposicaoCarga(carga, configuracoes) {
+  const itens = (Array.isArray(carga.itens) ? carga.itens : []).filter((item) => Number(item.peso_real || 0) > 0);
+  const pesoTotal = itens.reduce((soma, item) => soma + Number(item.peso_real || 0), 0);
+  if (!pesoTotal) return {};
+  const todosComMs = itens.every((item) => Number.isFinite(configuracoes.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente))?.ms));
+  const todosComCusto = itens.every((item) => Number.isFinite(configuracoes.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente))?.custo));
+  return {
+    ms: todosComMs
+      ? itens.reduce((soma, item) => soma + Number(item.peso_real) * configuracoes.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)).ms, 0) / pesoTotal
+      : null,
+    custo: todosComCusto
+      ? itens.reduce((soma, item) => soma + Number(item.peso_real) * configuracoes.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)).custo, 0) / pesoTotal
+      : null,
+  };
+}
+
+function montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesMs) {
+  const configuracoes = new Map(ingredientesMs.map((item) => [
+    item.ingrediente_chave,
+    {
+      ms: item.ms_percentual == null ? null : Number(item.ms_percentual),
+      custo: item.custo_kg_mn == null ? null : Number(item.custo_kg_mn),
+    },
+  ]));
+  const grupos = new Map();
+  for (const carga of cargas) {
+    const composicao = calcularComposicaoCarga(carga, configuracoes);
+    for (const descarga of Array.isArray(carga.descargas) ? carga.descargas : []) {
+      const lote = encontrarLoteDescarga(descarga.lote_codigo, lotes);
+      const peso = Number(descarga.peso || 0);
+      if (!lote || !descarga.data || peso <= 0) continue;
+      const chave = `${lote.id}|${descarga.data}`;
+      const grupo = grupos.get(chave) || { loteId: lote.id, data: descarga.data, peso: 0, pesoMs: 0, somaMs: 0, pesoCusto: 0, somaCusto: 0 };
+      grupo.peso += peso;
+      if (Number.isFinite(composicao.ms)) {
+        grupo.pesoMs += peso;
+        grupo.somaMs += peso * composicao.ms;
+      }
+      if (Number.isFinite(composicao.custo)) {
+        grupo.pesoCusto += peso;
+        grupo.somaCusto += peso * composicao.custo;
+      }
+      grupos.set(chave, grupo);
+    }
+  }
+  const consumoPorChave = new Map(consumos.map((consumo) => [`${consumo.lote_id}|${consumo.data}`, consumo]));
+  const atualizacoes = [];
+  for (const [chave, grupo] of grupos) {
+    const consumo = consumoPorChave.get(chave);
+    if (!consumo) continue;
+    const dados = {};
+    if (grupo.pesoMs === grupo.peso && grupo.peso > 0) dados.ms_dieta = grupo.somaMs / grupo.peso;
+    if (grupo.pesoCusto === grupo.peso && grupo.peso > 0) dados.custo_kg_mn = grupo.somaCusto / grupo.peso;
+    if (Object.keys(dados).length) atualizacoes.push({ id: consumo.id, ...dados });
+  }
+  return atualizacoes;
+}
+
+function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingredientesMs, onCancel, onImportar, onSincronizar, onConcluido }) {
   const [processando, setProcessando] = useState(false);
   const [importando, setImportando] = useState(false);
   const [erro, setErro] = useState(null);
@@ -2360,7 +2459,12 @@ function ImportarCargasPlanilha({ cargasExistentes, onCancel, onImportar, onConc
     setImportando(true);
     try {
       const importadas = await onImportar(resultado.novos);
-      setConcluido(Array.isArray(importadas) ? importadas.length : resultado.novos.length);
+      const cargasImportadas = Array.isArray(importadas) ? importadas : resultado.novos;
+      const atualizacoes = onSincronizar
+        ? montarSincronizacoesConsumoCargas([...cargasExistentes, ...cargasImportadas], lotes, consumos, ingredientesMs)
+        : [];
+      if (atualizacoes.length) await onSincronizar(atualizacoes);
+      setConcluido({ cargas: cargasImportadas.length, consumos: atualizacoes.length });
     } finally {
       setImportando(false);
     }
@@ -2406,7 +2510,8 @@ function ImportarCargasPlanilha({ cargasExistentes, onCancel, onImportar, onConc
       {concluido != null && (
         <div style={{ ...styles.card, marginTop: 10, textAlign: "center" }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#1F4D45", padding: "14px 0" }}>
-            {concluido} carga(s) importada(s) com sucesso.
+            {concluido.cargas} carga(s) importada(s) com sucesso.
+            {concluido.consumos > 0 && <div style={{ marginTop: 4 }}>{concluido.consumos} consumo(s) atualizado(s) com MS e custo das descargas.</div>}
           </div>
           <PrimaryButton onClick={onConcluido}>Ver análise das cargas</PrimaryButton>
         </div>
@@ -2422,10 +2527,13 @@ function corErroCarga(percentual) {
   return { cor: "#B4473D", fundo: "#FBE8E6" };
 }
 
-function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
+function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSincronizar, onImportar }) {
   const datas = [...new Set(cargas.map((c) => c.data))].sort((a, b) => b.localeCompare(a));
   const [dataEscolhida, setDataEscolhida] = useState("");
   const [salvando, setSalvando] = useState(null);
+  const [cargaExpandida, setCargaExpandida] = useState(null);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [mensagemSincronizacao, setMensagemSincronizacao] = useState("");
   const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
   const cargasDia = cargas.filter((c) => c.data === data);
   const msPorIngrediente = new Map(
@@ -2492,6 +2600,23 @@ function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
     }
   }
 
+  async function sincronizarConsumos() {
+    if (!onSincronizar) return;
+    setSincronizando(true);
+    setMensagemSincronizacao("");
+    try {
+      const atualizacoes = montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesMs);
+      await onSincronizar(atualizacoes);
+      setMensagemSincronizacao(
+        atualizacoes.length
+          ? `${atualizacoes.length} consumo(s) sincronizado(s) com as descargas.`
+          : "Nenhum consumo pôde ser sincronizado. Confira se as descargas, os lotes, a MS e os preços estão completos."
+      );
+    } finally {
+      setSincronizando(false);
+    }
+  }
+
   if (!cargas.length) {
     return (
       <div>
@@ -2528,6 +2653,18 @@ function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
         <div style={{ ...styles.card, marginBottom: 10, padding: 12, fontSize: 12.5, color: "#8A6420", background: "#FFF8E8" }}>
           {faltamMs > 0 && <div>Informe a MS de {faltamMs} ingrediente(s) para completar o total diário de matéria seca.</div>}
           {faltamCustos > 0 && <div>Informe o custo de {faltamCustos} ingrediente(s) para calcular o custo real das cargas e da dieta.</div>}
+        </div>
+      )}
+
+      {onSincronizar && (
+        <div style={{ ...styles.card, marginBottom: 10, padding: 12 }}>
+          <div style={{ fontSize: 12.5, color: "#5C5C58", lineHeight: 1.5, marginBottom: 8 }}>
+            Envie para o consumo diário a MS e o custo ponderados pelo peso descarregado em cada lote. A quantidade consumida não é alterada.
+          </div>
+          <button type="button" onClick={sincronizarConsumos} disabled={sincronizando} style={styles.secondaryActionBtn}>
+            {sincronizando ? "Sincronizando..." : "Sincronizar descargas com consumo"}
+          </button>
+          {mensagemSincronizacao && <div style={{ fontSize: 12, color: "#1F4D45", marginTop: 8 }}>{mensagemSincronizacao}</div>}
         </div>
       )}
 
@@ -2608,18 +2745,57 @@ function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
             Number.isFinite(custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)))
           );
           const custoKgCarga = Number(carga.peso_real || 0) > 0 ? custoCarga / Number(carga.peso_real) : null;
+          const chaveCarga = carga.id || carga.carga_codigo;
+          const expandida = cargaExpandida === chaveCarga;
           return (
-            <div key={carga.id || carga.carga_codigo} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "9px 0", borderTop: "1px solid #ECE9E2" }}>
-              <div>
-                <div style={{ fontWeight: 600 }}>Carga {carga.carga_codigo} · {carga.receita}</div>
-                <div style={{ fontSize: 11.5, color: "#777770" }}>
-                  {carga.hora || "Horário não informado"} · {Number(carga.peso_real || 0).toLocaleString("pt-BR")} kg
-                  {cargaComCustoCompleto && custoKgCarga != null ? ` · ${formatBRL(custoCarga)} · ${formatBRL(custoKgCarga)}/kg dieta` : ""}
+            <div key={chaveCarga} style={{ borderTop: "1px solid #ECE9E2" }}>
+              <button type="button" aria-expanded={expandida} onClick={() => setCargaExpandida(expandida ? null : chaveCarga)}
+                style={{ width: "100%", border: 0, background: "transparent", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "10px 0", cursor: "pointer", textAlign: "left", color: "inherit" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {expandida ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Carga {carga.carga_codigo} · {carga.receita}</div>
+                    <div style={{ fontSize: 11.5, color: "#777770" }}>
+                      {carga.hora || "Horário não informado"} · {Number(carga.peso_real || 0).toLocaleString("pt-BR")} kg
+                      {cargaComCustoCompleto && custoKgCarga != null ? ` · ${formatBRL(custoCarga)} · ${formatBRL(custoKgCarga)}/kg dieta` : ""}
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <span style={{ color: sinal.cor, background: sinal.fundo, padding: "5px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
-                erro {erro.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
-              </span>
+                <span style={{ color: sinal.cor, background: sinal.fundo, padding: "5px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
+                  erro {erro.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                </span>
+              </button>
+              {expandida && (
+                <div style={{ overflowX: "auto", padding: "0 0 10px 25px" }}>
+                  <table style={{ width: "100%", minWidth: 540, borderCollapse: "collapse", fontSize: 11.5 }}>
+                    <thead>
+                      <tr style={{ color: "#777770", textAlign: "right" }}>
+                        <th style={{ padding: "6px 8px", textAlign: "left" }}>Ingrediente</th>
+                        <th style={{ padding: "6px 8px" }}>Previsto</th>
+                        <th style={{ padding: "6px 8px" }}>Realizado</th>
+                        <th style={{ padding: "6px 8px" }}>Erro kg</th>
+                        <th style={{ padding: "6px 8px" }}>Erro %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {itens.map((item) => {
+                        const diferenca = Number(item.peso_real || 0) - Number(item.peso_previsto || 0);
+                        const percentual = Number(item.peso_previsto || 0) > 0 ? diferenca / Number(item.peso_previsto) * 100 : 0;
+                        const cor = corErroCarga(percentual);
+                        return (
+                          <tr key={item.ingrediente_chave || item.ingrediente} style={{ borderTop: "1px solid #F0EEE9", textAlign: "right" }}>
+                            <td style={{ padding: "7px 8px", textAlign: "left", fontWeight: 600 }}>{item.ingrediente}</td>
+                            <td style={{ padding: "7px 8px" }}>{Number(item.peso_previsto || 0).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg</td>
+                            <td style={{ padding: "7px 8px" }}>{Number(item.peso_real || 0).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg</td>
+                            <td style={{ padding: "7px 8px" }}>{diferenca > 0 ? "+" : ""}{diferenca.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg</td>
+                            <td style={{ padding: "7px 8px", color: cor.cor, fontWeight: 700 }}>{percentual > 0 ? "+" : ""}{percentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           );
         })}

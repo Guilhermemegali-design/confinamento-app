@@ -359,11 +359,32 @@ function PainelCliente({ cliente, somenteLeitura }) {
     }));
     const { data, error } = await supabase
       .from("cargas_vagao")
-      .upsert(paraInserir, { onConflict: "cliente_id,carga_codigo", ignoreDuplicates: true })
+      .upsert(paraInserir, { onConflict: "cliente_id,carga_codigo" })
       .select();
     if (error) throw error;
-    setCargasVagao((cs) => [...cs, ...(data || [])]);
+    const importadasPorId = new Map((data || []).map((carga) => [carga.id, carga]));
+    setCargasVagao((cs) => [
+      ...cs.map((carga) => importadasPorId.get(carga.id) || carga),
+      ...(data || []).filter((carga) => !cs.some((existente) => existente.id === carga.id)),
+    ]);
     return data || [];
+  }
+
+  async function sincronizarCustosMsConsumos(atualizacoes) {
+    if (atualizacoes.length === 0) return [];
+    const linhas = await Promise.all(atualizacoes.map(async ({ id, ...dados }) => {
+      const { data, error } = await supabase
+        .from("consumos_lote")
+        .update(dados)
+        .eq("id", id)
+        .select()
+        .single();
+      if (error) throw error;
+      return data;
+    }));
+    const porId = new Map(linhas.map((linha) => [linha.id, linha]));
+    setConsumos((cs) => cs.map((consumo) => porId.get(consumo.id) || consumo));
+    return linhas;
   }
 
   async function salvarMsIngrediente(ingrediente) {
@@ -496,6 +517,7 @@ function PainelCliente({ cliente, somenteLeitura }) {
           onImportarLeiturasCocho={somenteLeitura ? undefined : importarLeiturasCochoEmLote}
           onImportarCargas={somenteLeitura ? undefined : importarCargasEmLote}
           onSalvarMsIngrediente={somenteLeitura ? undefined : salvarMsIngrediente}
+          onSincronizarCustosMs={somenteLeitura ? undefined : sincronizarCustosMsConsumos}
           onAdicionarCurral={somenteLeitura ? undefined : adicionarCurral}
           onAtualizarCurral={somenteLeitura ? undefined : atualizarCurral}
           onExcluirCurral={somenteLeitura ? undefined : excluirCurral}
