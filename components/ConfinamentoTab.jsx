@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import { read as lerArquivoExcel, utils as xlsxUtils } from "xlsx";
 import {
   Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
   LayoutDashboard, Beef, ClipboardList, BarChart3, Map, Settings2,
@@ -20,6 +19,43 @@ import { BackHeader, SectionTitle, EmptyHint, Field, InputField, TextAreaField, 
 // Leaflet mexe com "window"/"document" ao criar o mapa — precisa ficar fora
 // do SSR do Next, senão quebra o build.
 const MapaCurrais = dynamic(() => import("./MapaCurrais"), { ssr: false });
+
+// O pacote ESM do SheetJS é transformado pelo bundler do Next e essa
+// transformação quebra construtores internos no Safari/PWA ("Object is not
+// a constructor"). Servimos a distribuição oficial de navegador sem
+// transformação e a carregamos somente quando o usuário escolhe um arquivo.
+let leitorExcelCarregado = null;
+let promessaLeitorExcel = null;
+function carregarLeitorExcel() {
+  if (leitorExcelCarregado) return Promise.resolve(leitorExcelCarregado);
+  if (typeof window === "undefined") return Promise.reject(new Error("O leitor Excel só pode ser usado no navegador."));
+  if (window.XLSX) {
+    leitorExcelCarregado = window.XLSX;
+    return Promise.resolve(leitorExcelCarregado);
+  }
+  if (!promessaLeitorExcel) {
+    promessaLeitorExcel = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/xlsx.full.min.js?v=0.20.3";
+      script.async = true;
+      script.onload = () => {
+        if (!window.XLSX) {
+          promessaLeitorExcel = null;
+          reject(new Error("O leitor Excel não iniciou corretamente. Feche e abra o aplicativo e tente novamente."));
+          return;
+        }
+        leitorExcelCarregado = window.XLSX;
+        resolve(leitorExcelCarregado);
+      };
+      script.onerror = () => {
+        promessaLeitorExcel = null;
+        reject(new Error("Não foi possível carregar o leitor Excel. Confira a conexão e tente novamente."));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return promessaLeitorExcel;
+}
 
 const FASES_DIETA = [
   { value: "adaptacao", label: "Adaptação" },
@@ -1828,7 +1864,7 @@ function montarResultadoImportacao(grupos, existentes, detalhes = {}) {
 
 function processarPlanilhaSimples(workbook, lotes, existentes) {
   const aba = workbook.Sheets[workbook.SheetNames[0]];
-  const linhas = xlsxUtils.sheet_to_json(aba, { header: 1, defval: null });
+  const linhas = leitorExcelCarregado.utils.sheet_to_json(aba, { header: 1, defval: null });
   if (linhas.length < 2) throw new Error("Planilha vazia ou sem linhas de dados.");
 
   const cabecalho = linhas[0];
@@ -1875,7 +1911,7 @@ function processarPlanilhaSimples(workbook, lotes, existentes) {
 function linhasDaAba(workbook, nome) {
   const nomeReal = workbook.SheetNames.find((n) => normalizarCabecalho(n).replace(/\s+/g, "") === nome);
   if (!nomeReal) return null;
-  return xlsxUtils.sheet_to_json(workbook.Sheets[nomeReal], { header: 1, defval: null });
+  return leitorExcelCarregado.utils.sheet_to_json(workbook.Sheets[nomeReal], { header: 1, defval: null });
 }
 
 function montarFasesPorCarga(workbook) {
@@ -1986,8 +2022,9 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
     setResultado(null);
     setConcluido(null);
     try {
+      const XLSX = await carregarLeitorExcel();
       const buffer = await file.arrayBuffer();
-      const workbook = lerArquivoExcel(buffer, { type: "array", cellDates: true });
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
       const temDescargas = workbook.SheetNames.some((nome) => normalizarCabecalho(nome).replace(/\s+/g, "") === "descargas");
       setResultado(
         temDescargas
@@ -2116,10 +2153,11 @@ function ImportarLeituraCochoPlanilha({ lotes, leiturasCocho, consumosPorLote, o
     setResultado(null);
     setConcluido(null);
     try {
+      const XLSX = await carregarLeitorExcel();
       const buffer = await file.arrayBuffer();
-      const workbook = lerArquivoExcel(buffer, { type: "array", cellDates: true });
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
       const aba = workbook.Sheets[workbook.SheetNames[0]];
-      const linhas = xlsxUtils.sheet_to_json(aba, { header: 1, defval: null });
+      const linhas = XLSX.utils.sheet_to_json(aba, { header: 1, defval: null });
       if (linhas.length < 2) throw new Error("Planilha vazia ou sem linhas de dados.");
 
       const cabecalho = linhas[0];

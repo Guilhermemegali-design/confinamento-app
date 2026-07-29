@@ -547,6 +547,13 @@ adicionada nesta sessão para atender a Belmont).
     portal agora faz a mesma importação em lote do consultor, ignorando
     conflitos em `(lote_id, data)`. A função só é fornecida para papéis com
     edição; usuários `leitor` continuam sem o botão.
+42. **Leitor Excel isolado do bundle para Safari/PWA**: mesmo com importação
+    ESM estática, o SheetJS continuava falhando no iPhone com `Object is not a
+    constructor`. A distribuição oficial de navegador foi copiada para
+    `public/xlsx.full.min.js` e agora é carregada sob demanda, sem passar pela
+    transformação do Next/Webpack. Tanto consumo quanto leitura de cocho usam
+    esse mesmo carregador e exibem uma mensagem amigável se o arquivo não
+    puder ser carregado.
 
 ## Pendências / coisas para prestar atenção
 
