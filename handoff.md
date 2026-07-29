@@ -573,6 +573,12 @@ adicionada nesta sessão para atender a Belmont).
     diário. As cargas ficam em `cargas_vagao`, com chave única
     `(cliente_id, carga_codigo)`, para repetir a planilha sem duplicar dados.
     Ambas as tabelas têm RLS para consultor e usuários vinculados ao cliente.
+46. **Custo persistente dos ingredientes e das cargas**: `ingredientes_ms`
+    também guarda `custo_kg_mn`. Na aba Cargas, cada ingrediente tem um campo
+    fixo de custo por kg, custo diário, e os cards passam a exibir custo total
+    das cargas, custo médio da dieta por kg de matéria natural e custo por kg
+    de matéria seca. O detalhamento individual mostra custo total e custo/kg
+    de cada carga quando todos os ingredientes usados têm preço informado.
 
 ## Pendências / coisas para prestar atenção
 

@@ -2370,7 +2370,16 @@ function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
   const [salvando, setSalvando] = useState(null);
   const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
   const cargasDia = cargas.filter((c) => c.data === data);
-  const msPorIngrediente = new Map(ingredientesMs.map((i) => [i.ingrediente_chave, Number(i.ms_percentual)]));
+  const msPorIngrediente = new Map(
+    ingredientesMs
+      .filter((i) => i.ms_percentual != null)
+      .map((i) => [i.ingrediente_chave, Number(i.ms_percentual)])
+  );
+  const custoPorIngrediente = new Map(
+    ingredientesMs
+      .filter((i) => i.custo_kg_mn != null)
+      .map((i) => [i.ingrediente_chave, Number(i.custo_kg_mn)])
+  );
   const resumo = new Map();
 
   for (const carga of cargasDia) {
@@ -2398,17 +2407,27 @@ function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
     return s + (Number.isFinite(ms) ? i.real * ms / 100 : 0);
   }, 0);
   const faltamMs = ingredientes.filter((i) => !Number.isFinite(msPorIngrediente.get(i.chave))).length;
+  const custoTotal = ingredientes.reduce((s, i) => {
+    const custo = custoPorIngrediente.get(i.chave);
+    return s + (Number.isFinite(custo) ? i.real * custo : 0);
+  }, 0);
+  const custoDietaKgMn = totalReal > 0 ? custoTotal / totalReal : null;
+  const custoDietaKgMs = totalMs > 0 ? custoTotal / totalMs : null;
+  const faltamCustos = ingredientes.filter((i) => !Number.isFinite(custoPorIngrediente.get(i.chave))).length;
 
-  async function salvarMs(item, valor) {
+  async function salvarConfiguracao(item, campo, valor) {
     if (!onSalvarMs) return;
-    const ms = normalizarNumeroPlanilha(valor);
-    if (ms == null || ms < 0 || ms > 100) return;
+    const numero = normalizarNumeroPlanilha(valor);
+    if (numero == null || numero < 0 || (campo === "ms_percentual" && numero > 100)) return;
+    const msAtual = msPorIngrediente.get(item.chave);
+    const custoAtual = custoPorIngrediente.get(item.chave);
     setSalvando(item.chave);
     try {
       await onSalvarMs({
         ingrediente_chave: item.chave,
         ingrediente_nome: item.nome,
-        ms_percentual: ms,
+        ms_percentual: campo === "ms_percentual" ? numero : Number.isFinite(msAtual) ? msAtual : null,
+        custo_kg_mn: campo === "custo_kg_mn" ? numero : Number.isFinite(custoAtual) ? custoAtual : null,
       });
     } finally {
       setSalvando(null);
@@ -2442,16 +2461,20 @@ function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
         <PainelCard label="Matéria natural" valor={`${totalReal.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`} />
         <PainelCard label="Erro absoluto" valor={`${erroMedio.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`} />
         <PainelCard label="Matéria seca" valor={`${totalMs.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg MS`} />
+        <PainelCard label="Custo total das cargas" valor={faltamCustos === 0 ? formatBRL(custoTotal) : "Preencha os custos"} />
+        <PainelCard label="Custo da dieta (MN)" valor={faltamCustos === 0 && custoDietaKgMn != null ? `${formatBRL(custoDietaKgMn)}/kg` : "—"} />
+        <PainelCard label="Custo da dieta (MS)" valor={faltamCustos === 0 && custoDietaKgMs != null ? `${formatBRL(custoDietaKgMs)}/kg MS` : "—"} />
       </div>
 
-      {faltamMs > 0 && (
+      {(faltamMs > 0 || faltamCustos > 0) && (
         <div style={{ ...styles.card, marginBottom: 10, padding: 12, fontSize: 12.5, color: "#8A6420", background: "#FFF8E8" }}>
-          Informe a MS de {faltamMs} ingrediente(s) para completar o total diário de matéria seca.
+          {faltamMs > 0 && <div>Informe a MS de {faltamMs} ingrediente(s) para completar o total diário de matéria seca.</div>}
+          {faltamCustos > 0 && <div>Informe o custo de {faltamCustos} ingrediente(s) para calcular o custo real das cargas e da dieta.</div>}
         </div>
       )}
 
       <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720, fontSize: 12.5 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 930, fontSize: 12.5 }}>
           <thead>
             <tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}>
               <th style={{ padding: 10, textAlign: "left" }}>Ingrediente</th>
@@ -2461,6 +2484,8 @@ function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
               <th style={{ padding: 10 }}>Erro %</th>
               <th style={{ padding: 10 }}>MS %</th>
               <th style={{ padding: 10 }}>Kg MS/dia</th>
+              <th style={{ padding: 10 }}>Custo R$/kg</th>
+              <th style={{ padding: 10 }}>Custo/dia</th>
             </tr>
           </thead>
           <tbody>
@@ -2469,6 +2494,7 @@ function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
               const percentual = item.previsto > 0 ? diferenca / item.previsto * 100 : 0;
               const sinal = corErroCarga(percentual);
               const ms = msPorIngrediente.get(item.chave);
+              const custo = custoPorIngrediente.get(item.chave);
               return (
                 <tr key={item.chave} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
                   <td style={{ padding: 10, textAlign: "left", fontWeight: 600 }}>{item.nome}</td>
@@ -2483,12 +2509,22 @@ function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
                   <td style={{ padding: 7 }}>
                     <input type="number" min="0" max="100" step="0.1" defaultValue={Number.isFinite(ms) ? ms : ""}
                       disabled={!onSalvarMs || salvando === item.chave}
-                      onBlur={(e) => salvarMs(item, e.target.value)}
+                      onBlur={(e) => salvarConfiguracao(item, "ms_percentual", e.target.value)}
                       placeholder="MS"
                       style={{ ...styles.input, width: 72, padding: "6px 7px", textAlign: "right" }} />
                   </td>
                   <td style={{ padding: 10, fontWeight: 600 }}>
                     {Number.isFinite(ms) ? `${(item.real * ms / 100).toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg` : "—"}
+                  </td>
+                  <td style={{ padding: 7 }}>
+                    <input type="number" min="0" step="0.001" defaultValue={Number.isFinite(custo) ? custo : ""}
+                      disabled={!onSalvarMs || salvando === item.chave}
+                      onBlur={(e) => salvarConfiguracao(item, "custo_kg_mn", e.target.value)}
+                      placeholder="R$/kg"
+                      style={{ ...styles.input, width: 88, padding: "6px 7px", textAlign: "right" }} />
+                  </td>
+                  <td style={{ padding: 10, fontWeight: 600 }}>
+                    {Number.isFinite(custo) ? formatBRL(item.real * custo) : "—"}
                   </td>
                 </tr>
               );
@@ -2506,11 +2542,22 @@ function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
             ? itens.reduce((s, i) => s + Math.abs(Number(i.peso_real || 0) - Number(i.peso_previsto || 0)), 0) / previsto * 100
             : 0;
           const sinal = corErroCarga(erro);
+          const custoCarga = itens.reduce((s, item) => {
+            const custo = custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente));
+            return s + (Number.isFinite(custo) ? Number(item.peso_real || 0) * custo : 0);
+          }, 0);
+          const cargaComCustoCompleto = itens.every((item) =>
+            Number.isFinite(custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)))
+          );
+          const custoKgCarga = Number(carga.peso_real || 0) > 0 ? custoCarga / Number(carga.peso_real) : null;
           return (
             <div key={carga.id || carga.carga_codigo} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "9px 0", borderTop: "1px solid #ECE9E2" }}>
               <div>
                 <div style={{ fontWeight: 600 }}>Carga {carga.carga_codigo} · {carga.receita}</div>
-                <div style={{ fontSize: 11.5, color: "#777770" }}>{carga.hora || "Horário não informado"} · {Number(carga.peso_real || 0).toLocaleString("pt-BR")} kg</div>
+                <div style={{ fontSize: 11.5, color: "#777770" }}>
+                  {carga.hora || "Horário não informado"} · {Number(carga.peso_real || 0).toLocaleString("pt-BR")} kg
+                  {cargaComCustoCompleto && custoKgCarga != null ? ` · ${formatBRL(custoCarga)} · ${formatBRL(custoKgCarga)}/kg dieta` : ""}
+                </div>
               </div>
               <span style={{ color: sinal.cor, background: sinal.fundo, padding: "5px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
                 erro {erro.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
