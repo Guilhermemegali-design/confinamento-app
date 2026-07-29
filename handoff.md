@@ -579,6 +579,11 @@ adicionada nesta sessão para atender a Belmont).
     das cargas, custo médio da dieta por kg de matéria natural e custo por kg
     de matéria seca. O detalhamento individual mostra custo total e custo/kg
     de cada carga quando todos os ingredientes usados têm preço informado.
+47. **Receitas reconhecidas em planilhas filtradas/reexportadas**: o
+    importador de cargas tenta primeiro `CARGAS.Numero -> RECETAS.Id`. Se o
+    arquivo tiver renumerado esses códigos, usa o caminho alternativo
+    `CARGAS.IdAutonomo -> AUTONOMOS.Receta -> RECETAS.Nombre`, evitando que
+    cargas válidas apareçam como “receita não encontrada”.
 
 ## Pendências / coisas para prestar atenção
 

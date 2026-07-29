@@ -2180,6 +2180,7 @@ function montarReceitasPlanilha(workbook) {
     if (idxIngrediente !== -1 && idxPeso !== -1) pares.push({ idxIngrediente, idxPeso });
   }
   const receitas = new Map();
+  const receitasPorNome = new Map();
   for (const linha of linhas.slice(idxCabecalho + 1)) {
     const id = String(linha?.[idxId] ?? "").trim();
     if (!id) continue;
@@ -2190,9 +2191,30 @@ function montarReceitasPlanilha(workbook) {
       if (!nome || nome === "0" || peso == null || peso <= 0) continue;
       itens.push({ nome, chave: chaveIngrediente(nome), peso });
     }
-    if (itens.length) receitas.set(id, { nome: String(linha?.[idxNome] ?? id).trim(), itens });
+    if (itens.length) {
+      const receita = { nome: String(linha?.[idxNome] ?? id).trim(), itens };
+      receitas.set(id, receita);
+      receitasPorNome.set(normalizarTexto(receita.nome), receita);
+    }
   }
-  return receitas;
+  return { receitas, receitasPorNome };
+}
+
+function montarReceitasPorAutonomo(workbook) {
+  const linhas = linhasDaAba(workbook, "autonomos");
+  if (!linhas) return new Map();
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["id", "receta"]);
+  if (idxCabecalho === -1) return new Map();
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("id");
+  const idxReceita = cabecalho.indexOf("receta");
+  const resultado = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const id = String(linha?.[idxId] ?? "").trim();
+    const receita = normalizarTexto(linha?.[idxReceita]);
+    if (id && receita) resultado.set(id, receita);
+  }
+  return resultado;
 }
 
 function processarCargasPlanilha(workbook, cargasExistentes) {
@@ -2205,6 +2227,7 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
   const idxData = cabecalho.indexOf("data");
   const idxHora = cabecalho.indexOf("hora");
   const idxReceita = cabecalho.indexOf("numero");
+  const idxAutonomo = cabecalho.indexOf("idautonomo");
   const pares = [];
   for (let numero = 1; numero <= 15; numero++) {
     const idxIngrediente = cabecalho.indexOf(`ing${numero}`);
@@ -2212,7 +2235,8 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
     if (idxIngrediente !== -1 && idxPeso !== -1) pares.push({ idxIngrediente, idxPeso });
   }
 
-  const receitas = montarReceitasPlanilha(workbook);
+  const { receitas, receitasPorNome } = montarReceitasPlanilha(workbook);
+  const receitaPorAutonomo = montarReceitasPorAutonomo(workbook);
   const existentes = new Set(cargasExistentes.map((c) => String(c.carga_codigo)));
   const novos = [];
   const receitasAusentes = new Set();
@@ -2224,7 +2248,12 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
     const cargaCodigo = String(linha[idxId] ?? "").trim();
     const data = normalizarDataPlanilha(linha[idxData]);
     const receitaId = String(linha[idxReceita] ?? "").trim();
-    const receita = receitas.get(receitaId);
+    const autonomoId = idxAutonomo !== -1 ? String(linha[idxAutonomo] ?? "").trim() : "";
+    // Alguns modelos filtrados/reexportados mudam os códigos da coluna
+    // "Numero". Quando o ID direto não bate, usa IdAutonomo -> AUTONOMOS.Receta
+    // -> RECETAS.Nombre, que representa a mesma formulação.
+    const nomeReceitaAutonomo = receitaPorAutonomo.get(autonomoId);
+    const receita = receitas.get(receitaId) || (nomeReceitaAutonomo ? receitasPorNome.get(nomeReceitaAutonomo) : null);
     if (!cargaCodigo || !data || !receita || receitaId === "0") {
       if (receitaId && receitaId !== "0" && !receita) receitasAusentes.add(receitaId);
       ignoradas++;
