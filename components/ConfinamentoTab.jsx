@@ -4,7 +4,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
-  LayoutDashboard, Beef, ClipboardList, BarChart3, Map as MapIcon, Settings2,
+  LayoutDashboard, Beef, ClipboardList, BarChart3, Map as MapIcon, Settings2, Truck,
 } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
@@ -162,12 +162,13 @@ function msDaFase(cliente, fase) {
 // Reaproveitado tanto na tela do consultor (com criar/excluir) quanto no portal
 // do cliente (ver e editar).
 export default function ConfinamentoTab({
-  cliente, lotes, pesagens = [], consumos = [], saidas = [], leiturasCocho = [], currais = [], curralOcupacoes = [],
+  cliente, lotes, pesagens = [], consumos = [], saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], currais = [], curralOcupacoes = [],
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
   onAdicionarSaida, onExcluirSaida,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
+  onImportarCargas, onSalvarMsIngrediente,
   onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onMoverLoteParaCurral, onAtualizarCliente,
   onBack, onGerenciarCliente,
 }) {
@@ -335,6 +336,20 @@ export default function ConfinamentoTab({
     );
   }
 
+  if (tela.modo === "importar-cargas") {
+    return (
+      <ImportarCargasPlanilha
+        cargasExistentes={cargasVagao}
+        onCancel={() => setTela({ modo: "lista" })}
+        onImportar={onImportarCargas}
+        onConcluido={() => {
+          setTela({ modo: "lista" });
+          setAba("cargas");
+        }}
+      />
+    );
+  }
+
   if (tela.modo === "lote") {
     const lote = lotes.find((l) => l.id === tela.id);
     if (!lote) return <EmptyHint text="Lote não encontrado." />;
@@ -438,6 +453,11 @@ export default function ConfinamentoTab({
                 Importar
               </button>
             )}
+            {aba === "cargas" && onImportarCargas && (
+              <button onClick={() => setTela({ modo: "importar-cargas" })} style={styles.secondaryActionBtn}>
+                Importar cargas
+              </button>
+            )}
             {(aba === "lotes-ativos" || aba === "lotes-finalizados") && onAdicionar && (
               <button onClick={() => setTela({ modo: "novo" })} style={styles.editLinkBtn}>
                 + Novo lote
@@ -451,6 +471,7 @@ export default function ConfinamentoTab({
           {(aba === "cocho" || aba === "esperado") && "Consumo e leitura diária"}
           {aba === "graficos" && "Indicadores e evolução"}
           {aba === "mapa" && "Localização dos currais"}
+          {aba === "cargas" && "Precisão do abastecimento e matéria seca"}
         </div>
       </div>
 
@@ -460,6 +481,7 @@ export default function ConfinamentoTab({
           <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos" || aba === "lotes-finalizados"} onClick={() => setAba("lotes-ativos")} />
           <NavArea icon={ClipboardList} label="Rotina" active={aba === "cocho" || aba === "esperado"} onClick={() => setAba(onRegistrarLeituraCocho ? "cocho" : "esperado")} />
           <NavArea icon={BarChart3} label="Análises" active={aba === "graficos"} onClick={() => setAba("graficos")} />
+          <NavArea icon={Truck} label="Cargas" active={aba === "cargas"} onClick={() => setAba("cargas")} />
           <NavArea icon={MapIcon} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
         </nav>
 
@@ -498,6 +520,13 @@ export default function ConfinamentoTab({
         />
       ) : aba === "esperado" ? (
         <AbaConsumoEsperado lotes={lotes} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} />
+      ) : aba === "cargas" ? (
+        <AbaCargas
+          cargas={cargasVagao}
+          ingredientesMs={ingredientesMs}
+          onSalvarMs={onSalvarMsIngrediente}
+          onImportar={onImportarCargas && (() => setTela({ modo: "importar-cargas" }))}
+        />
       ) : aba === "mapa" ? (
         <MapaCurrais
           cliente={cliente}
@@ -2128,6 +2157,368 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
           <PrimaryButton onClick={onConcluido}>Voltar</PrimaryButton>
         </div>
       )}
+    </div>
+  );
+}
+
+function chaveIngrediente(nome) {
+  return normalizarTexto(nome).replace(/\s+/g, " ");
+}
+
+function montarReceitasPlanilha(workbook) {
+  const linhas = linhasDaAba(workbook, "recetas");
+  if (!linhas) throw new Error('Não encontrei a aba "RECETAS" no arquivo do vagão.');
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["id", "nombre"]);
+  if (idxCabecalho === -1) throw new Error('Não encontrei as colunas "Id" e "Nombre" na aba RECETAS.');
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("id");
+  const idxNome = cabecalho.indexOf("nombre");
+  const pares = [];
+  for (let numero = 1; numero <= 15; numero++) {
+    const idxIngrediente = cabecalho.indexOf(`ing${numero}`);
+    const idxPeso = cabecalho.indexOf(`peso${numero}`);
+    if (idxIngrediente !== -1 && idxPeso !== -1) pares.push({ idxIngrediente, idxPeso });
+  }
+  const receitas = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const id = String(linha?.[idxId] ?? "").trim();
+    if (!id) continue;
+    const itens = [];
+    for (const par of pares) {
+      const nome = String(linha?.[par.idxIngrediente] ?? "").trim();
+      const peso = normalizarNumeroPlanilha(linha?.[par.idxPeso]);
+      if (!nome || nome === "0" || peso == null || peso <= 0) continue;
+      itens.push({ nome, chave: chaveIngrediente(nome), peso });
+    }
+    if (itens.length) receitas.set(id, { nome: String(linha?.[idxNome] ?? id).trim(), itens });
+  }
+  return receitas;
+}
+
+function processarCargasPlanilha(workbook, cargasExistentes) {
+  const linhas = linhasDaAba(workbook, "cargas");
+  if (!linhas) throw new Error('Não encontrei a aba "CARGAS" no arquivo do vagão.');
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["id", "data", "numero"]);
+  if (idxCabecalho === -1) throw new Error('Não encontrei as colunas "Id", "Data" e "Numero" na aba CARGAS.');
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("id");
+  const idxData = cabecalho.indexOf("data");
+  const idxHora = cabecalho.indexOf("hora");
+  const idxReceita = cabecalho.indexOf("numero");
+  const pares = [];
+  for (let numero = 1; numero <= 15; numero++) {
+    const idxIngrediente = cabecalho.indexOf(`ing${numero}`);
+    const idxPeso = cabecalho.indexOf(`peso${numero}`);
+    if (idxIngrediente !== -1 && idxPeso !== -1) pares.push({ idxIngrediente, idxPeso });
+  }
+
+  const receitas = montarReceitasPlanilha(workbook);
+  const existentes = new Set(cargasExistentes.map((c) => String(c.carga_codigo)));
+  const novos = [];
+  const receitasAusentes = new Set();
+  let ignoradas = 0;
+  let jaExistentes = 0;
+
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    if (!linha || linha.every((v) => v == null || v === "")) continue;
+    const cargaCodigo = String(linha[idxId] ?? "").trim();
+    const data = normalizarDataPlanilha(linha[idxData]);
+    const receitaId = String(linha[idxReceita] ?? "").trim();
+    const receita = receitas.get(receitaId);
+    if (!cargaCodigo || !data || !receita || receitaId === "0") {
+      if (receitaId && receitaId !== "0" && !receita) receitasAusentes.add(receitaId);
+      ignoradas++;
+      continue;
+    }
+    if (existentes.has(cargaCodigo)) {
+      jaExistentes++;
+      continue;
+    }
+
+    const reais = new Map();
+    for (const par of pares) {
+      const nome = String(linha[par.idxIngrediente] ?? "").trim();
+      const peso = normalizarNumeroPlanilha(linha[par.idxPeso]);
+      if (!nome || nome === "0" || peso == null || peso < 0) continue;
+      const chave = chaveIngrediente(nome);
+      const atual = reais.get(chave) || { nome, peso: 0 };
+      atual.peso += peso;
+      reais.set(chave, atual);
+    }
+    const totalReal = [...reais.values()].reduce((soma, item) => soma + item.peso, 0);
+    const totalProgramado = receita.itens.reduce((soma, item) => soma + item.peso, 0);
+    if (totalReal <= 0 || totalProgramado <= 0) {
+      ignoradas++;
+      continue;
+    }
+    const fator = totalReal / totalProgramado;
+    const todasChaves = new Set([...reais.keys(), ...receita.itens.map((i) => i.chave)]);
+    const itens = [...todasChaves].map((chave) => {
+      const real = reais.get(chave);
+      const programado = receita.itens.find((i) => i.chave === chave);
+      return {
+        ingrediente: real?.nome || programado?.nome || chave,
+        ingrediente_chave: chave,
+        peso_real: real?.peso || 0,
+        peso_previsto: (programado?.peso || 0) * fator,
+      };
+    });
+    novos.push({
+      carga_codigo: cargaCodigo,
+      data,
+      hora: idxHora !== -1 ? String(linha[idxHora] ?? "").trim() || null : null,
+      receita: receita.nome,
+      peso_real: totalReal,
+      peso_previsto: totalProgramado * fator,
+      itens,
+    });
+  }
+
+  novos.sort((a, b) => a.data.localeCompare(b.data) || String(a.hora || "").localeCompare(String(b.hora || "")));
+  return { novos, ignoradas, jaExistentes, receitasAusentes: [...receitasAusentes] };
+}
+
+function ImportarCargasPlanilha({ cargasExistentes, onCancel, onImportar, onConcluido }) {
+  const [processando, setProcessando] = useState(false);
+  const [importando, setImportando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [resultado, setResultado] = useState(null);
+  const [concluido, setConcluido] = useState(null);
+
+  async function processarArquivo(file) {
+    if (!file) return;
+    setProcessando(true);
+    setErro(null);
+    setResultado(null);
+    setConcluido(null);
+    try {
+      const XLSX = await carregarLeitorExcel();
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+      setResultado(processarCargasPlanilha(workbook, cargasExistentes));
+    } catch (e) {
+      setErro(e.message || "Não foi possível ler as cargas dessa planilha.");
+    } finally {
+      setProcessando(false);
+    }
+  }
+
+  async function confirmar() {
+    if (!resultado?.novos.length) return;
+    setImportando(true);
+    try {
+      const importadas = await onImportar(resultado.novos);
+      setConcluido(Array.isArray(importadas) ? importadas.length : resultado.novos.length);
+    } finally {
+      setImportando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title="Importar cargas do vagão" onBack={onCancel} />
+      <div style={styles.card}>
+        <div style={{ fontSize: 13, color: "#5C5C58", lineHeight: 1.5, padding: "10px 0" }}>
+          Selecione o mesmo arquivo bruto usado no consumo. O aplicativo cruza
+          as abas CARGAS e RECETAS para calcular o previsto, o realizado e o
+          erro de cada ingrediente. Cargas já importadas são ignoradas.
+        </div>
+        <input type="file" accept=".xlsx,.xls" disabled={processando || importando}
+          onChange={(e) => processarArquivo(e.target.files?.[0])}
+          style={{ fontSize: 13, padding: "10px 0" }} />
+        {processando && <div style={{ fontSize: 13, color: "#9A9A94" }}>Lendo cargas e receitas...</div>}
+        {erro && <div style={{ fontSize: 13, color: "#B8763E", padding: "6px 0" }}>{erro}</div>}
+      </div>
+
+      {resultado && concluido == null && (
+        <>
+          <div style={{ ...styles.card, marginTop: 10, fontSize: 13, color: "#5C5C58", lineHeight: 1.7 }}>
+            <strong style={{ color: "#252522" }}>{resultado.novos.length} carga(s) nova(s)</strong>
+            {resultado.jaExistentes > 0 && <div>{resultado.jaExistentes} já existiam e não serão duplicadas</div>}
+            {resultado.ignoradas > 0 && <div>{resultado.ignoradas} registro(s) sem carga/receita válida, ignorado(s)</div>}
+            {resultado.receitasAusentes.length > 0 && (
+              <div style={{ color: "#B8763E" }}>Receitas não encontradas: {resultado.receitasAusentes.join(", ")}</div>
+            )}
+          </div>
+          <PrimaryButton disabled={!resultado.novos.length || importando} onClick={confirmar}>
+            {importando ? "Importando..." : `Importar ${resultado.novos.length} carga(s)`}
+          </PrimaryButton>
+        </>
+      )}
+
+      {concluido != null && (
+        <div style={{ ...styles.card, marginTop: 10, textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1F4D45", padding: "14px 0" }}>
+            {concluido} carga(s) importada(s) com sucesso.
+          </div>
+          <PrimaryButton onClick={onConcluido}>Ver análise das cargas</PrimaryButton>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function corErroCarga(percentual) {
+  const absoluto = Math.abs(percentual || 0);
+  if (absoluto <= 2) return { cor: "#2F7D5B", fundo: "#E7F3EC" };
+  if (absoluto <= 5) return { cor: "#9A6B16", fundo: "#FFF3D6" };
+  return { cor: "#B4473D", fundo: "#FBE8E6" };
+}
+
+function AbaCargas({ cargas, ingredientesMs, onSalvarMs, onImportar }) {
+  const datas = [...new Set(cargas.map((c) => c.data))].sort((a, b) => b.localeCompare(a));
+  const [dataEscolhida, setDataEscolhida] = useState("");
+  const [salvando, setSalvando] = useState(null);
+  const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
+  const cargasDia = cargas.filter((c) => c.data === data);
+  const msPorIngrediente = new Map(ingredientesMs.map((i) => [i.ingrediente_chave, Number(i.ms_percentual)]));
+  const resumo = new Map();
+
+  for (const carga of cargasDia) {
+    for (const item of Array.isArray(carga.itens) ? carga.itens : []) {
+      const chave = item.ingrediente_chave || chaveIngrediente(item.ingrediente);
+      const atual = resumo.get(chave) || {
+        chave,
+        nome: item.ingrediente,
+        previsto: 0,
+        real: 0,
+      };
+      atual.previsto += Number(item.peso_previsto || 0);
+      atual.real += Number(item.peso_real || 0);
+      resumo.set(chave, atual);
+    }
+  }
+
+  const ingredientes = [...resumo.values()].sort((a, b) => b.real - a.real);
+  const totalReal = ingredientes.reduce((s, i) => s + i.real, 0);
+  const totalPrevisto = ingredientes.reduce((s, i) => s + i.previsto, 0);
+  const erroAbsoluto = ingredientes.reduce((s, i) => s + Math.abs(i.real - i.previsto), 0);
+  const erroMedio = totalPrevisto > 0 ? erroAbsoluto / totalPrevisto * 100 : 0;
+  const totalMs = ingredientes.reduce((s, i) => {
+    const ms = msPorIngrediente.get(i.chave);
+    return s + (Number.isFinite(ms) ? i.real * ms / 100 : 0);
+  }, 0);
+  const faltamMs = ingredientes.filter((i) => !Number.isFinite(msPorIngrediente.get(i.chave))).length;
+
+  async function salvarMs(item, valor) {
+    if (!onSalvarMs) return;
+    const ms = normalizarNumeroPlanilha(valor);
+    if (ms == null || ms < 0 || ms > 100) return;
+    setSalvando(item.chave);
+    try {
+      await onSalvarMs({
+        ingrediente_chave: item.chave,
+        ingrediente_nome: item.nome,
+        ms_percentual: ms,
+      });
+    } finally {
+      setSalvando(null);
+    }
+  }
+
+  if (!cargas.length) {
+    return (
+      <div>
+        <EmptyHint text="Nenhuma carga importada ainda. Use o mesmo arquivo bruto do vagão utilizado no consumo." />
+        {onImportar && <PrimaryButton onClick={onImportar}>Importar cargas</PrimaryButton>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <SectionTitle>Cargas do vagão</SectionTitle>
+        <label style={{ fontSize: 12, color: "#5C5C58" }}>
+          Dia{" "}
+          <select value={data || ""} onChange={(e) => setDataEscolhida(e.target.value)}
+            style={{ ...styles.input, width: "auto", minWidth: 140, padding: "7px 9px" }}>
+            {datas.map((d) => <option key={d} value={d}>{formatDataBR(d)}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div style={styles.gestaoGrid} className="desktop-summary-grid">
+        <PainelCard label="Cargas no dia" valor={cargasDia.length} />
+        <PainelCard label="Matéria natural" valor={`${totalReal.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`} />
+        <PainelCard label="Erro absoluto" valor={`${erroMedio.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`} />
+        <PainelCard label="Matéria seca" valor={`${totalMs.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg MS`} />
+      </div>
+
+      {faltamMs > 0 && (
+        <div style={{ ...styles.card, marginBottom: 10, padding: 12, fontSize: 12.5, color: "#8A6420", background: "#FFF8E8" }}>
+          Informe a MS de {faltamMs} ingrediente(s) para completar o total diário de matéria seca.
+        </div>
+      )}
+
+      <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720, fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}>
+              <th style={{ padding: 10, textAlign: "left" }}>Ingrediente</th>
+              <th style={{ padding: 10 }}>Previsto</th>
+              <th style={{ padding: 10 }}>Realizado</th>
+              <th style={{ padding: 10 }}>Erro kg</th>
+              <th style={{ padding: 10 }}>Erro %</th>
+              <th style={{ padding: 10 }}>MS %</th>
+              <th style={{ padding: 10 }}>Kg MS/dia</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ingredientes.map((item) => {
+              const diferenca = item.real - item.previsto;
+              const percentual = item.previsto > 0 ? diferenca / item.previsto * 100 : 0;
+              const sinal = corErroCarga(percentual);
+              const ms = msPorIngrediente.get(item.chave);
+              return (
+                <tr key={item.chave} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                  <td style={{ padding: 10, textAlign: "left", fontWeight: 600 }}>{item.nome}</td>
+                  <td style={{ padding: 10 }}>{item.previsto.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                  <td style={{ padding: 10 }}>{item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                  <td style={{ padding: 10 }}>{diferenca > 0 ? "+" : ""}{diferenca.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                  <td style={{ padding: 10 }}>
+                    <span style={{ color: sinal.cor, background: sinal.fundo, padding: "4px 7px", borderRadius: 999, fontWeight: 700 }}>
+                      {percentual > 0 ? "+" : ""}{percentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                    </span>
+                  </td>
+                  <td style={{ padding: 7 }}>
+                    <input type="number" min="0" max="100" step="0.1" defaultValue={Number.isFinite(ms) ? ms : ""}
+                      disabled={!onSalvarMs || salvando === item.chave}
+                      onBlur={(e) => salvarMs(item, e.target.value)}
+                      placeholder="MS"
+                      style={{ ...styles.input, width: 72, padding: "6px 7px", textAlign: "right" }} />
+                  </td>
+                  <td style={{ padding: 10, fontWeight: 600 }}>
+                    {Number.isFinite(ms) ? `${(item.real * ms / 100).toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg` : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ ...styles.card, marginTop: 12 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8 }}>Resultado por carga</div>
+        {cargasDia.map((carga) => {
+          const itens = Array.isArray(carga.itens) ? carga.itens : [];
+          const previsto = itens.reduce((s, i) => s + Number(i.peso_previsto || 0), 0);
+          const erro = previsto > 0
+            ? itens.reduce((s, i) => s + Math.abs(Number(i.peso_real || 0) - Number(i.peso_previsto || 0)), 0) / previsto * 100
+            : 0;
+          const sinal = corErroCarga(erro);
+          return (
+            <div key={carga.id || carga.carga_codigo} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "9px 0", borderTop: "1px solid #ECE9E2" }}>
+              <div>
+                <div style={{ fontWeight: 600 }}>Carga {carga.carga_codigo} · {carga.receita}</div>
+                <div style={{ fontSize: 11.5, color: "#777770" }}>{carga.hora || "Horário não informado"} · {Number(carga.peso_real || 0).toLocaleString("pt-BR")} kg</div>
+              </div>
+              <span style={{ color: sinal.cor, background: sinal.fundo, padding: "5px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+                erro {erro.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

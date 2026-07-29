@@ -180,6 +180,8 @@ function PainelCliente({ cliente, somenteLeitura }) {
   const [consumos, setConsumos] = useState([]);
   const [saidas, setSaidas] = useState([]);
   const [leiturasCocho, setLeiturasCocho] = useState([]);
+  const [cargasVagao, setCargasVagao] = useState([]);
+  const [ingredientesMs, setIngredientesMs] = useState([]);
   const [currais, setCurrais] = useState([]);
   const [curralOcupacoes, setCurralOcupacoes] = useState([]);
 
@@ -204,6 +206,10 @@ function PainelCliente({ cliente, somenteLeitura }) {
     }
     const { data: cu } = await supabase.from("currais").select("*").eq("cliente_id", cliente.id);
     setCurrais(cu || []);
+    const { data: cv } = await supabase.from("cargas_vagao").select("*").eq("cliente_id", cliente.id);
+    setCargasVagao(cv || []);
+    const { data: im } = await supabase.from("ingredientes_ms").select("*").eq("cliente_id", cliente.id);
+    setIngredientesMs(im || []);
     const curralIds = (cu || []).map((x) => x.id);
     if (curralIds.length > 0) {
       const { data: co } = await supabase.from("curral_ocupacoes").select("*").in("curral_id", curralIds);
@@ -344,6 +350,44 @@ function PainelCliente({ cliente, somenteLeitura }) {
     return data;
   }
 
+  async function importarCargasEmLote(linhas) {
+    if (linhas.length === 0) return [];
+    const paraInserir = linhas.map((l) => ({
+      ...l,
+      cliente_id: cliente.id,
+      consultor_id: cliente.consultor_id,
+    }));
+    const { data, error } = await supabase
+      .from("cargas_vagao")
+      .upsert(paraInserir, { onConflict: "cliente_id,carga_codigo", ignoreDuplicates: true })
+      .select();
+    if (error) throw error;
+    setCargasVagao((cs) => [...cs, ...(data || [])]);
+    return data || [];
+  }
+
+  async function salvarMsIngrediente(ingrediente) {
+    const linha = {
+      ...ingrediente,
+      cliente_id: cliente.id,
+      consultor_id: cliente.consultor_id,
+      atualizado_em: new Date().toISOString(),
+    };
+    const { data, error } = await supabase
+      .from("ingredientes_ms")
+      .upsert(linha, { onConflict: "cliente_id,ingrediente_chave" })
+      .select()
+      .single();
+    if (error) throw error;
+    setIngredientesMs((itens) => {
+      const existe = itens.some((i) => i.ingrediente_chave === data.ingrediente_chave);
+      return existe
+        ? itens.map((i) => (i.ingrediente_chave === data.ingrediente_chave ? data : i))
+        : [...itens, data];
+    });
+    return data;
+  }
+
   async function adicionarCurral(clienteId, dados) {
     const { data, error } = await supabase
       .from("currais")
@@ -436,6 +480,8 @@ function PainelCliente({ cliente, somenteLeitura }) {
           consumos={consumos}
           saidas={saidas}
           leiturasCocho={leiturasCocho}
+          cargasVagao={cargasVagao}
+          ingredientesMs={ingredientesMs}
           currais={currais}
           curralOcupacoes={curralOcupacoes}
           onAdicionar={somenteLeitura ? undefined : adicionarLote}
@@ -448,6 +494,8 @@ function PainelCliente({ cliente, somenteLeitura }) {
           onImportarConsumos={somenteLeitura ? undefined : importarConsumosEmLote}
           onRegistrarLeituraCocho={somenteLeitura ? undefined : registrarLeituraCocho}
           onImportarLeiturasCocho={somenteLeitura ? undefined : importarLeiturasCochoEmLote}
+          onImportarCargas={somenteLeitura ? undefined : importarCargasEmLote}
+          onSalvarMsIngrediente={somenteLeitura ? undefined : salvarMsIngrediente}
           onAdicionarCurral={somenteLeitura ? undefined : adicionarCurral}
           onAtualizarCurral={somenteLeitura ? undefined : atualizarCurral}
           onExcluirCurral={somenteLeitura ? undefined : excluirCurral}

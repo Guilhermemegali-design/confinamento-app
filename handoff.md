@@ -559,6 +559,20 @@ adicionada nesta sessão para atender a Belmont).
     isso, ao agrupar lotes, o navegador tentava instanciar o componente do
     ícone e mostrava `Object is not a constructor (evaluating 'new u.Z')`.
     O ícone passou a se chamar `MapIcon`, preservando o `Map` nativo.
+44. **Nova área Cargas**: o confinamento ganhou uma aba própria para analisar
+    o abastecimento do vagão. O importador lê `CARGAS` e `RECETAS` no mesmo
+    arquivo bruto já usado pelo consumo, cruza o número da receita, ajusta a
+    formulação prevista ao tamanho real de cada batida e mostra, por dia,
+    previsto, realizado, erro em kg e erro percentual de cada ingrediente.
+    Também há resumo individual de cada carga, com faixas de atenção de até
+    2%, de 2% a 5% e acima de 5%.
+45. **MS persistente por ingrediente**: a tabela `ingredientes_ms` mantém um
+    teor de MS por cliente/ingrediente. O valor é digitado uma vez na aba
+    Cargas e continua valendo nas importações seguintes até ser alterado. A
+    tela calcula automaticamente os kg de MS de cada ingrediente e o total
+    diário. As cargas ficam em `cargas_vagao`, com chave única
+    `(cliente_id, carga_codigo)`, para repetir a planilha sem duplicar dados.
+    Ambas as tabelas têm RLS para consultor e usuários vinculados ao cliente.
 
 ## Pendências / coisas para prestar atenção
 

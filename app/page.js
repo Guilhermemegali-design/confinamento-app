@@ -83,6 +83,8 @@ export default function Home() {
           consumos={dados.consumos}
           saidas={dados.saidas}
           leiturasCocho={dados.leiturasCocho}
+          cargasVagao={dados.cargasVagao}
+          ingredientesMs={dados.ingredientesMs}
           clientesUsuarios={dados.clientesUsuarios}
           currais={dados.currais}
           curralOcupacoes={dados.curralOcupacoes}
@@ -154,6 +156,15 @@ export default function Home() {
           onImportarLeiturasCocho={async (linhas) => {
             await dados.importarLeiturasCochoEmLote(linhas);
             mostrarToast(`${linhas.length} leitura${linhas.length > 1 ? "s" : ""} importada${linhas.length > 1 ? "s" : ""}`);
+          }}
+          onImportarCargas={async (clienteId, linhas) => {
+            const importadas = await dados.importarCargasEmLote(clienteId, linhas);
+            mostrarToast(`${importadas.length} carga${importadas.length !== 1 ? "s" : ""} importada${importadas.length !== 1 ? "s" : ""}`);
+            return importadas;
+          }}
+          onSalvarMsIngrediente={async (clienteId, ingrediente) => {
+            await dados.salvarMsIngrediente(clienteId, ingrediente);
+            mostrarToast("Matéria seca atualizada");
           }}
           onAddCurral={async (clienteId, c) => {
             await dados.adicionarCurral(clienteId, c);
