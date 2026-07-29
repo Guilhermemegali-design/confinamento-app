@@ -2771,6 +2771,15 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
             Number.isFinite(custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)))
           );
           const custoKgCarga = Number(carga.peso_real || 0) > 0 ? custoCarga / Number(carga.peso_real) : null;
+          const cargaComMsCompleta = itens.every((item) =>
+            Number.isFinite(msPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)))
+          );
+          const msCarga = cargaComMsCompleta && Number(carga.peso_real || 0) > 0
+            ? itens.reduce((soma, item) => {
+                const ms = msPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente));
+                return soma + Number(item.peso_real || 0) * ms;
+              }, 0) / Number(carga.peso_real)
+            : null;
           const chaveCarga = carga.id || carga.carga_codigo;
           const expandida = cargaExpandida === chaveCarga;
           return (
@@ -2783,6 +2792,7 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
                     <div style={{ fontWeight: 600 }}>Carga {carga.carga_codigo} · {carga.receita}</div>
                     <div style={{ fontSize: 11.5, color: "#777770" }}>
                       {carga.hora || "Horário não informado"} · {Number(carga.peso_real || 0).toLocaleString("pt-BR")} kg
+                      {msCarga != null ? ` · MS ${msCarga.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : " · MS incompleta"}
                       {cargaComCustoCompleto && custoKgCarga != null ? ` · ${formatBRL(custoCarga)} · ${formatBRL(custoKgCarga)}/kg dieta` : ""}
                     </div>
                   </div>
