@@ -345,6 +345,7 @@ export default function ConfinamentoTab({
         ingredientesMs={ingredientesMs}
         onCancel={() => setTela({ modo: "lista" })}
         onImportar={onImportarCargas}
+        onImportarConsumos={onImportarConsumos}
         onSincronizar={onSincronizarCustosMs}
         onConcluido={() => {
           setTela({ modo: "lista" });
@@ -2430,7 +2431,7 @@ function montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientes
   return atualizacoes;
 }
 
-function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingredientesMs, onCancel, onImportar, onSincronizar, onConcluido }) {
+function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingredientesMs, onCancel, onImportar, onImportarConsumos, onSincronizar, onConcluido }) {
   const [processando, setProcessando] = useState(false);
   const [importando, setImportando] = useState(false);
   const [erro, setErro] = useState(null);
@@ -2446,7 +2447,10 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
     try {
       const XLSX = await carregarLeitorExcel();
       const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
-      setResultado(processarCargasPlanilha(workbook, cargasExistentes));
+      const cargas = processarCargasPlanilha(workbook, cargasExistentes);
+      const existentes = new Set(consumos.map((consumo) => `${consumo.lote_id}|${consumo.data}`));
+      const descargas = processarPlanilhaVagao(workbook, lotes, existentes);
+      setResultado({ ...cargas, descargas });
     } catch (e) {
       setErro(e.message || "Não foi possível ler as cargas dessa planilha.");
     } finally {
@@ -2455,16 +2459,32 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
   }
 
   async function confirmar() {
-    if (!resultado?.novos.length) return;
+    if (!resultado || (!resultado.novos.length && !resultado.descargas.novos.length)) return;
     setImportando(true);
     try {
-      const importadas = await onImportar(resultado.novos);
+      const importadas = resultado.novos.length ? await onImportar(resultado.novos) : [];
       const cargasImportadas = Array.isArray(importadas) ? importadas : resultado.novos;
+      const linhasConsumo = resultado.descargas.novos.map((descarga) => ({
+        lote_id: descarga.loteId,
+        data: descarga.data,
+        consumo_total_lote: descarga.consumoTotalLote,
+        ms_dieta: null,
+        dieta_fase: descarga.fase || null,
+        custo_kg_mn: null,
+      }));
+      const consumosImportados = linhasConsumo.length && onImportarConsumos
+        ? await onImportarConsumos(linhasConsumo)
+        : [];
+      const todosConsumos = [...consumos, ...(Array.isArray(consumosImportados) ? consumosImportados : [])];
       const atualizacoes = onSincronizar
-        ? montarSincronizacoesConsumoCargas([...cargasExistentes, ...cargasImportadas], lotes, consumos, ingredientesMs)
+        ? montarSincronizacoesConsumoCargas([...cargasExistentes, ...cargasImportadas], lotes, todosConsumos, ingredientesMs)
         : [];
       if (atualizacoes.length) await onSincronizar(atualizacoes);
-      setConcluido({ cargas: cargasImportadas.length, consumos: atualizacoes.length });
+      setConcluido({
+        cargas: cargasImportadas.length,
+        descargas: Array.isArray(consumosImportados) ? consumosImportados.length : linhasConsumo.length,
+        sincronizados: atualizacoes.length,
+      });
     } finally {
       setImportando(false);
     }
@@ -2475,9 +2495,9 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
       <BackHeader title="Importar cargas do vagão" onBack={onCancel} />
       <div style={styles.card}>
         <div style={{ fontSize: 13, color: "#5C5C58", lineHeight: 1.5, padding: "10px 0" }}>
-          Selecione o mesmo arquivo bruto usado no consumo. O aplicativo cruza
-          as abas CARGAS e RECETAS para calcular o previsto, o realizado e o
-          erro de cada ingrediente. Cargas já importadas são ignoradas.
+          Selecione o arquivo bruto uma única vez. O aplicativo importa as
+          cargas, soma as DESCARGAS por lote e dia para lançar o consumo e
+          calcula o erro de cada ingrediente. Dados já importados são ignorados.
         </div>
         <input type="file" accept=".xlsx,.xls" disabled={processando || importando}
           onChange={(e) => processarArquivo(e.target.files?.[0])}
@@ -2491,6 +2511,11 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
           <div style={{ ...styles.card, marginTop: 10, fontSize: 13, color: "#5C5C58", lineHeight: 1.7 }}>
             <strong style={{ color: "#252522" }}>{resultado.novos.length} carga(s) nova(s)</strong>
             {resultado.jaExistentes > 0 && <div>{resultado.jaExistentes} já existiam e não serão duplicadas</div>}
+            <div><strong style={{ color: "#252522" }}>{resultado.descargas.novos.length} consumo(s) diário(s) novo(s)</strong> calculado(s) pelas descargas</div>
+            {resultado.descargas.jaExistentes > 0 && <div>{resultado.descargas.jaExistentes} consumo(s) já existiam e não serão duplicados</div>}
+            {resultado.descargas.naoReconhecidos.length > 0 && (
+              <div style={{ color: "#B8763E" }}>Lotes não encontrados: {resultado.descargas.naoReconhecidos.join(", ")}</div>
+            )}
             {resultado.ignoradas > 0 && <div>{resultado.ignoradas} registro(s) sem carga/receita válida, ignorado(s)</div>}
             {resultado.receitasAusentes.length > 0 && (
               <>
@@ -2501,8 +2526,8 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
               </>
             )}
           </div>
-          <PrimaryButton disabled={!resultado.novos.length || importando} onClick={confirmar}>
-            {importando ? "Importando..." : `Importar ${resultado.novos.length} carga(s)`}
+          <PrimaryButton disabled={(!resultado.novos.length && !resultado.descargas.novos.length) || importando} onClick={confirmar}>
+            {importando ? "Importando cargas e descargas..." : "Importar cargas e descargas"}
           </PrimaryButton>
         </>
       )}
@@ -2511,7 +2536,8 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
         <div style={{ ...styles.card, marginTop: 10, textAlign: "center" }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#1F4D45", padding: "14px 0" }}>
             {concluido.cargas} carga(s) importada(s) com sucesso.
-            {concluido.consumos > 0 && <div style={{ marginTop: 4 }}>{concluido.consumos} consumo(s) atualizado(s) com MS e custo das descargas.</div>}
+            <div style={{ marginTop: 4 }}>{concluido.descargas} consumo(s) diário(s) criado(s) pelas descargas.</div>
+            {concluido.sincronizados > 0 && <div style={{ marginTop: 4 }}>{concluido.sincronizados} consumo(s) atualizado(s) com MS e custo.</div>}
           </div>
           <PrimaryButton onClick={onConcluido}>Ver análise das cargas</PrimaryButton>
         </div>
