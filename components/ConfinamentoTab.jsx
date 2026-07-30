@@ -26,6 +26,7 @@ const MapaCurrais = dynamic(() => import("./MapaCurrais"), { ssr: false });
 // transformação e a carregamos somente quando o usuário escolhe um arquivo.
 let leitorExcelCarregado = null;
 let promessaLeitorExcel = null;
+let leitorPdfCarregado = null;
 function carregarLeitorExcel() {
   if (leitorExcelCarregado) return Promise.resolve(leitorExcelCarregado);
   if (typeof window === "undefined") return Promise.reject(new Error("O leitor Excel só pode ser usado no navegador."));
@@ -55,6 +56,14 @@ function carregarLeitorExcel() {
     });
   }
   return promessaLeitorExcel;
+}
+
+async function carregarLeitorPdf() {
+  if (leitorPdfCarregado) return leitorPdfCarregado;
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+  leitorPdfCarregado = pdfjs;
+  return pdfjs;
 }
 
 const FASES_DIETA = [
@@ -2431,26 +2440,241 @@ function montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientes
   return atualizacoes;
 }
 
+function removerDuplicacaoSaicon(texto) {
+  if (!texto || texto.length < 4) return texto;
+  let iguais = 0;
+  for (let i = 0; i + 1 < texto.length; i += 2) {
+    if (texto[i] === texto[i + 1]) iguais++;
+  }
+  if (iguais / Math.floor(texto.length / 2) < 0.72) return texto;
+  let resultado = "";
+  for (let i = 0; i < texto.length; i += 2) resultado += texto[i];
+  return resultado;
+}
+
+function minutosDoHorario(valor) {
+  const partes = String(valor || "").split(":").map(Number);
+  return partes.length >= 2 && partes.every(Number.isFinite) ? partes[0] * 60 + partes[1] : null;
+}
+
+function dataIsoSaicon(texto) {
+  const match = removerDuplicacaoSaicon(texto).match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : null;
+}
+
+function numeroSaicon(valor) {
+  const texto = String(valor || "").trim();
+  const normalizado = /^-?\d{1,3}(?:\.\d{3})+,\d+$/.test(texto)
+    ? texto.replace(/\./g, "").replace(",", ".")
+    : texto.replace(",", ".");
+  return normalizarNumeroPlanilha(normalizado);
+}
+
+async function extrairPaginasPdfSaicon(file) {
+  const pdfjs = await carregarLeitorPdf();
+  const documento = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  const paginas = [];
+  for (let numero = 1; numero <= documento.numPages; numero++) {
+    const pagina = await documento.getPage(numero);
+    const conteudo = await pagina.getTextContent();
+    const linhasPorY = new Map();
+    for (const item of conteudo.items) {
+      if (!item.str?.trim()) continue;
+      const y = Math.round(Number(item.transform?.[5] || 0));
+      const itens = linhasPorY.get(y) || [];
+      itens.push({ x: Number(item.transform?.[4] || 0), texto: item.str });
+      linhasPorY.set(y, itens);
+    }
+    const linhas = [...linhasPorY.entries()]
+      .sort((a, b) => b[0] - a[0])
+      .map(([, itens]) => removerDuplicacaoSaicon(
+        itens.sort((a, b) => a.x - b.x).map((item) => item.texto).join(" ").replace(/\s+/g, " ").trim()
+      ))
+      .filter(Boolean);
+    paginas.push(linhas);
+  }
+  return paginas;
+}
+
+function interpretarPdfSaicon(paginas) {
+  const registros = [];
+  let tipo = null;
+  for (let indice = 0; indice < paginas.length; indice++) {
+    const linhas = paginas[indice];
+    const titulo = linhas.find((linha) => /Relat[oó]rio de (Carregamento|Descarga)/i.test(linha));
+    const tipoPagina = /Carregamento/i.test(titulo || "") ? "carga" : /Descarga/i.test(titulo || "") ? "descarga" : null;
+    if (!tipoPagina) continue;
+    if (tipo && tipo !== tipoPagina) throw new Error("O PDF mistura relatórios de carga e descarga.");
+    tipo = tipoPagina;
+    const data = dataIsoSaicon(titulo);
+    // Sem "i": o cabeçalho vem como "TRATO"; a linha de dados começa
+    // exatamente com "Trato".
+    const resumo = linhas.find((linha) => /^Trato\s/.test(linha));
+    const horarios = resumo?.match(/(\d{2}:\d{2})\s+(\d{2}:\d{2})\s+\d{2}:\d{2}:\d{2}\s*$/);
+    if (!data || !resumo || !horarios) continue;
+    const itens = [];
+    for (const linha of linhas) {
+      const match = linha.match(/^(.+?)\s+(-?[\d.,]+)\s*KG\s+(-?[\d.,]+)\s*KG\s+(-?[\d.,]+)\s*KG\s+(-?[\d.,]+)\s*%/i);
+      if (!match || /^TOTAIS/i.test(match[1])) continue;
+      const nome = match[1].trim();
+      if (tipoPagina === "carga" || /^Lote\s+/i.test(nome)) {
+        itens.push({
+          nome,
+          previsto: numeroSaicon(match[2]) || 0,
+          realizado: numeroSaicon(match[3]) || 0,
+        });
+      }
+    }
+    if (!itens.length) continue;
+    registros.push({
+      pagina: indice + 1,
+      data,
+      inicio: horarios[1],
+      fim: horarios[2],
+      inicioMinutos: minutosDoHorario(horarios[1]),
+      fimMinutos: minutosDoHorario(horarios[2]),
+      itens,
+    });
+  }
+  if (!tipo || !registros.length) throw new Error("Não reconheci o relatório de carga ou descarga da Saicon.");
+  return { tipo, registros, paginasLidas: paginas.length };
+}
+
+function processarPdfsSaicon(cargaPdf, descargaPdf, lotes, consumos, cargasExistentes) {
+  const cargasPorData = new Map();
+  const descargasPorData = new Map();
+  for (const carga of cargaPdf.registros) {
+    const lista = cargasPorData.get(carga.data) || [];
+    lista.push(carga);
+    cargasPorData.set(carga.data, lista);
+  }
+  for (const descarga of descargaPdf.registros) {
+    const lista = descargasPorData.get(descarga.data) || [];
+    lista.push(descarga);
+    descargasPorData.set(descarga.data, lista);
+  }
+  const codigosExistentes = new Set(cargasExistentes.map((carga) => String(carga.carga_codigo)));
+  const novasCargas = [];
+  const gruposConsumo = new Map();
+  const lotesNaoReconhecidos = new Set();
+  let cargasSemDescarga = 0;
+  let descargasSemCarga = 0;
+  let cargasJaExistentes = 0;
+
+  const todasDatas = new Set([...cargasPorData.keys(), ...descargasPorData.keys()]);
+  for (const data of todasDatas) {
+    const cargasDia = (cargasPorData.get(data) || []).sort((a, b) => a.inicioMinutos - b.inicioMinutos);
+    const descargasDia = (descargasPorData.get(data) || []).sort((a, b) => a.inicioMinutos - b.inicioMinutos);
+    const usadas = new Set();
+    for (let indice = 0; indice < cargasDia.length; indice++) {
+      const carga = cargasDia[indice];
+      let melhorIndice = -1;
+      let melhorIntervalo = Infinity;
+      for (let i = 0; i < descargasDia.length; i++) {
+        if (usadas.has(i)) continue;
+        const intervalo = descargasDia[i].inicioMinutos - carga.fimMinutos;
+        if (intervalo >= -2 && intervalo <= 180 && intervalo < melhorIntervalo) {
+          melhorIndice = i;
+          melhorIntervalo = intervalo;
+        }
+      }
+      if (melhorIndice === -1) {
+        cargasSemDescarga++;
+        continue;
+      }
+      usadas.add(melhorIndice);
+      const descarga = descargasDia[melhorIndice];
+      const codigo = `saicon-${data}-${carga.inicio.replace(":", "")}`;
+      const itens = carga.itens.map((item) => ({
+        ingrediente: item.nome,
+        ingrediente_chave: chaveIngrediente(item.nome),
+        peso_real: item.realizado,
+        peso_previsto: item.previsto,
+      }));
+      const descargas = [];
+      for (const item of descarga.itens) {
+        const lote = encontrarLoteDescarga(item.nome, lotes);
+        if (!lote) {
+          lotesNaoReconhecidos.add(item.nome);
+          continue;
+        }
+        descargas.push({ data, lote_codigo: item.nome, peso: item.realizado });
+        adicionarAoGrupo(gruposConsumo, lote, data, item.realizado, null, null);
+      }
+      if (codigosExistentes.has(codigo)) cargasJaExistentes++;
+      else {
+        novasCargas.push({
+          carga_codigo: codigo,
+          data,
+          hora: carga.inicio,
+          receita: "Saicon",
+          peso_real: itens.reduce((soma, item) => soma + item.peso_real, 0),
+          peso_previsto: itens.reduce((soma, item) => soma + item.peso_previsto, 0),
+          itens,
+          descargas,
+        });
+      }
+    }
+    descargasSemCarga += descargasDia.length - usadas.size;
+  }
+
+  const existentes = new Set(consumos.map((consumo) => `${consumo.lote_id}|${consumo.data}`));
+  return {
+    novos: novasCargas,
+    jaExistentes: cargasJaExistentes,
+    ignoradas: cargasSemDescarga,
+    receitasAusentes: [],
+    receitasDisponiveis: [],
+    descargas: montarResultadoImportacao(gruposConsumo, existentes, {
+      naoReconhecidos: [...lotesNaoReconhecidos],
+      linhasIgnoradas: 0,
+    }),
+    saicon: {
+      cargasLidas: cargaPdf.registros.length,
+      descargasLidas: descargaPdf.registros.length,
+      cargasSemDescarga,
+      descargasSemCarga,
+    },
+  };
+}
+
 function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingredientesMs, onCancel, onImportar, onImportarConsumos, onSincronizar, onConcluido }) {
   const [processando, setProcessando] = useState(false);
   const [importando, setImportando] = useState(false);
   const [erro, setErro] = useState(null);
   const [resultado, setResultado] = useState(null);
   const [concluido, setConcluido] = useState(null);
+  const [arquivoPrincipal, setArquivoPrincipal] = useState(null);
+  const [arquivoDescarga, setArquivoDescarga] = useState(null);
 
-  async function processarArquivo(file) {
-    if (!file) return;
+  async function processarArquivo(files) {
+    const selecionados = [...(files || [])];
+    if (!selecionados.length) return;
     setProcessando(true);
     setErro(null);
     setResultado(null);
     setConcluido(null);
     try {
-      const XLSX = await carregarLeitorExcel();
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
-      const cargas = processarCargasPlanilha(workbook, cargasExistentes);
-      const existentes = new Set(consumos.map((consumo) => `${consumo.lote_id}|${consumo.data}`));
-      const descargas = processarPlanilhaVagao(workbook, lotes, existentes);
-      setResultado({ ...cargas, descargas });
+      const pdfs = selecionados.filter((file) => /\.pdf$/i.test(file.name));
+      if (pdfs.length) {
+        if (pdfs.length !== 2 || selecionados.length !== 2) {
+          throw new Error("Para a Saicon, selecione juntos os dois PDFs: Carga e Descarga.");
+        }
+        const interpretados = [];
+        for (const file of pdfs) interpretados.push(interpretarPdfSaicon(await extrairPaginasPdfSaicon(file)));
+        const cargaPdf = interpretados.find((pdf) => pdf.tipo === "carga");
+        const descargaPdf = interpretados.find((pdf) => pdf.tipo === "descarga");
+        if (!cargaPdf || !descargaPdf) throw new Error("Selecione um PDF de Carga e um PDF de Descarga da Saicon.");
+        setResultado(processarPdfsSaicon(cargaPdf, descargaPdf, lotes, consumos, cargasExistentes));
+      } else {
+        if (selecionados.length !== 1) throw new Error("Selecione apenas uma planilha do vagão.");
+        const XLSX = await carregarLeitorExcel();
+        const workbook = XLSX.read(await selecionados[0].arrayBuffer(), { type: "array", cellDates: true });
+        const cargas = processarCargasPlanilha(workbook, cargasExistentes);
+        const existentes = new Set(consumos.map((consumo) => `${consumo.lote_id}|${consumo.data}`));
+        const descargas = processarPlanilhaVagao(workbook, lotes, existentes);
+        setResultado({ ...cargas, descargas });
+      }
     } catch (e) {
       setErro(e.message || "Não foi possível ler as cargas dessa planilha.");
     } finally {
@@ -2495,14 +2719,36 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
       <BackHeader title="Importar cargas do vagão" onBack={onCancel} />
       <div style={styles.card}>
         <div style={{ fontSize: 13, color: "#5C5C58", lineHeight: 1.5, padding: "10px 0" }}>
-          Selecione o arquivo bruto uma única vez. O aplicativo importa as
-          cargas, soma as DESCARGAS por lote e dia para lançar o consumo e
-          calcula o erro de cada ingrediente. Dados já importados são ignorados.
+          Hook: selecione a planilha bruta. Saicon: selecione juntos os PDFs
+          de Carga e Descarga. O aplicativo relaciona os vagões, soma o consumo
+          por lote/dia e calcula composição, erro, custo e matéria seca.
         </div>
-        <input type="file" accept=".xlsx,.xls" disabled={processando || importando}
-          onChange={(e) => processarArquivo(e.target.files?.[0])}
-          style={{ fontSize: 13, padding: "10px 0" }} />
-        {processando && <div style={{ fontSize: 13, color: "#9A9A94" }}>Lendo cargas e receitas...</div>}
+        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#5C5C58", marginTop: 8 }}>
+          Planilha Hook ou PDF de Carga Saicon
+          <input type="file" accept=".xlsx,.xls,.pdf" disabled={processando || importando}
+            onChange={(e) => {
+              setArquivoPrincipal(e.target.files?.[0] || null);
+              setArquivoDescarga(null);
+              setResultado(null);
+              setErro(null);
+            }}
+            style={{ display: "block", fontSize: 13, padding: "8px 0" }} />
+        </label>
+        {arquivoPrincipal && /\.pdf$/i.test(arquivoPrincipal.name) && (
+          <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#5C5C58", marginTop: 4 }}>
+            PDF de Descarga Saicon
+            <input type="file" accept=".pdf" disabled={processando || importando}
+              onChange={(e) => setArquivoDescarga(e.target.files?.[0] || null)}
+              style={{ display: "block", fontSize: 13, padding: "8px 0" }} />
+          </label>
+        )}
+        <button type="button"
+          disabled={!arquivoPrincipal || (/\.pdf$/i.test(arquivoPrincipal.name) && !arquivoDescarga) || processando || importando}
+          onClick={() => processarArquivo([arquivoPrincipal, ...(arquivoDescarga ? [arquivoDescarga] : [])])}
+          style={{ ...styles.secondaryActionBtn, marginTop: 6 }}>
+          {processando ? "Analisando..." : "Analisar arquivos"}
+        </button>
+        {processando && <div style={{ fontSize: 13, color: "#9A9A94" }}>Lendo e relacionando cargas e descargas...</div>}
         {erro && <div style={{ fontSize: 13, color: "#B8763E", padding: "6px 0" }}>{erro}</div>}
       </div>
 
@@ -2515,6 +2761,14 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
             {resultado.descargas.jaExistentes > 0 && <div>{resultado.descargas.jaExistentes} consumo(s) já existiam e não serão duplicados</div>}
             {resultado.descargas.naoReconhecidos.length > 0 && (
               <div style={{ color: "#B8763E" }}>Lotes não encontrados: {resultado.descargas.naoReconhecidos.join(", ")}</div>
+            )}
+            {resultado.saicon && (
+              <div style={{ marginTop: 4 }}>
+                Saicon: {resultado.saicon.cargasLidas} cargas e {resultado.saicon.descargasLidas} descargas lidas.
+                {(resultado.saicon.cargasSemDescarga > 0 || resultado.saicon.descargasSemCarga > 0) && (
+                  <span style={{ color: "#B8763E" }}> {resultado.saicon.cargasSemDescarga} carga(s) e {resultado.saicon.descargasSemCarga} descarga(s) sem correspondência foram ignoradas.</span>
+                )}
+              </div>
             )}
             {resultado.ignoradas > 0 && <div>{resultado.ignoradas} registro(s) sem carga/receita válida, ignorado(s)</div>}
             {resultado.receitasAusentes.length > 0 && (
