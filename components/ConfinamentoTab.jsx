@@ -2809,13 +2809,22 @@ function corErroCarga(percentual) {
 
 function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSincronizar, onImportar }) {
   const datas = [...new Set(cargas.map((c) => c.data))].sort((a, b) => b.localeCompare(a));
+  const primeiraData = datas[datas.length - 1];
+  const ultimaData = datas[0];
+  const [modo, setModo] = useState("dia");
   const [dataEscolhida, setDataEscolhida] = useState("");
+  const [periodoInicio, setPeriodoInicio] = useState("");
+  const [periodoFim, setPeriodoFim] = useState("");
   const [salvando, setSalvando] = useState(null);
   const [cargaExpandida, setCargaExpandida] = useState(null);
   const [sincronizando, setSincronizando] = useState(false);
   const [mensagemSincronizacao, setMensagemSincronizacao] = useState("");
   const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
-  const cargasDia = cargas.filter((c) => c.data === data);
+  const inicio = periodoInicio || primeiraData;
+  const fim = periodoFim || ultimaData;
+  const cargasDia = modo === "periodo"
+    ? cargas.filter((c) => c.data >= inicio && c.data <= fim)
+    : cargas.filter((c) => c.data === data);
   const msPorIngrediente = new Map(
     ingredientesMs
       .filter((i) => i.ms_percentual != null)
@@ -2910,17 +2919,48 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <SectionTitle>Cargas do vagão</SectionTitle>
-        <label style={{ fontSize: 12, color: "#5C5C58" }}>
-          Dia{" "}
-          <select value={data || ""} onChange={(e) => setDataEscolhida(e.target.value)}
-            style={{ ...styles.input, width: "auto", minWidth: 140, padding: "7px 9px" }}>
-            {datas.map((d) => <option key={d} value={d}>{formatDataBR(d)}</option>)}
-          </select>
-        </label>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid #D8D5CC" }}>
+            <button type="button" onClick={() => setModo("dia")}
+              style={{
+                padding: "6px 10px", fontSize: 12, border: 0, cursor: "pointer",
+                background: modo === "dia" ? "#1F4D45" : "transparent",
+                color: modo === "dia" ? "#fff" : "#5C5C58",
+              }}>
+              Dia
+            </button>
+            <button type="button" onClick={() => setModo("periodo")}
+              style={{
+                padding: "6px 10px", fontSize: 12, border: 0, cursor: "pointer",
+                background: modo === "periodo" ? "#1F4D45" : "transparent",
+                color: modo === "periodo" ? "#fff" : "#5C5C58",
+              }}>
+              Período
+            </button>
+          </div>
+          {modo === "dia" ? (
+            <label style={{ fontSize: 12, color: "#5C5C58" }}>
+              <select value={data || ""} onChange={(e) => setDataEscolhida(e.target.value)}
+                style={{ ...styles.input, width: "auto", minWidth: 140, padding: "7px 9px" }}>
+                {datas.map((d) => <option key={d} value={d}>{formatDataBR(d)}</option>)}
+              </select>
+            </label>
+          ) : (
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input type="date" value={inicio} min={primeiraData} max={fim}
+                onChange={(e) => setPeriodoInicio(e.target.value)}
+                style={{ ...styles.input, width: "auto", padding: "7px 9px", fontSize: 12 }} />
+              <span style={{ fontSize: 12, color: "#9A9A94" }}>até</span>
+              <input type="date" value={fim} min={inicio} max={ultimaData}
+                onChange={(e) => setPeriodoFim(e.target.value)}
+                style={{ ...styles.input, width: "auto", padding: "7px 9px", fontSize: 12 }} />
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={styles.gestaoGrid} className="desktop-summary-grid">
-        <PainelCard label="Cargas no dia" valor={cargasDia.length} />
+        <PainelCard label={modo === "periodo" ? "Cargas no período" : "Cargas no dia"} valor={cargasDia.length} />
         <PainelCard label="Matéria natural" valor={`${totalReal.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`} />
         <PainelCard label="Erro absoluto" valor={`${erroMedio.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`} />
         <PainelCard label="Matéria seca" valor={`${totalMs.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg MS`} />
@@ -3010,7 +3050,9 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
 
       <div style={{ ...styles.card, marginTop: 12 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8 }}>Resultado por carga</div>
-        {cargasDia.map((carga) => {
+        {[...cargasDia]
+          .sort((a, b) => (a.data + (a.hora || "")).localeCompare(b.data + (b.hora || "")))
+          .map((carga) => {
           const itens = Array.isArray(carga.itens) ? carga.itens : [];
           const previsto = itens.reduce((s, i) => s + Number(i.peso_previsto || 0), 0);
           const erro = previsto > 0
@@ -3045,6 +3087,7 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
                   <div>
                     <div style={{ fontWeight: 600 }}>Carga {carga.carga_codigo} · {carga.receita}</div>
                     <div style={{ fontSize: 11.5, color: "#777770" }}>
+                      {modo === "periodo" ? `${formatDataBR(carga.data)} · ` : ""}
                       {carga.hora || "Horário não informado"} · {Number(carga.peso_real || 0).toLocaleString("pt-BR")} kg
                       {msCarga != null ? ` · MS ${msCarga.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : " · MS incompleta"}
                       {cargaComCustoCompleto && custoKgCarga != null ? ` · ${formatBRL(custoCarga)} · ${formatBRL(custoKgCarga)}/kg dieta` : ""}

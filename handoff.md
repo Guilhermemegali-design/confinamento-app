@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-30 (importação unificada Hook/Saicon + cargas, descargas, MS e custos sincronizados com o consumo diário)
+Última atualização: 2026-07-30 (importação unificada Hook/Saicon + cargas, descargas, MS e custos sincronizados com o consumo diário + seletor de dia/período na aba Cargas)
 
 ## O que é
 
@@ -637,6 +637,25 @@ adicionada nesta sessão para atender a Belmont).
     commit `5a360a51dc40338637b4cbfb5d21d4bba61fde44` em 30/07/2026. Produção
     respondeu HTTP 200 e o worker de PDF publicado respondeu HTTP 200
     (1.417.586 bytes).
+56. **Seletor de dia/período na aba Cargas**: `AbaCargas` em
+    `ConfinamentoTab.jsx` ganhou um alternador "Dia"/"Período" ao lado do
+    título "Cargas do vagão". No modo "Dia" (padrão, comportamento
+    inalterado) continua o mesmo `<select>` de uma data só. No modo
+    "Período", dois `<input type="date">` (início/fim, com `min`/`max`
+    cruzados pra não deixar inverter o intervalo) substituem o select;
+    todos os cálculos da aba (cards de resumo, tabela de ingredientes,
+    "Resultado por carga") já eram derivados de um único array filtrado
+    (`cargasDia`) — só troquei o filtro de `c.data === data` para
+    `c.data >= inicio && c.data <= fim` quando em modo período, então
+    nenhuma outra conta precisou mudar. Duas coisas a mais no modo
+    período: a lista "Resultado por carga" passa a mostrar a data de cada
+    carga (fica ambíguo sem isso quando há mais de um dia) e é ordenada
+    cronologicamente (por data + hora), já que a ordem de `cargas` como
+    vem do banco não é garantida. Testado numa rota de teste descartável
+    com 3 cargas fictícias em dias seguidos: período completo soma as 3
+    (bate a soma manual), estreitar o intervalo pra 2 dias exclui a carga
+    de fora corretamente, e a lista por carga aparece ordenada com a data
+    de cada uma.
 
 ## Pendências / coisas para prestar atenção
 
