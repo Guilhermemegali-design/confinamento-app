@@ -2878,12 +2878,24 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
     const custoAtual = custoPorIngrediente.get(item.chave);
     setSalvando(item.chave);
     try {
-      await onSalvarMs({
+      const configuracaoAtualizada = {
         ingrediente_chave: item.chave,
         ingrediente_nome: item.nome,
         ms_percentual: campo === "ms_percentual" ? numero : Number.isFinite(msAtual) ? msAtual : null,
         custo_kg_mn: campo === "custo_kg_mn" ? numero : Number.isFinite(custoAtual) ? custoAtual : null,
-      });
+      };
+      await onSalvarMs(configuracaoAtualizada);
+      // Assim que a MS/custo de um ingrediente é preenchida, sincroniza na
+      // hora — não deixa dependente do clique manual em "Sincronizar
+      // descargas com consumo" (que fica só como reforço/recálculo).
+      if (onSincronizar) {
+        const ingredientesAtualizados = [
+          ...ingredientesMs.filter((i) => i.ingrediente_chave !== item.chave),
+          configuracaoAtualizada,
+        ];
+        const atualizacoes = montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesAtualizados);
+        if (atualizacoes.length) await onSincronizar(atualizacoes);
+      }
     } finally {
       setSalvando(null);
     }

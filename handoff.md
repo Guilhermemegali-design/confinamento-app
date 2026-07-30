@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-30 (importação unificada Hook/Saicon + cargas, descargas, MS e custos sincronizados com o consumo diário + seletor de dia/período na aba Cargas)
+Última atualização: 2026-07-30 (importação unificada Hook/Saicon + cargas, descargas, MS e custos sincronizados com o consumo diário + seletor de dia/período na aba Cargas + sincronização automática ao preencher MS/custo do ingrediente)
 
 ## O que é
 
@@ -656,6 +656,26 @@ adicionada nesta sessão para atender a Belmont).
     (bate a soma manual), estreitar o intervalo pra 2 dias exclui a carga
     de fora corretamente, e a lista por carga aparece ordenada com a data
     de cada uma.
+57. **Sincronização automática ao configurar MS/custo do ingrediente**: a
+    importação da planilha Hook já tentava sincronizar consumo↔descarga
+    sozinha ao final (`confirmar()` em `ImportarCargasPlanilha`), mas isso
+    só produz resultado se a MS/custo dos ingredientes envolvidos já
+    estiver cadastrada em `ingredientes_ms` — na primeira importação de um
+    cliente novo, os ingredientes ainda não têm MS/custo (é descoberto
+    justamente ao importar), então nada era sincronizado até o usuário
+    clicar manualmente em "Sincronizar descargas com consumo" depois de
+    preencher os campos na tabela da aba Cargas. Agora `salvarConfiguracao`
+    (em `AbaCargas`, chamada no `onBlur` de cada campo MS/R$ por
+    ingrediente) monta a lista de ingredientes já incluindo o valor recém
+    salvo e chama `onSincronizar` na hora, sempre que isso resulta em pelo
+    menos um consumo atualizável — o botão manual continua existindo (útil
+    pra forçar recálculo depois de mudar um preço antigo), mas deixa de
+    ser necessário no fluxo normal de importar → completar MS/custo.
+    Testado numa rota descartável com um consumo e uma carga de 2
+    ingredientes: preencher a MS do primeiro ingrediente não dispara nada
+    (ainda falta o segundo); preencher o segundo dispara a sincronização
+    sozinha, sem clicar em nenhum botão, com o `ms_dieta` ponderado
+    corretamente pelo peso de cada ingrediente na carga.
 
 ## Pendências / coisas para prestar atenção
 
