@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-24 (nova navegação mobile/desktop + indicadores de MS sobre PV + gráficos acessíveis no celular + nova marca Rastro Confinamento e atualização automática do PWA)
+Última atualização: 2026-07-30 (importação unificada Hook/Saicon + cargas, descargas, MS e custos sincronizados com o consumo diário)
 
 ## O que é
 
@@ -589,6 +589,54 @@ adicionada nesta sessão para atender a Belmont).
     `04`, `4.0` e `4,0` como o mesmo código. Também há tentativa direta do
     `IdAutonomo` como ID de receita para arquivos que trocaram essas colunas
     ao serem filtrados/reexportados.
+49. **Detalhamento expansível por carga**: em "Resultado por carga", cada
+    vagão pode ser aberto para mostrar previsto, realizado, erro em kg e erro
+    percentual de cada ingrediente. O cabeçalho da carga também mostra a MS
+    percentual ponderada pela composição realmente carregada; se faltar a MS
+    de algum ingrediente, aparece "MS incompleta".
+50. **Carga ligada às descargas e ao consumo diário**: `cargas_vagao` ganhou
+    o campo JSONB `descargas` (migration
+    `supabase/add_descargas_cargas_vagao.sql`, já aplicada em produção). O
+    arquivo bruto da Hook é enviado uma única vez: o app importa as cargas,
+    lê `DESCARGAS`, soma o peso por lote/data e cria os consumos diários que
+    ainda não existem. A restrição única `(lote_id, data)` continua impedindo
+    duplicação. Reimportar também completa cargas antigas que ainda não
+    tinham as descargas armazenadas, sem criar outra carga.
+51. **Sincronização ponderada de MS e custo**: para cada vagão, o app calcula
+    a MS e o custo/kg pela quantidade real de cada ingrediente. Depois
+    pondera esses valores pelo peso descarregado em cada lote e atualiza
+    apenas `consumos_lote.ms_dieta` e `consumos_lote.custo_kg_mn`; a
+    `consumo_total_lote` nunca é alterada por essa sincronização. Há
+    sincronização automática na importação e botão manual para recalcular
+    depois que a MS ou o preço de um ingrediente mudar.
+52. **Importação dos PDFs Saicon**: o mesmo importador aceita:
+    - uma planilha bruta `.xlsx/.xls` da Hook; ou
+    - um PDF de Carga + um PDF de Descarga da Saicon.
+    O leitor usa `pdfjs-dist@4.10.38`, com worker local em
+    `public/pdf.worker.min.mjs` para funcionar no navegador/PWA sem serviço
+    externo. Os relatórios Saicon são relacionados por data e sequência de
+    horários; a composição real vem do PDF de Carga e os pesos por lote vêm
+    do PDF de Descarga. Antes de gravar, a tela informa cargas/consumos novos,
+    lotes não reconhecidos e pares sem correspondência. O código determinístico
+    `saicon-AAAA-MM-DD-HHMM` impede duplicar a mesma carga.
+53. **Validação com os arquivos reais da Saicon** (cliente José Fernando de
+    Almeida Junior): `Enviando por email Carga.pdf` tem 153 páginas e
+    `Enviando por email Descarga-3.pdf` tem 151. Foram reconhecidas 149
+    cargas destinadas aos lotes e 147 descargas; 147 pares foram ligados
+    com segurança. Duas cargas (06/06 e 12/06) não possuem descarga
+    correspondente e são avisadas/ignoradas. Quatro registros internos de
+    pré-mistura não são consumo de lote e também ficam fora.
+54. **Conta de Gabriel Gonzaga diagnosticada e removida**:
+    `gabriel.t.gonzaga@gmail.com` já havia confirmado o e-mail e entrado em
+    23/07; as tentativas seguintes eram cadastro repetido/senha incorreta,
+    não falha de confirmação. Como não havia vínculo em
+    `clientes_usuarios`, a conta e suas sessões foram excluídas do Supabase a
+    pedido do usuário para permitir novo cadastro com nova senha.
+55. **Publicação atual**: commits `0b00c44`, `054ce97`, `6655336` e
+    `5a360a5` foram enviados para `main`. A Vercel confirmou o deploy do
+    commit `5a360a51dc40338637b4cbfb5d21d4bba61fde44` em 30/07/2026. Produção
+    respondeu HTTP 200 e o worker de PDF publicado respondeu HTTP 200
+    (1.417.586 bytes).
 
 ## Pendências / coisas para prestar atenção
 
@@ -652,7 +700,8 @@ adicionada nesta sessão para atender a Belmont).
   o usuário não é super técnico e já teve dificuldade com comandos de git
   (colar comando com caracteres estranhos, autenticação por token, etc.) — ir
   com calma, um comando de cada vez, confirmando o resultado antes do próximo.
-- Deploy: qualquer mudança de código precisa de `git add` + `commit` (eu
-  faço) + `git push` (o usuário roda no terminal dele) para ir ao ar — não
-  há como eu fazer push diretamente (sem credenciais de git configuradas
-  neste ambiente).
+- Deploy: qualquer mudança de código precisa de `git add` + `commit` +
+  `git push origin HEAD:main`. O push direto está funcionando neste
+  ambiente; depois, conferir o status do commit no GitHub até a Vercel
+  informar "Deployment has completed" e validar
+  `https://confinamento-nine.vercel.app/`.
