@@ -177,7 +177,7 @@ export default function ConfinamentoTab({
   onAdicionarSaida, onExcluirSaida,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
-  onImportarCargas, onSalvarMsIngrediente, onSincronizarCustosMs,
+  onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
   onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onMoverLoteParaCurral, onAtualizarCliente,
   onBack, onGerenciarCliente,
 }) {
@@ -543,6 +543,7 @@ export default function ConfinamentoTab({
           onSalvarMs={onSalvarMsIngrediente}
           onSincronizar={onSincronizarCustosMs}
           onImportar={onImportarCargas && (() => setTela({ modo: "importar-cargas" }))}
+          onExcluirCarga={onExcluirCarga}
         />
       ) : aba === "mapa" ? (
         <MapaCurrais
@@ -578,7 +579,7 @@ export default function ConfinamentoTab({
             const {
               lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje,
               consumoMS, consumoMSPercentualPV, consumoMSPercentualPVMedio,
-              custoAcumuladoAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate,
+              custoAcumuladoAnimal, custoMedioDiarioAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate,
             } = item;
             const faixaMSUltimo = faixaConsumoMS(consumoMSPercentualPV);
             const faixaMSMedio = faixaConsumoMS(consumoMSPercentualPVMedio);
@@ -638,6 +639,11 @@ export default function ConfinamentoTab({
                         Custo acum. {formatBRL(custoAcumuladoAnimal)}/animal
                       </div>
                     )}
+                    {custoMedioDiarioAnimal != null && (
+                      <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
+                        Diária média {formatBRL(custoMedioDiarioAnimal)}/animal
+                      </div>
+                    )}
                     {dataProvavelAbate != null && (
                       <div style={{ fontSize: 11.5, color: "#1F4D45", marginTop: 2 }}>
                         Abate previsto: {formatDataBR(dataProvavelAbate)}
@@ -663,7 +669,7 @@ export default function ConfinamentoTab({
           <SectionTitle>Lotes finalizados</SectionTitle>
           {finalizados.length === 0 && <EmptyHint text="Nenhum lote finalizado ainda." />}
           <div className="desktop-lotes-grid">
-          {finalizados.map(({ lote, diasConfinamento, gmdVivoEntradaSaida, consumoMS }) => (
+          {finalizados.map(({ lote, diasConfinamento, gmdVivoEntradaSaida, consumoMS, custoMedioDiarioAnimal }) => (
             <button key={lote.id} style={styles.listItem} className="desktop-lote-card" onClick={() => setTela({ modo: "lote", id: lote.id })}>
               <div style={{ ...styles.avatar, background: "#F1EFE8", color: "#5C5C58" }}>{lote.nome.charAt(0)}</div>
               <div style={{ flex: 1, textAlign: "left" }}>
@@ -682,6 +688,11 @@ export default function ConfinamentoTab({
                 {consumoMS != null && (
                   <div style={{ fontSize: 11.5, color: "#1F4D45", marginTop: 2 }}>
                     MS {consumoMS.toFixed(2)} kg/cab/dia
+                  </div>
+                )}
+                {custoMedioDiarioAnimal != null && (
+                  <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
+                    Diária média {formatBRL(custoMedioDiarioAnimal)}/animal
                   </div>
                 )}
               </div>
@@ -3061,7 +3072,7 @@ function corErroCarga(percentual) {
   return { cor: "#B4473D", fundo: "#FBE8E6" };
 }
 
-function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSincronizar, onImportar }) {
+function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSincronizar, onImportar, onExcluirCarga }) {
   const datas = [...new Set(cargas.map((c) => c.data))].sort((a, b) => b.localeCompare(a));
   const primeiraData = datas[datas.length - 1];
   const ultimaData = datas[0];
@@ -3345,9 +3356,9 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
           const chaveCarga = carga.id || carga.carga_codigo;
           const expandida = cargaExpandida === chaveCarga;
           return (
-            <div key={chaveCarga} style={{ borderTop: "1px solid #ECE9E2" }}>
+            <div key={chaveCarga} style={{ borderTop: "1px solid #ECE9E2", display: "flex", alignItems: "center", gap: 4 }}>
               <button type="button" aria-expanded={expandida} onClick={() => setCargaExpandida(expandida ? null : chaveCarga)}
-                style={{ width: "100%", border: 0, background: "transparent", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "10px 0", cursor: "pointer", textAlign: "left", color: "inherit" }}>
+                style={{ flex: 1, minWidth: 0, border: 0, background: "transparent", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "10px 0", cursor: "pointer", textAlign: "left", color: "inherit" }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   {expandida ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
                   <div>
@@ -3364,6 +3375,17 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
                   erro {erro.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
                 </span>
               </button>
+              {onExcluirCarga && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm(`Excluir a carga ${carga.carga_codigo}? Essa ação não pode ser desfeita.`)) onExcluirCarga(carga.id);
+                  }}
+                  style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex", flexShrink: 0 }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
               {expandida && (
                 <div style={{ overflowX: "auto", padding: "0 0 10px 25px" }}>
                   <table style={{ width: "100%", minWidth: 540, borderCollapse: "collapse", fontSize: 11.5 }}>

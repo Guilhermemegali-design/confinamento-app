@@ -370,6 +370,12 @@ function PainelCliente({ cliente, somenteLeitura }) {
     return data || [];
   }
 
+  async function excluirCarga(cargaId) {
+    const { error } = await supabase.from("cargas_vagao").delete().eq("id", cargaId);
+    if (error) throw error;
+    setCargasVagao((cs) => cs.filter((c) => c.id !== cargaId));
+  }
+
   async function sincronizarCustosMsConsumos(atualizacoes) {
     if (atualizacoes.length === 0) return [];
     const linhas = await Promise.all(atualizacoes.map(async ({ id, ...dados }) => {
@@ -516,6 +522,7 @@ function PainelCliente({ cliente, somenteLeitura }) {
           onRegistrarLeituraCocho={somenteLeitura ? undefined : registrarLeituraCocho}
           onImportarLeiturasCocho={somenteLeitura ? undefined : importarLeiturasCochoEmLote}
           onImportarCargas={somenteLeitura ? undefined : importarCargasEmLote}
+          onExcluirCarga={somenteLeitura ? undefined : excluirCarga}
           onSalvarMsIngrediente={somenteLeitura ? undefined : salvarMsIngrediente}
           onSincronizarCustosMs={somenteLeitura ? undefined : sincronizarCustosMsConsumos}
           onAdicionarCurral={somenteLeitura ? undefined : adicionarCurral}

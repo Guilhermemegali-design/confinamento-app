@@ -162,6 +162,10 @@ export default function Home() {
             mostrarToast(`${importadas.length} carga${importadas.length !== 1 ? "s" : ""} importada${importadas.length !== 1 ? "s" : ""}`);
             return importadas;
           }}
+          onExcluirCarga={async (cargaId) => {
+            await dados.excluirCarga(cargaId);
+            mostrarToast("Carga excluída");
+          }}
           onSalvarMsIngrediente={async (clienteId, ingrediente) => {
             await dados.salvarMsIngrediente(clienteId, ingrediente);
             mostrarToast("Matéria seca atualizada");
