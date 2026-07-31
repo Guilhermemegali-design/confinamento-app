@@ -1974,6 +1974,16 @@ function linhasDaAba(workbook, nome) {
   return leitorExcelCarregado.utils.sheet_to_json(workbook.Sheets[nomeReal], { header: 1, defval: null });
 }
 
+// Algumas exportações do vagão chamam a mesma aba em espanhol (RECETAS) e
+// outras em português (RECEITAS) - aceita qualquer uma das duas.
+function linhasDaAbaComAlias(workbook, nomes) {
+  for (const nome of nomes) {
+    const linhas = linhasDaAba(workbook, nome);
+    if (linhas) return linhas;
+  }
+  return null;
+}
+
 function montarFasesPorCarga(workbook) {
   const linhasCargas = linhasDaAba(workbook, "cargas");
   const linhasAutonomos = linhasDaAba(workbook, "autonomos");
@@ -2277,6 +2287,244 @@ function montarDescargasPorCarga(workbook) {
     if (itens.length) descargas.set(cargaCodigo, itens);
   }
   return descargas;
+}
+
+// --- Formato "longo" do arquivo do vagão --------------------------------
+// Algumas exportações da Hook trazem uma linha por ingrediente na aba
+// CARGAS (em vez de colunas Ing1/Peso1..15 lado a lado) e uma linha por
+// lote na aba DESCARGAS (coluna "Lot" direto, sem pares Ing/Peso). As
+// abas também podem vir em português (RECEITAS/AUTONOMO) em vez de
+// espanhol (RECETAS/AUTONOMOS). As funções abaixo tratam esse layout;
+// processarCargasPlanilha/processarPlanilhaVagao continuam cuidando do
+// formato largo de sempre.
+function ehFormatoVagaoLongo(workbook) {
+  const linhas = linhasDaAba(workbook, "cargas");
+  if (!linhas) return false;
+  return encontrarLinhaCabecalho(linhas, ["idcarga", "ingrediente", "quanti"]) !== -1;
+}
+
+function montarReceitasPorIdLonga(workbook) {
+  const linhas = linhasDaAbaComAlias(workbook, ["recetas", "receitas"]);
+  if (!linhas) throw new Error('Não encontrei a aba "RECEITAS" no arquivo do vagão.');
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["idreceita", "nome"]);
+  if (idxCabecalho === -1) throw new Error('Não encontrei as colunas "Id Receita" e "Nome" na aba RECEITAS.');
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("idreceita");
+  const idxNome = cabecalho.indexOf("nome");
+  const pares = [];
+  for (let numero = 1; numero <= 15; numero++) {
+    const idxIngrediente = cabecalho.indexOf(`ingrediente${numero}`);
+    const idxPeso = cabecalho.indexOf(`quanti${numero}`);
+    if (idxIngrediente !== -1 && idxPeso !== -1) pares.push({ idxIngrediente, idxPeso });
+  }
+  const receitas = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const id = normalizarCodigoPlanilha(linha?.[idxId]);
+    if (!id) continue;
+    const itens = [];
+    for (const par of pares) {
+      const nome = String(linha?.[par.idxIngrediente] ?? "").trim();
+      const peso = normalizarNumeroPlanilha(linha?.[par.idxPeso]);
+      if (!nome || nome === "0" || peso == null || peso <= 0) continue;
+      itens.push({ nome, chave: chaveIngrediente(nome), peso });
+    }
+    const nomeReceita = String(linha?.[idxNome] ?? id).trim();
+    receitas.set(id, { nome: nomeReceita, itens, fase: normalizarFasePlanilha(nomeReceita) });
+  }
+  return receitas;
+}
+
+function montarDescargasPorCargaLonga(workbook) {
+  const linhas = linhasDaAba(workbook, "descargas");
+  if (!linhas) return new Map();
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["idcarga", "data", "lot", "quanti"]);
+  if (idxCabecalho === -1) return new Map();
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxData = cabecalho.indexOf("data");
+  const idxCarga = cabecalho.indexOf("idcarga");
+  const idxLote = cabecalho.indexOf("lot");
+  const idxQuanti = cabecalho.indexOf("quanti");
+  const descargas = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const cargaCodigo = normalizarCodigoPlanilha(linha?.[idxCarga]);
+    const data = normalizarDataPlanilha(linha?.[idxData]);
+    const loteCodigo = String(linha?.[idxLote] ?? "").trim();
+    const peso = normalizarNumeroPlanilha(linha?.[idxQuanti]);
+    if (!cargaCodigo || !data || !loteCodigo || loteCodigo === "0" || peso == null || peso <= 0) continue;
+    const itens = descargas.get(cargaCodigo) || [];
+    itens.push({ data, lote_codigo: loteCodigo, peso });
+    descargas.set(cargaCodigo, itens);
+  }
+  return descargas;
+}
+
+function montarFasesPorCargaLonga(workbook, receitas) {
+  const linhas = linhasDaAba(workbook, "cargas");
+  if (!linhas) return new Map();
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["idcarga", "idreceita"]);
+  if (idxCabecalho === -1) return new Map();
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("idcarga");
+  const idxReceita = cabecalho.indexOf("idreceita");
+  const fasePorCarga = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const cargaCodigo = normalizarCodigoPlanilha(linha?.[idxId]);
+    const receitaId = normalizarCodigoPlanilha(linha?.[idxReceita]);
+    const fase = receitas.get(receitaId)?.fase;
+    if (cargaCodigo && fase && !fasePorCarga.has(cargaCodigo)) fasePorCarga.set(cargaCodigo, fase);
+  }
+  return fasePorCarga;
+}
+
+function processarCargasPlanilhaLonga(workbook, cargasExistentes) {
+  const linhas = linhasDaAba(workbook, "cargas");
+  if (!linhas) throw new Error('Não encontrei a aba "CARGAS" no arquivo do vagão.');
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["idcarga", "data", "ingrediente", "quanti"]);
+  if (idxCabecalho === -1) {
+    throw new Error('Não encontrei as colunas "Id Carga", "Data", "Ingrediente" e "Quanti." na aba CARGAS.');
+  }
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("idcarga");
+  const idxData = cabecalho.indexOf("data");
+  const idxHora = cabecalho.indexOf("hora");
+  const idxReceita = cabecalho.indexOf("idreceita");
+  const idxIngrediente = cabecalho.indexOf("ingrediente");
+  const idxQuanti = cabecalho.indexOf("quanti");
+
+  const receitas = montarReceitasPorIdLonga(workbook);
+  const descargasPorCarga = montarDescargasPorCargaLonga(workbook);
+  const existentes = new Map(cargasExistentes.map((c) => [String(c.carga_codigo), c]));
+
+  // Uma carga vem espalhada em várias linhas (uma por ingrediente) - agrupa
+  // por Id Carga antes de calcular o total pesado.
+  const brutas = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    if (!linha || linha.every((v) => v == null || v === "")) continue;
+    const cargaCodigo = normalizarCodigoPlanilha(linha[idxId]);
+    const data = normalizarDataPlanilha(linha[idxData]);
+    if (!cargaCodigo || !data) continue;
+    const grupo = brutas.get(cargaCodigo) || {
+      data,
+      hora: idxHora !== -1 ? String(linha[idxHora] ?? "").trim() || null : null,
+      receitaId: normalizarCodigoPlanilha(linha[idxReceita]),
+      itens: new Map(),
+    };
+    const nome = String(linha[idxIngrediente] ?? "").trim();
+    const peso = normalizarNumeroPlanilha(linha[idxQuanti]);
+    if (nome && nome !== "0" && peso != null && peso >= 0) {
+      const chave = chaveIngrediente(nome);
+      const atual = grupo.itens.get(chave) || { nome, peso: 0 };
+      atual.peso += peso;
+      grupo.itens.set(chave, atual);
+    }
+    brutas.set(cargaCodigo, grupo);
+  }
+
+  const novos = [];
+  const receitasAusentes = new Set();
+  let ignoradas = 0;
+  let jaExistentes = 0;
+
+  for (const [cargaCodigo, grupo] of brutas) {
+    const receita = receitas.get(grupo.receitaId);
+    if (!receita) {
+      if (grupo.receitaId && grupo.receitaId !== "0") receitasAusentes.add(grupo.receitaId);
+      ignoradas++;
+      continue;
+    }
+    const cargaExistente = existentes.get(cargaCodigo);
+    if (cargaExistente && Array.isArray(cargaExistente.descargas) && cargaExistente.descargas.length > 0) {
+      jaExistentes++;
+      continue;
+    }
+    const totalReal = [...grupo.itens.values()].reduce((soma, item) => soma + item.peso, 0);
+    const totalProgramado = receita.itens.reduce((soma, item) => soma + item.peso, 0);
+    if (totalReal <= 0 || totalProgramado <= 0) {
+      ignoradas++;
+      continue;
+    }
+    const fator = totalReal / totalProgramado;
+    const todasChaves = new Set([...grupo.itens.keys(), ...receita.itens.map((i) => i.chave)]);
+    const itens = [...todasChaves].map((chave) => {
+      const real = grupo.itens.get(chave);
+      const programado = receita.itens.find((i) => i.chave === chave);
+      return {
+        ingrediente: real?.nome || programado?.nome || chave,
+        ingrediente_chave: chave,
+        peso_real: real?.peso || 0,
+        peso_previsto: (programado?.peso || 0) * fator,
+      };
+    });
+    novos.push({
+      carga_codigo: cargaCodigo,
+      data: grupo.data,
+      hora: grupo.hora,
+      receita: receita.nome,
+      peso_real: totalReal,
+      peso_previsto: totalProgramado * fator,
+      itens,
+      descargas: descargasPorCarga.get(cargaCodigo) || [],
+    });
+  }
+
+  novos.sort((a, b) => a.data.localeCompare(b.data) || String(a.hora || "").localeCompare(String(b.hora || "")));
+  return {
+    novos,
+    ignoradas,
+    jaExistentes,
+    receitasAusentes: [...receitasAusentes],
+    receitasDisponiveis: [...receitas.keys()],
+  };
+}
+
+function processarPlanilhaVagaoLonga(workbook, lotes, existentes) {
+  const linhas = linhasDaAba(workbook, "descargas");
+  if (!linhas) throw new Error('Não encontrei a aba "DESCARGAS" no arquivo do vagão.');
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["idcarga", "data", "lot", "quanti"]);
+  if (idxCabecalho === -1) {
+    throw new Error('Não encontrei as colunas "Data", "Id Carga", "Lot" e "Quanti." na aba DESCARGAS.');
+  }
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxData = cabecalho.indexOf("data");
+  const idxCarga = cabecalho.indexOf("idcarga");
+  const idxLote = cabecalho.indexOf("lot");
+  const idxQuanti = cabecalho.indexOf("quanti");
+
+  const receitas = montarReceitasPorIdLonga(workbook);
+  const fasePorCarga = montarFasesPorCargaLonga(workbook, receitas);
+  const grupos = new Map();
+  const naoReconhecidos = new Set();
+  let linhasIgnoradas = 0;
+  let totalLinhasSomadas = 0;
+  let descargasLidas = 0;
+
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    if (!linha || linha.every((v) => v == null || v === "")) continue;
+    const data = normalizarDataPlanilha(linha[idxData]);
+    const codigoLote = linha[idxLote];
+    const valor = normalizarNumeroPlanilha(linha[idxQuanti]);
+    if (!data || codigoLote == null || codigoLote === "" || valor == null || valor <= 0) {
+      linhasIgnoradas++;
+      continue;
+    }
+    const lote = encontrarLoteDescarga(codigoLote, lotes);
+    if (!lote) {
+      naoReconhecidos.add(String(codigoLote).trim());
+      linhasIgnoradas++;
+      continue;
+    }
+    const fase = fasePorCarga.get(normalizarCodigoPlanilha(linha[idxCarga])) || null;
+    if (adicionarAoGrupo(grupos, lote, data, valor, fase, null)) totalLinhasSomadas++;
+    descargasLidas++;
+  }
+
+  return montarResultadoImportacao(grupos, existentes, {
+    formato: "Arquivo bruto do vagão",
+    naoReconhecidos: [...naoReconhecidos].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+    linhasIgnoradas,
+    totalLinhasSomadas,
+    descargasLidas,
+  });
 }
 
 function processarCargasPlanilha(workbook, cargasExistentes) {
@@ -2670,9 +2918,15 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
         if (selecionados.length !== 1) throw new Error("Selecione apenas uma planilha do vagão.");
         const XLSX = await carregarLeitorExcel();
         const workbook = XLSX.read(await selecionados[0].arrayBuffer(), { type: "array", cellDates: true });
-        const cargas = processarCargasPlanilha(workbook, cargasExistentes);
         const existentes = new Set(consumos.map((consumo) => `${consumo.lote_id}|${consumo.data}`));
-        const descargas = processarPlanilhaVagao(workbook, lotes, existentes);
+        // Formato largo (Ing1/Peso1..15 lado a lado) ou longo (uma linha por
+        // ingrediente/lote) - detecta pelo cabeçalho da aba CARGAS.
+        const cargas = ehFormatoVagaoLongo(workbook)
+          ? processarCargasPlanilhaLonga(workbook, cargasExistentes)
+          : processarCargasPlanilha(workbook, cargasExistentes);
+        const descargas = ehFormatoVagaoLongo(workbook)
+          ? processarPlanilhaVagaoLonga(workbook, lotes, existentes)
+          : processarPlanilhaVagao(workbook, lotes, existentes);
         setResultado({ ...cargas, descargas });
       }
     } catch (e) {
