@@ -1,14 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2, Search, Settings2 } from "lucide-react";
+import { Trash2, Search, Settings2, Users, Beef, Layers3, TrendingUp, CalendarDays, Utensils, ArrowUpRight } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryButton } from "./UI";
 import ConfinamentoTab from "./ConfinamentoTab";
-import { calcularResumoSaidas } from "@/lib/confinamento";
 
 export default function ClientesTab({
-  clientes, lotes, pesagens, consumos, saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
+  clientes, lotes, pesagens, consumos, saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], recebimentosConsultoria = [], view, setView,
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
@@ -18,6 +17,7 @@ export default function ClientesTab({
   onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
   onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais, onMoverLoteParaCurral,
   onRemoveAcessoCliente, onUpdateAcessoCliente,
+  onMarcarRecebimento,
 }) {
   const [abaGeral, setAbaGeral] = useState("clientes");
   const [buscaCliente, setBuscaCliente] = useState("");
@@ -143,7 +143,7 @@ export default function ClientesTab({
           <>
             <SectionTitle>Pessoas com acesso</SectionTitle>
             <div style={{ fontSize: 11.5, color: "#9A9A94", padding: "0 4px 8px", marginTop: -6 }}>
-              "Leitor" só vê os dados — não cria/edita lote, não lança pesagem, consumo, saída, leitura de cocho nem mexe no mapa de currais.
+              "Administrador" tem acesso total, incluindo relatórios de visita. "Editor" cria e edita dados do confinamento. "Leitor" só visualiza.
             </div>
             {pessoasComAcesso.map((pessoa) => (
               <div key={pessoa.id} style={styles.rowCard}>
@@ -154,6 +154,7 @@ export default function ClientesTab({
                     onChange={(e) => onUpdateAcessoCliente(pessoa.id, { papel: e.target.value })}
                     style={{ fontSize: 12, color: "#5C5C58", background: "#F1EFE8", border: "none", borderRadius: 8, padding: "5px 8px", fontFamily: "inherit", marginRight: 6 }}
                   >
+                    <option value="administrador">Administrador</option>
                     <option value="editor">Editor</option>
                     <option value="leitor">Leitor</option>
                   </select>
@@ -215,7 +216,7 @@ export default function ClientesTab({
           onClick={() => setAbaGeral("painel")}
           style={{ ...styles.viewToggleBtn, ...(abaGeral === "painel" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", padding: "7px 10px" }}
         >
-          Painel
+          Gestão
         </button>
         <button
           onClick={() => setAbaGeral("clientes")}
@@ -226,7 +227,7 @@ export default function ClientesTab({
       </div>
 
       {abaGeral === "painel" ? (
-        <PainelGeral clientes={clientes} lotes={lotes} saidas={saidas} setView={setView} />
+        <PainelGeral clientes={clientes} lotes={lotes} saidas={saidas} consumos={consumos} cargasVagao={cargasVagao} recebimentosConsultoria={recebimentosConsultoria} onMarcarRecebimento={onMarcarRecebimento} setView={setView} />
       ) : (
         <>
           <ListHeader title="Clientes" actionLabel="Novo cliente" onAction={() => setView({ screen: "novo-cliente" })} />
@@ -271,62 +272,191 @@ export default function ClientesTab({
   );
 }
 
-function PainelGeral({ clientes, lotes, saidas, setView }) {
-  const ativos = lotes.filter((l) => !l.data_saida);
-  if (ativos.length === 0) return <EmptyHint text="Nenhum lote ativo ainda." />;
+const MESES_CURTOS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
-  // Cabeças restantes já descontam saídas parciais lançadas (lote que vai
-  // esvaziando aos poucos) — pra lote sem nenhuma saída, é igual a num_cabecas.
+function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [], recebimentosConsultoria = [], onMarcarRecebimento, setView }) {
+  const hoje = new Date();
+  const anosComDados = [...new Set([
+    hoje.getFullYear(),
+    ...lotes.map((l) => Number(String(l.data_entrada || "").slice(0, 4))),
+    ...consumos.map((c) => Number(String(c.data || "").slice(0, 4))),
+  ].filter((ano) => Number.isFinite(ano) && ano > 2000))].sort((a, b) => b - a);
+  const [ano, setAno] = useState(anosComDados[0] || hoje.getFullYear());
+  const [mesRecebimento, setMesRecebimento] = useState(hoje.getMonth());
+  const [salvandoRecebimento, setSalvandoRecebimento] = useState(null);
+
   const saidasPorLote = new Map();
-  for (const s of saidas) {
-    if (!saidasPorLote.has(s.lote_id)) saidasPorLote.set(s.lote_id, []);
-    saidasPorLote.get(s.lote_id).push(s);
+  for (const saida of saidas) {
+    if (!saidasPorLote.has(saida.lote_id)) saidasPorLote.set(saida.lote_id, []);
+    saidasPorLote.get(saida.lote_id).push(saida);
   }
-  const cabecasRestantesPorLote = new Map(
-    ativos.map((l) => [l.id, calcularResumoSaidas(l, saidasPorLote.get(l.id) || []).cabecasRestantes])
+
+  const cabecasNaData = (lote, dataISO) => {
+    if (!lote.data_entrada || lote.data_entrada > dataISO || (lote.data_saida && lote.data_saida < dataISO)) return 0;
+    const retiradas = (saidasPorLote.get(lote.id) || [])
+      .filter((saida) => saida.data && saida.data <= dataISO)
+      .reduce((soma, saida) => soma + Number(saida.num_cabecas || 0), 0);
+    return Math.max(0, Number(lote.num_cabecas || 0) - retiradas);
+  };
+
+  const meses = MESES_CURTOS.map((nome, indice) => {
+    const inicio = `${ano}-${String(indice + 1).padStart(2, "0")}-01`;
+    const dias = new Date(ano, indice + 1, 0).getDate();
+    const fim = `${ano}-${String(indice + 1).padStart(2, "0")}-${dias}`;
+    let animaisDia = 0;
+    const clientesAtivos = new Set();
+    for (let dia = 1; dia <= dias; dia += 1) {
+      const data = `${ano}-${String(indice + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+      for (const lote of lotes) {
+        const cabecas = cabecasNaData(lote, data);
+        animaisDia += cabecas;
+        if (cabecas > 0) clientesAtivos.add(lote.cliente_id);
+      }
+    }
+    const entradas = lotes.filter((l) => l.data_entrada >= inicio && l.data_entrada <= fim).reduce((s, l) => s + Number(l.num_cabecas || 0), 0);
+    const saidasParciais = saidas.filter((s) => s.data >= inicio && s.data <= fim).reduce((total, s) => total + Number(s.num_cabecas || 0), 0);
+    const saidasDiretas = lotes.filter((l) => l.data_saida >= inicio && l.data_saida <= fim && !(saidasPorLote.get(l.id) || []).length).reduce((s, l) => s + Number(l.num_cabecas || 0), 0);
+    return {
+      nome,
+      media: Math.round(animaisDia / dias),
+      fechamento: lotes.reduce((s, lote) => s + cabecasNaData(lote, fim), 0),
+      entradas,
+      saidas: saidasParciais + saidasDiretas,
+      clientes: clientesAtivos.size,
+      consumo: consumos.filter((c) => c.data >= inicio && c.data <= fim).reduce((s, c) => s + Number(c.consumo_total_lote || 0), 0) / 1000,
+      cargas: cargasVagao.filter((c) => c.data >= inicio && c.data <= fim).length,
+    };
+  });
+
+  const hojeISO = hoje.toISOString().slice(0, 10);
+  const lotesAtivos = lotes.map((lote) => ({ lote, cabecas: cabecasNaData(lote, hojeISO) })).filter((item) => item.cabecas > 0);
+  const animaisAgora = lotesAtivos.reduce((s, item) => s + item.cabecas, 0);
+  const clientesAgora = new Set(lotesAtivos.map((item) => item.lote.cliente_id)).size;
+  const mesesConsiderados = ano === hoje.getFullYear() ? hoje.getMonth() + 1 : 12;
+  const mediaAnual = Math.round(meses.slice(0, mesesConsiderados).reduce((s, mes) => s + mes.media, 0) / mesesConsiderados);
+  const entradasAno = meses.reduce((s, mes) => s + mes.entradas, 0);
+  const saidasAno = meses.reduce((s, mes) => s + mes.saidas, 0);
+  const consumoAno = meses.reduce((s, mes) => s + mes.consumo, 0);
+  const mesAtual = ano === hoje.getFullYear() ? hoje.getMonth() : 11;
+  const variacao = meses[mesAtual - 1]?.media > 0
+    ? ((meses[mesAtual].media - meses[mesAtual - 1].media) / meses[mesAtual - 1].media) * 100
+    : null;
+
+  const porCliente = clientes.map((cliente) => {
+    const lotesCliente = lotesAtivos.filter((item) => item.lote.cliente_id === cliente.id);
+    const ids = new Set(lotes.filter((l) => l.cliente_id === cliente.id).map((l) => l.id));
+    return {
+      cliente,
+      lotes: lotesCliente.length,
+      cabecas: lotesCliente.reduce((s, item) => s + item.cabecas, 0),
+      entradas: lotes.filter((l) => l.cliente_id === cliente.id && String(l.data_entrada).startsWith(`${ano}-`)).reduce((s, l) => s + Number(l.num_cabecas || 0), 0),
+      consumo: consumos.filter((c) => ids.has(c.lote_id) && String(c.data).startsWith(`${ano}-`)).reduce((s, c) => s + Number(c.consumo_total_lote || 0), 0) / 1000,
+    };
+  }).filter((item) => item.cabecas > 0 || item.entradas > 0).sort((a, b) => b.cabecas - a.cabecas);
+
+  const comparativoAnual = anosComDados.map((anoItem) => {
+    const entradas = lotes.filter((l) => String(l.data_entrada).startsWith(`${anoItem}-`)).reduce((s, l) => s + Number(l.num_cabecas || 0), 0);
+    const clientesAno = new Set(lotes.filter((l) => String(l.data_entrada).startsWith(`${anoItem}-`)).map((l) => l.cliente_id)).size;
+    const consumo = consumos.filter((c) => String(c.data).startsWith(`${anoItem}-`)).reduce((s, c) => s + Number(c.consumo_total_lote || 0), 0) / 1000;
+    return { ano: anoItem, entradas, clientes: clientesAno, consumo };
+  });
+  const competenciaRecebimento = `${ano}-${String(mesRecebimento + 1).padStart(2, "0")}-01`;
+  const recebidosNaCompetencia = new Set(
+    recebimentosConsultoria.filter((item) => item.competencia === competenciaRecebimento && item.recebido).map((item) => item.cliente_id)
   );
 
-  const totalCabecas = ativos.reduce((soma, l) => soma + (cabecasRestantesPorLote.get(l.id) || 0), 0);
-
-  const porCliente = new Map();
-  for (const lote of ativos) {
-    const atual = porCliente.get(lote.cliente_id) || { lotes: 0, cabecas: 0 };
-    atual.lotes += 1;
-    atual.cabecas += cabecasRestantesPorLote.get(lote.id) || 0;
-    porCliente.set(lote.cliente_id, atual);
-  }
-
-  const linhas = [...porCliente.entries()]
-    .map(([clienteId, dados]) => ({ cliente: clientes.find((c) => c.id === clienteId), ...dados }))
-    .filter((linha) => linha.cliente)
-    .sort((a, b) => b.cabecas - a.cabecas);
+  if (lotes.length === 0) return <EmptyHint text="Cadastre os primeiros lotes para começar a análise da consultoria." />;
 
   return (
-    <>
-      <SectionTitle>Confinamento — visão geral</SectionTitle>
-      <div style={{ ...styles.card, padding: "16px", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+    <div className="gestao-dashboard">
+      <div className="gestao-hero">
         <div>
-          <div style={{ fontSize: 12.5, color: "#9A9A94" }}>Animais confinados agora</div>
-          <div style={{ fontSize: 26, fontWeight: 700, color: "#1F4D45" }}>{totalCabecas.toLocaleString("pt-BR")}</div>
+          <div className="gestao-eyebrow">VISÃO EXECUTIVA</div>
+          <h2>Gestão da consultoria</h2>
+          <p>Volume atendido, evolução do confinamento e movimentação dos clientes.</p>
         </div>
-        <div style={{ textAlign: "right", fontSize: 12.5, color: "#9A9A94" }}>
-          {ativos.length} lote(s) ativo(s)<br />{linhas.length} cliente(s)
+        <label className="gestao-year-filter">
+          <CalendarDays size={16} />
+          <select value={ano} onChange={(e) => setAno(Number(e.target.value))}>
+            {anosComDados.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div className="gestao-kpis">
+        <KpiGestao icone={<Beef size={18} />} rotulo="Animais agora" valor={animaisAgora.toLocaleString("pt-BR")} detalhe={`${lotesAtivos.length} lotes ativos`} destaque />
+        <KpiGestao icone={<Users size={18} />} rotulo="Clientes ativos" valor={clientesAgora.toLocaleString("pt-BR")} detalhe={`${clientes.length} cadastrados`} />
+        <KpiGestao icone={<TrendingUp size={18} />} rotulo="Média mensal" valor={mediaAnual.toLocaleString("pt-BR")} detalhe="cabeças/dia no ano" />
+        <KpiGestao icone={<ArrowUpRight size={18} />} rotulo={`Entradas em ${ano}`} valor={entradasAno.toLocaleString("pt-BR")} detalhe={`${saidasAno.toLocaleString("pt-BR")} saídas`} />
+        <KpiGestao icone={<Utensils size={18} />} rotulo="Consumo no ano" valor={`${consumoAno.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} t`} detalhe={`${cargasVagao.filter((c) => String(c.data).startsWith(`${ano}-`)).length} cargas registradas`} />
+      </div>
+
+      <div className="gestao-chart-grid">
+        <CardGrafico titulo="Animais confinados por mês" subtitulo="Média diária de cabeças acompanhadas — mede o volume real do serviço">
+          <GraficoArea dados={meses.map((m) => m.media)} rotulos={MESES_CURTOS} />
+          <div className="gestao-chart-note">{variacao == null ? "Selecione um ano com histórico para comparar a evolução." : `${variacao >= 0 ? "+" : ""}${variacao.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% em relação ao mês anterior`}</div>
+        </CardGrafico>
+        <CardGrafico titulo="Movimentação mensal" subtitulo="Entradas e saídas de animais por mês">
+          <GraficoBarrasDuplas dados={meses} />
+          <div className="gestao-legend"><span><i className="entrada" /> Entradas</span><span><i className="saida" /> Saídas</span></div>
+        </CardGrafico>
+      </div>
+
+      <CardGrafico titulo="Consumo acompanhado" subtitulo="Matéria natural registrada por mês, em toneladas">
+        <GraficoBarras dados={meses.map((m) => m.consumo)} rotulos={MESES_CURTOS} />
+      </CardGrafico>
+
+      <div className="gestao-section-header"><div><span>DETALHAMENTO</span><h3>Desempenho mensal de {ano}</h3></div></div>
+      <div className="gestao-table-wrap">
+        <table className="gestao-table">
+          <thead><tr><th>Mês</th><th>Média confinada</th><th>Fechamento</th><th>Entradas</th><th>Saídas</th><th>Clientes</th><th>Consumo</th><th>Cargas</th></tr></thead>
+          <tbody>{meses.map((mes) => <tr key={mes.nome}><td><strong>{mes.nome}</strong></td><td>{mes.media.toLocaleString("pt-BR")}</td><td>{mes.fechamento.toLocaleString("pt-BR")}</td><td className="positive">+{mes.entradas.toLocaleString("pt-BR")}</td><td className="negative">−{mes.saidas.toLocaleString("pt-BR")}</td><td>{mes.clientes}</td><td>{mes.consumo.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} t</td><td>{mes.cargas}</td></tr>)}</tbody>
+        </table>
+      </div>
+
+      <div className="gestao-bottom-grid">
+        <div className="gestao-panel">
+          <div className="gestao-panel-title"><div><span>CARTEIRA E RECEBIMENTOS</span><h3>Clientes em acompanhamento</h3></div><label className="gestao-payment-period"><select value={mesRecebimento} onChange={(e) => setMesRecebimento(Number(e.target.value))}>{MESES_CURTOS.map((mes, indice) => <option key={mes} value={indice}>{mes}</option>)}</select><b>{ano}</b></label></div>
+          {porCliente.map(({ cliente, lotes: qtdLotes, cabecas, entradas, consumo }) => (
+            <div key={cliente.id} className="gestao-client-row">
+              <button className="gestao-client-main" onClick={() => setView({ screen: "confinamento", id: cliente.id })}><div className="gestao-client-avatar">{cliente.nome.charAt(0)}</div><div className="gestao-client-name"><strong>{cliente.nome}</strong><span>{qtdLotes} lotes ativos · {entradas.toLocaleString("pt-BR")} entradas no ano</span></div><div className="gestao-client-volume"><strong>{cabecas.toLocaleString("pt-BR")}</strong><span>animais · {consumo.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} t</span></div></button>
+              {onMarcarRecebimento && <button disabled={salvandoRecebimento === cliente.id} className={`gestao-payment-button ${recebidosNaCompetencia.has(cliente.id) ? "recebido" : "pendente"}`} onClick={async () => { setSalvandoRecebimento(cliente.id); try { await onMarcarRecebimento(cliente.id, competenciaRecebimento, !recebidosNaCompetencia.has(cliente.id)); } finally { setSalvandoRecebimento(null); } }}>{salvandoRecebimento === cliente.id ? "Salvando…" : recebidosNaCompetencia.has(cliente.id) ? "✓ Recebido" : "Pendente"}</button>}
+            </div>
+          ))}
+        </div>
+        <div className="gestao-panel">
+          <div className="gestao-panel-title"><div><span>EVOLUÇÃO</span><h3>Comparativo anual</h3></div><TrendingUp size={20} /></div>
+          {comparativoAnual.map((item) => <div className="gestao-year-row" key={item.ano}><strong>{item.ano}</strong><div><b>{item.entradas.toLocaleString("pt-BR")}</b><span>animais recebidos</span></div><div><b>{item.clientes}</b><span>clientes</span></div><div><b>{item.consumo.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} t</b><span>consumo</span></div></div>)}
         </div>
       </div>
-      <div className="desktop-clients-grid">
-      {linhas.map(({ cliente, lotes: numLotes, cabecas }) => (
-        <button key={cliente.id} style={styles.listItem} className="desktop-client-card" onClick={() => setView({ screen: "confinamento", id: cliente.id })}>
-          <div style={styles.avatar}>{cliente.nome.charAt(0)}</div>
-          <div style={{ flex: 1, textAlign: "left" }}>
-            <div style={styles.listItemTitle}>{cliente.nome}</div>
-            <div style={styles.listItemSub}>{numLotes} lote(s) ativo(s)</div>
-          </div>
-          <div style={{ fontWeight: 700, color: "#1F4D45", fontSize: 15 }}>{cabecas.toLocaleString("pt-BR")}</div>
-        </button>
-      ))}
-      </div>
-    </>
+    </div>
   );
+}
+
+function KpiGestao({ icone, rotulo, valor, detalhe, destaque = false }) {
+  return <div className={`gestao-kpi${destaque ? " destaque" : ""}`}><div className="gestao-kpi-icon">{icone}</div><span>{rotulo}</span><strong>{valor}</strong><small>{detalhe}</small></div>;
+}
+
+function CardGrafico({ titulo, subtitulo, children }) {
+  return <section className="gestao-chart-card"><div className="gestao-card-heading"><div><h3>{titulo}</h3><p>{subtitulo}</p></div></div>{children}</section>;
+}
+
+function GraficoArea({ dados, rotulos }) {
+  const max = Math.max(...dados, 1);
+  const pontos = dados.map((valor, i) => ({ x: 38 + (i * 520) / 11, y: 168 - (valor / max) * 126, valor }));
+  const linha = pontos.map((p) => `${p.x},${p.y}`).join(" ");
+  const area = `38,168 ${linha} 558,168`;
+  return <svg className="gestao-chart" viewBox="0 0 596 210" role="img" aria-label="Evolução mensal de animais confinados"><defs><linearGradient id="areaGestao" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#2E7667" stopOpacity=".28"/><stop offset="1" stopColor="#2E7667" stopOpacity=".02"/></linearGradient></defs>{[42,84,126,168].map((y) => <line key={y} x1="38" x2="558" y1={y} y2={y} stroke="#EAE8E1" strokeWidth="1"/>)}<polygon points={area} fill="url(#areaGestao)"/><polyline points={linha} fill="none" stroke="#1F5B50" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>{pontos.map((p, i) => <g key={rotulos[i]}><circle cx={p.x} cy={p.y} r="4" fill="#fff" stroke="#1F5B50" strokeWidth="2.5"/><text x={p.x} y={Math.max(17, p.y - 10)} textAnchor="middle" className="gestao-svg-value">{p.valor}</text><text x={p.x} y="195" textAnchor="middle" className="gestao-svg-label">{rotulos[i]}</text></g>)}</svg>;
+}
+
+function GraficoBarrasDuplas({ dados }) {
+  const max = Math.max(...dados.flatMap((m) => [m.entradas, m.saidas]), 1);
+  return <svg className="gestao-chart" viewBox="0 0 596 210" role="img" aria-label="Entradas e saídas mensais">{[42,84,126,168].map((y) => <line key={y} x1="30" x2="566" y1={y} y2={y} stroke="#EAE8E1"/>)}{dados.map((m, i) => { const x = 39 + i * 44; const h1 = (m.entradas / max) * 126; const h2 = (m.saidas / max) * 126; return <g key={m.nome}><rect x={x} y={168-h1} width="13" height={h1} rx="3" fill="#2E7667"/><rect x={x+15} y={168-h2} width="13" height={h2} rx="3" fill="#D09159"/><text x={x+14} y="195" textAnchor="middle" className="gestao-svg-label">{m.nome}</text></g>; })}</svg>;
+}
+
+function GraficoBarras({ dados, rotulos }) {
+  const max = Math.max(...dados, 1);
+  return <svg className="gestao-chart gestao-chart-wide" viewBox="0 0 1180 210" role="img" aria-label="Consumo mensal em toneladas">{dados.map((valor, i) => { const h = (valor / max) * 126; const x = 50 + i * 94; return <g key={rotulos[i]}><rect x={x} y={168-h} width="54" height={h} rx="6" fill="#5B8F82"/><text x={x+27} y={Math.max(18, 158-h)} textAnchor="middle" className="gestao-svg-value">{valor.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</text><text x={x+27} y="195" textAnchor="middle" className="gestao-svg-label">{rotulos[i]}</text></g>; })}</svg>;
 }
 
 function FieldRow({ label, value }) {

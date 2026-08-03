@@ -312,6 +312,7 @@ export default function ConfinamentoTab({
         lotesAtivos={lotesAtivos}
         saidasPorLote={saidasPorLote}
         cliente={cliente}
+        consumos={consumos}
         onCancel={() => setTela({ modo: "lista" })}
         onSalvarLote={onAdicionarConsumo}
         onConcluido={() => setTela({ modo: "lista" })}
@@ -1480,25 +1481,35 @@ function FormConsumo({ lote, cliente, consumo, saidas = [], onCancel, onSave }) 
   const [consumoTotalLote, setConsumoTotalLote] = useState(consumo?.consumo_total_lote != null ? String(consumo.consumo_total_lote) : "");
   const [msDieta, setMsDieta] = useState(consumo?.ms_dieta != null ? String(consumo.ms_dieta) : "");
   const [dietaFase, setDietaFase] = useState(consumo?.dieta_fase || null);
+  const [custoKgMn, setCustoKgMn] = useState(
+    consumo?.custo_kg_mn != null ? String(consumo.custo_kg_mn)
+      : consumo?.dieta_fase ? (custoKgMnDaFase(lote, consumo.dieta_fase) != null ? String(custoKgMnDaFase(lote, consumo.dieta_fase)) : "")
+      : ""
+  );
+  const [tipoCusto, setTipoCusto] = useState("mn");
   const [salvando, setSalvando] = useState(false);
   const valido = data && consumoTotalLote !== "";
-  // Se já houve saída parcial antes dessa data, divide pelo que sobrou no
-  // lote naquele dia — não pelo total que entrou.
   const cabecasNaData = calcularCabecasNaData(lote, saidas, data);
   const consumoMSPreview =
     consumoTotalLote !== "" && msDieta !== "" && cabecasNaData > 0
       ? (Number(consumoTotalLote) * (Number(msDieta) / 100)) / cabecasNaData
       : null;
-  const custoKgMnAtual = dietaFase ? custoKgMnDaFase(lote, dietaFase) : null;
+  const custoDigitado = custoKgMn !== "" ? Number(custoKgMn) : null;
+  let custoMnEfetivo = custoDigitado;
+  if (tipoCusto === "ms" && custoDigitado != null && msDieta !== "") {
+    custoMnEfetivo = custoDigitado * (Number(msDieta) / 100);
+  }
   const custoDiarioPreview =
-    consumoTotalLote !== "" && custoKgMnAtual != null && cabecasNaData > 0
-      ? (Number(consumoTotalLote) / cabecasNaData) * Number(custoKgMnAtual)
+    consumoTotalLote !== "" && custoMnEfetivo != null && cabecasNaData > 0
+      ? (Number(consumoTotalLote) / cabecasNaData) * custoMnEfetivo
       : null;
 
   function selecionarFase(fase) {
     setDietaFase(fase);
     const ms = msDaFase(cliente, fase);
     if (ms != null) setMsDieta(String(ms));
+    const custo = custoKgMnDaFase(lote, fase);
+    if (custo != null) setCustoKgMn(String(custo));
   }
 
   async function handleSave() {
@@ -1509,7 +1520,7 @@ function FormConsumo({ lote, cliente, consumo, saidas = [], onCancel, onSave }) 
         consumo_total_lote: Number(consumoTotalLote),
         ms_dieta: msDieta !== "" ? Number(msDieta) : null,
         dieta_fase: dietaFase,
-        custo_kg_mn: custoKgMnAtual,
+        custo_kg_mn: custoMnEfetivo,
       });
     } finally {
       setSalvando(false);
@@ -1547,6 +1558,24 @@ function FormConsumo({ lote, cliente, consumo, saidas = [], onCancel, onSave }) 
           placeholder="Total do lote/dia"
         />
         <InputField label="MS da dieta (%)" type="number" value={msDieta} onChange={setMsDieta} placeholder="Ex: 65" />
+        <div style={{ padding: "10px 0 4px" }}>
+          <div style={styles.fieldLabel}>Custo informado em</div>
+          <div style={{ ...styles.viewToggle, marginTop: 6, maxWidth: 220 }}>
+            <button
+              onClick={() => setTipoCusto("mn")}
+              style={{ ...styles.viewToggleBtn, ...(tipoCusto === "mn" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", fontSize: 12.5 }}
+            >
+              R$/kg MN
+            </button>
+            <button
+              onClick={() => setTipoCusto("ms")}
+              style={{ ...styles.viewToggleBtn, ...(tipoCusto === "ms" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", fontSize: 12.5 }}
+            >
+              R$/kg MS
+            </button>
+          </div>
+        </div>
+        <InputField label={`Custo do kg de ${tipoCusto === "mn" ? "MN" : "MS"} (R$)`} type="number" value={custoKgMn} onChange={setCustoKgMn} placeholder="Ex: 0.35" />
         <Field
           label="Consumo de MS por cabeça (calculado)"
           value={consumoMSPreview != null ? `${consumoMSPreview.toFixed(2)} kg/dia` : "Preencha consumo e MS"}
@@ -1555,10 +1584,8 @@ function FormConsumo({ lote, cliente, consumo, saidas = [], onCancel, onSave }) 
         <Field
           label="Custo diário por animal (calculado)"
           value={
-            !dietaFase
-              ? "Selecione a dieta"
-              : custoKgMnAtual == null
-              ? "Preço não cadastrado — edite o lote"
+            custoMnEfetivo == null
+              ? "Preencha o custo do kg"
               : consumoTotalLote === ""
               ? "Preencha o consumo para calcular"
               : formatBRL(custoDiarioPreview)
@@ -1573,16 +1600,61 @@ function FormConsumo({ lote, cliente, consumo, saidas = [], onCancel, onSave }) 
   );
 }
 
+function preencherComUltimoConsumo(lotesAtivos, consumos, dataRef) {
+  const resultado = {};
+  for (const lote of lotesAtivos) {
+    const consumosLote = consumos
+      .filter((c) => c.lote_id === lote.id && c.data < dataRef)
+      .sort((a, b) => b.data.localeCompare(a.data));
+    const ultimo = consumosLote[0];
+    const custoPorFase = {};
+    for (const fase of ["adaptacao", "recria", "crescimento", "terminacao"]) {
+      const custoLote = custoKgMnDaFase(lote, fase);
+      const ultimoDaFase = consumosLote.find((c) => c.dieta_fase === fase);
+      custoPorFase[fase] = ultimoDaFase?.custo_kg_mn != null ? String(ultimoDaFase.custo_kg_mn)
+        : custoLote != null ? String(custoLote) : "";
+    }
+    resultado[lote.id] = {
+      consumo: "",
+      ms: ultimo?.ms_dieta != null ? String(ultimo.ms_dieta) : "",
+      fase: ultimo?.dieta_fase || "",
+      custos: custoPorFase,
+    };
+  }
+  return resultado;
+}
+
 // Lançamento do consumo do dia para todos os lotes ativos de uma vez —
 // uma data só, um cartão por lote (só quem tiver o consumo preenchido é
 // salvo).
-function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel, onSalvarLote, onConcluido }) {
+function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel, onSalvarLote, onConcluido, consumos = [] }) {
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
-  const [valores, setValores] = useState({}); // { [loteId]: { consumo: "", ms: "", fase: "" } }
+  const [valores, setValores] = useState(() => preencherComUltimoConsumo(lotesAtivos, consumos, new Date().toISOString().slice(0, 10)));
   const [faseGlobal, setFaseGlobal] = useState(null);
   const [msGlobal, setMsGlobal] = useState("");
+  const [custosGlobais, setCustosGlobais] = useState({ adaptacao: "", recria: "", crescimento: "", terminacao: "" });
+  const [tipoCusto, setTipoCusto] = useState("mn");
   const [salvando, setSalvando] = useState(false);
   const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(cliente?.id);
+
+  function handleDataChange(novaData) {
+    setData(novaData);
+    setValores((prev) => {
+      const preenchido = preencherComUltimoConsumo(lotesAtivos, consumos, novaData);
+      const novo = {};
+      for (const lote of lotesAtivos) {
+        const anterior = prev[lote.id] || {};
+        const auto = preenchido[lote.id] || {};
+        novo[lote.id] = {
+          consumo: anterior.consumo || "",
+          ms: anterior.ms || auto.ms || "",
+          fase: anterior.fase || auto.fase || "",
+          custos: anterior.custos || auto.custos || {},
+        };
+      }
+      return novo;
+    });
+  }
 
   const lotesOrdenados = lotesAtivos
     .map((lote) => ({ lote }))
@@ -1606,16 +1678,31 @@ function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel
     });
   }
 
+  function aplicarCustoGlobalDaFase(fase, valor) {
+    setCustosGlobais((cg) => ({ ...cg, [fase]: valor }));
+    setValores((v) => {
+      const novo = { ...v };
+      for (const lote of lotesAtivos) {
+        const custos = { ...(novo[lote.id]?.custos || {}) };
+        custos[fase] = valor;
+        novo[lote.id] = { ...novo[lote.id], custos };
+      }
+      return novo;
+    });
+  }
+
   function selecionarFase(loteId, fase) {
     const ms = msDaFase(cliente, fase);
     setValores((v) => ({
       ...v,
-      [loteId]: { ...v[loteId], fase, ms: ms != null ? String(ms) : v[loteId]?.ms },
+      [loteId]: {
+        ...v[loteId],
+        fase,
+        ms: ms != null ? String(ms) : v[loteId]?.ms,
+      },
     }));
   }
 
-  // Aplica a mesma dieta (e a MS correspondente) a todos os lotes de uma
-  // vez — evita clicar lote por lote quando todo mundo está na mesma fase.
   function aplicarFaseATodos(fase) {
     setFaseGlobal(fase);
     const ms = msDaFase(cliente, fase);
@@ -1623,7 +1710,11 @@ function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel
     setValores((v) => {
       const novo = { ...v };
       for (const lote of lotesAtivos) {
-        novo[lote.id] = { ...novo[lote.id], fase, ms: ms != null ? String(ms) : novo[lote.id]?.ms };
+        novo[lote.id] = {
+          ...novo[lote.id],
+          fase,
+          ms: ms != null ? String(ms) : novo[lote.id]?.ms,
+        };
       }
       return novo;
     });
@@ -1636,14 +1727,18 @@ function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel
     setSalvando(true);
     try {
       for (const lote of linhasPreenchidas) {
-        const { consumo, ms, fase } = valores[lote.id];
-        const custo = fase ? custoKgMnDaFase(lote, fase) : null;
+        const { consumo, ms, fase, custos = {} } = valores[lote.id];
+        const custoDigitado = fase && custos[fase] ? Number(custos[fase]) : null;
+        let custoMn = custoDigitado;
+        if (tipoCusto === "ms" && custoMn != null && ms) {
+          custoMn = custoMn * (Number(ms) / 100);
+        }
         await onSalvarLote(lote.id, {
           data,
           consumo_total_lote: Number(consumo),
           ms_dieta: ms ? Number(ms) : null,
           dieta_fase: fase || null,
-          custo_kg_mn: custo,
+          custo_kg_mn: custoMn,
         });
       }
       onConcluido();
@@ -1656,7 +1751,7 @@ function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel
     <div>
       <BackHeader title="Lançar consumo do dia" onBack={onCancel} />
       <div style={styles.card}>
-        <InputField label="Data *" type="date" value={data} onChange={setData} />
+        <InputField label="Data *" type="date" value={data} onChange={handleDataChange} />
         <div style={{ padding: "10px 0 14px" }}>
           <div style={styles.fieldLabel}>Dieta de hoje (aplica a todos os lotes)</div>
           <div style={{ ...styles.viewToggle, marginTop: 6 }}>
@@ -1685,6 +1780,36 @@ function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel
           onChange={aplicarMsATodos}
           placeholder="Ex: 65"
         />
+        <div style={{ padding: "10px 0 4px" }}>
+          <div style={styles.fieldLabel}>Custo informado em</div>
+          <div style={{ ...styles.viewToggle, marginTop: 6, maxWidth: 220 }}>
+            <button
+              onClick={() => setTipoCusto("mn")}
+              style={{ ...styles.viewToggleBtn, ...(tipoCusto === "mn" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", fontSize: 12.5 }}
+            >
+              R$/kg MN
+            </button>
+            <button
+              onClick={() => setTipoCusto("ms")}
+              style={{ ...styles.viewToggleBtn, ...(tipoCusto === "ms" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", fontSize: 12.5 }}
+            >
+              R$/kg MS
+            </button>
+          </div>
+        </div>
+        <div style={styles.fieldLabel}>Custo por dieta (R$/kg {tipoCusto === "mn" ? "MN" : "MS"}) — aplica a todos</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+          {FASES_DIETA.map((f) => (
+            <InputField
+              key={f.value}
+              label={f.label}
+              type="number"
+              value={custosGlobais[f.value] || ""}
+              onChange={(v) => aplicarCustoGlobalDaFase(f.value, v)}
+              placeholder="0.00"
+            />
+          ))}
+        </div>
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 4px 8px" }}>
@@ -1707,10 +1832,14 @@ function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel
           valorLote.consumo && valorLote.ms && cabecasNaData > 0
             ? (Number(valorLote.consumo) * (Number(valorLote.ms) / 100)) / cabecasNaData
             : null;
-        const custoAtual = valorLote.fase ? custoKgMnDaFase(lote, valorLote.fase) : null;
+        const custoFaseAtual = (valorLote.custos || {})[valorLote.fase] || "";
+        let custoMnLote = custoFaseAtual ? Number(custoFaseAtual) : null;
+        if (tipoCusto === "ms" && custoMnLote != null && valorLote.ms) {
+          custoMnLote = custoMnLote * (Number(valorLote.ms) / 100);
+        }
         const previewCusto =
-          valorLote.consumo && custoAtual != null && cabecasNaData > 0
-            ? (Number(valorLote.consumo) / cabecasNaData) * Number(custoAtual)
+          valorLote.consumo && custoMnLote != null && cabecasNaData > 0
+            ? (Number(valorLote.consumo) / cabecasNaData) * custoMnLote
             : null;
         return (
           <div key={lote.id} style={{ ...styles.card, marginBottom: 10 }}>
@@ -1747,6 +1876,25 @@ function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel
               onChange={(v) => setCampo(lote.id, "ms", v)}
               placeholder="Ex: 65"
             />
+            <div style={{ padding: "4px 0 0" }}>
+              <div style={styles.fieldLabel}>Custo por dieta (R$/kg {tipoCusto === "mn" ? "MN" : "MS"})</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                {FASES_DIETA.map((f) => (
+                  <InputField
+                    key={f.value}
+                    label={f.label}
+                    type="number"
+                    value={(valorLote.custos || {})[f.value] || ""}
+                    onChange={(v) => {
+                      const novos = { ...(valorLote.custos || {}) };
+                      novos[f.value] = v;
+                      setCampo(lote.id, "custos", novos);
+                    }}
+                    placeholder="0.00"
+                  />
+                ))}
+              </div>
+            </div>
             {preview != null && (
               <div style={{ fontSize: 12, color: "#A85A2A", fontWeight: 600, padding: "0 0 4px" }}>
                 {preview.toFixed(2)} kg MS/cab/dia

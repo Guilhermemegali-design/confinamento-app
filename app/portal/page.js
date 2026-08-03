@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { styles } from "@/lib/styles";
-import { LogOut } from "lucide-react";
+import { LogOut, Beef, FileText } from "lucide-react";
 import ConfinamentoTab from "@/components/ConfinamentoTab";
+import RelatoriosPortalTab from "@/components/RelatoriosPortalTab";
 import MarcaDesenvolvedor from "@/components/MarcaDesenvolvedor";
 import { calcularResumoSaidas } from "@/lib/confinamento";
 
@@ -43,7 +44,7 @@ export default function PortalCliente() {
   if (!sessao) return <TelaLoginCliente />;
   if (cliente === undefined) return <div style={styles.loadingScreen}>Carregando...</div>;
   if (cliente === null) return <TelaVincularConvite onVinculado={carregarCliente} />;
-  return <PainelCliente cliente={cliente} somenteLeitura={papel === "leitor"} />;
+  return <PainelCliente cliente={cliente} somenteLeitura={papel === "leitor"} papel={papel} />;
 }
 
 // ---------- Login ----------
@@ -174,7 +175,8 @@ function TelaVincularConvite({ onVinculado }) {
 }
 
 // ---------- Painel principal ----------
-function PainelCliente({ cliente, somenteLeitura }) {
+function PainelCliente({ cliente, somenteLeitura, papel }) {
+  const [abaPortal, setAbaPortal] = useState("confinamento");
   const [lotes, setLotes] = useState([]);
   const [pesagens, setPesagens] = useState([]);
   const [consumos, setConsumos] = useState([]);
@@ -184,6 +186,7 @@ function PainelCliente({ cliente, somenteLeitura }) {
   const [ingredientesMs, setIngredientesMs] = useState([]);
   const [currais, setCurrais] = useState([]);
   const [curralOcupacoes, setCurralOcupacoes] = useState([]);
+  const [relatorios, setRelatorios] = useState([]);
 
   const carregar = useCallback(async () => {
     const { data: l } = await supabase.from("lotes_confinamento").select("*").eq("cliente_id", cliente.id);
@@ -217,7 +220,11 @@ function PainelCliente({ cliente, somenteLeitura }) {
     } else {
       setCurralOcupacoes([]);
     }
-  }, [cliente.id]);
+    if (papel === "administrador") {
+      const { data: rels } = await supabase.from("relatorios").select("*").eq("cliente_id", cliente.id);
+      setRelatorios(rels || []);
+    }
+  }, [cliente.id, papel]);
 
   useEffect(() => {
     carregar();
@@ -500,38 +507,62 @@ function PainelCliente({ cliente, somenteLeitura }) {
       </div>
 
       <div style={styles.content} className="app-content">
-        <ConfinamentoTab
-          cliente={cliente}
-          lotes={lotes}
-          pesagens={pesagens}
-          consumos={consumos}
-          saidas={saidas}
-          leiturasCocho={leiturasCocho}
-          cargasVagao={cargasVagao}
-          ingredientesMs={ingredientesMs}
-          currais={currais}
-          curralOcupacoes={curralOcupacoes}
-          onAdicionar={somenteLeitura ? undefined : adicionarLote}
-          onAtualizar={somenteLeitura ? undefined : atualizarLote}
-          onAdicionarPesagem={somenteLeitura ? undefined : adicionarPesagem}
-          onAdicionarSaida={somenteLeitura ? undefined : adicionarSaida}
-          onAdicionarConsumo={somenteLeitura ? undefined : adicionarConsumo}
-          onAtualizarConsumo={somenteLeitura ? undefined : atualizarConsumo}
-          onExcluirConsumo={somenteLeitura ? undefined : excluirConsumo}
-          onImportarConsumos={somenteLeitura ? undefined : importarConsumosEmLote}
-          onRegistrarLeituraCocho={somenteLeitura ? undefined : registrarLeituraCocho}
-          onImportarLeiturasCocho={somenteLeitura ? undefined : importarLeiturasCochoEmLote}
-          onImportarCargas={somenteLeitura ? undefined : importarCargasEmLote}
-          onExcluirCarga={somenteLeitura ? undefined : excluirCarga}
-          onSalvarMsIngrediente={somenteLeitura ? undefined : salvarMsIngrediente}
-          onSincronizarCustosMs={somenteLeitura ? undefined : sincronizarCustosMsConsumos}
-          onAdicionarCurral={somenteLeitura ? undefined : adicionarCurral}
-          onAtualizarCurral={somenteLeitura ? undefined : atualizarCurral}
-          onExcluirCurral={somenteLeitura ? undefined : excluirCurral}
-          onImportarCurrais={somenteLeitura ? undefined : importarCurraisEmLote}
-          onMoverLoteParaCurral={somenteLeitura ? undefined : moverLoteParaCurral}
-        />
+        {abaPortal === "relatorios" && papel === "administrador" ? (
+          <RelatoriosPortalTab relatorios={relatorios} />
+        ) : (
+          <ConfinamentoTab
+            cliente={cliente}
+            lotes={lotes}
+            pesagens={pesagens}
+            consumos={consumos}
+            saidas={saidas}
+            leiturasCocho={leiturasCocho}
+            cargasVagao={cargasVagao}
+            ingredientesMs={ingredientesMs}
+            currais={currais}
+            curralOcupacoes={curralOcupacoes}
+            onAdicionar={somenteLeitura ? undefined : adicionarLote}
+            onAtualizar={somenteLeitura ? undefined : atualizarLote}
+            onAdicionarPesagem={somenteLeitura ? undefined : adicionarPesagem}
+            onAdicionarSaida={somenteLeitura ? undefined : adicionarSaida}
+            onAdicionarConsumo={somenteLeitura ? undefined : adicionarConsumo}
+            onAtualizarConsumo={somenteLeitura ? undefined : atualizarConsumo}
+            onExcluirConsumo={somenteLeitura ? undefined : excluirConsumo}
+            onImportarConsumos={somenteLeitura ? undefined : importarConsumosEmLote}
+            onRegistrarLeituraCocho={somenteLeitura ? undefined : registrarLeituraCocho}
+            onImportarLeiturasCocho={somenteLeitura ? undefined : importarLeiturasCochoEmLote}
+            onImportarCargas={somenteLeitura ? undefined : importarCargasEmLote}
+            onExcluirCarga={somenteLeitura ? undefined : excluirCarga}
+            onSalvarMsIngrediente={somenteLeitura ? undefined : salvarMsIngrediente}
+            onSincronizarCustosMs={somenteLeitura ? undefined : sincronizarCustosMsConsumos}
+            onAdicionarCurral={somenteLeitura ? undefined : adicionarCurral}
+            onAtualizarCurral={somenteLeitura ? undefined : atualizarCurral}
+            onExcluirCurral={somenteLeitura ? undefined : excluirCurral}
+            onImportarCurrais={somenteLeitura ? undefined : importarCurraisEmLote}
+            onMoverLoteParaCurral={somenteLeitura ? undefined : moverLoteParaCurral}
+          />
+        )}
       </div>
+
+      {papel === "administrador" && (
+        <div style={styles.bottomNav}>
+          <button
+            onClick={() => setAbaPortal("confinamento")}
+            style={{ ...styles.navBtn, color: abaPortal === "confinamento" ? "#1F4D45" : "#8A8A86" }}
+          >
+            <Beef size={20} />
+            Confinamento
+          </button>
+          <button
+            onClick={() => setAbaPortal("relatorios")}
+            style={{ ...styles.navBtn, color: abaPortal === "relatorios" ? "#1F4D45" : "#8A8A86" }}
+          >
+            <FileText size={20} />
+            Relatórios
+          </button>
+        </div>
+      )}
+
       <MarcaDesenvolvedor />
     </div>
   );

@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-30 (importação unificada Hook/Saicon + cargas, descargas, MS e custos sincronizados com o consumo diário + seletor de dia/período na aba Cargas + sincronização automática ao preencher MS/custo do ingrediente)
+Última atualização: 2026-07-30 (suporte ao formato longo da planilha do vagão + exclusão de carga + custo médio diário na lista de lotes)
 
 ## O que é
 
@@ -676,6 +676,33 @@ adicionada nesta sessão para atender a Belmont).
     (ainda falta o segundo); preencher o segundo dispara a sincronização
     sozinha, sem clicar em nenhum botão, com o `ms_dieta` ponderado
     corretamente pelo peso de cada ingrediente na carga.
+58. **Suporte ao formato "longo" da planilha do vagão (Hook)**: até então o
+    importador da aba Cargas só reconhecia o formato "largo" (uma linha por
+    carga, ingredientes em pares `Ing1/Peso1...Ing15/Peso15`, abas em
+    espanhol `RECETAS`/`AUTONOMOS`). O cliente Junco Agropecuaria mandou um
+    arquivo (`DADOS VAGAO JUNCO 30.07.26.xlsx`) num formato diferente — uma
+    linha por ingrediente em `CARGAS` (`ID CARGA, DATA, HORA, ID RECEITA,
+    SET POINT, INGREDIENTE, QUANTI., IDEAL, AUTONOMO ID, PASO AUTONOMO`) e
+    uma linha por lote em `DESCARGAS` (`BAIXAR ID, DATA, HORA, GUIA ID, ID
+    CARGA, LOT, QUANTI., IDEAL, AUTONOMO ID, PASO AUTONOMO`), com abas em
+    português `RECEITAS`/`AUTONOMO` — a importação falhava com "Não
+    encontrei as colunas Id, Data e Numero na aba CARGAS". Novo helper
+    `ehFormatoVagaoLongo(workbook)` detecta o formato pelo cabeçalho da aba
+    CARGAS e desvia para um conjunto paralelo de parsers
+    (`processarCargasPlanilhaLonga`, `processarPlanilhaVagaoLonga` e
+    funções de apoio) em `components/ConfinamentoTab.jsx`, mantendo os
+    parsers do formato largo **intactos e ainda o caminho padrão** quando o
+    cabeçalho não bate com o formato novo. Testado com o arquivo real da
+    Junco antes de publicar.
+59. **Excluir carga do vagão + custo médio diário na lista de lotes**: cada
+    carga em "Resultado por carga" (aba Cargas) ganhou um ícone de lixeira
+    com confirmação (`excluirCarga` em `lib/useDadosConfinamento.js` e
+    equivalente local em `app/portal/page.js`, disponível pro cliente
+    também exceto em modo somente-leitura). Além disso, as listas "Lotes
+    ativos" e "Lotes finalizados" passam a mostrar "Diária média R$/animal"
+    (já calculado por `calcularIndicadoresLote` como
+    `custoMedioDiarioAnimal`, só não estava exibido nessas telas — já
+    aparecia no detalhe do lote).
 
 ## Pendências / coisas para prestar atenção
 
