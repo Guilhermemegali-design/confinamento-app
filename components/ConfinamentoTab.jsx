@@ -376,6 +376,7 @@ export default function ConfinamentoTab({
     const evolucaoConsumo = calcularEvolucaoConsumo(lote, pesagensLote, consumosLote, saidasLote);
     return (
       <LoteDetalhe
+        cliente={cliente}
         lote={lote}
         indicadores={indicadores}
         saidas={saidasLote}
@@ -670,7 +671,10 @@ export default function ConfinamentoTab({
           <SectionTitle>Lotes finalizados</SectionTitle>
           {finalizados.length === 0 && <EmptyHint text="Nenhum lote finalizado ainda." />}
           <div className="desktop-lotes-grid">
-          {finalizados.map(({ lote, diasConfinamento, gmdVivoEntradaSaida, consumoMS, custoMedioDiarioAnimal }) => (
+          {finalizados.map((item) => {
+            const { lote, diasConfinamento, gmdVivoEntradaSaida, consumoMS, consumoMSPercentualPVMedio } = item;
+            const fechamento = calcularFechamentoCusto(lote, item, saidasPorLote[lote.id] || []);
+            return (
             <button key={lote.id} style={styles.listItem} className="desktop-lote-card" onClick={() => setTela({ modo: "lote", id: lote.id })}>
               <div style={{ ...styles.avatar, background: "#F1EFE8", color: "#5C5C58" }}>{lote.nome.charAt(0)}</div>
               <div style={{ flex: 1, textAlign: "left" }}>
@@ -691,14 +695,21 @@ export default function ConfinamentoTab({
                     MS {consumoMS.toFixed(2)} kg/cab/dia
                   </div>
                 )}
-                {custoMedioDiarioAnimal != null && (
-                  <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
-                    Diária média {formatBRL(custoMedioDiarioAnimal)}/animal
+                {consumoMSPercentualPVMedio != null && (
+                  <div style={{ fontSize: 11.5, color: faixaConsumoMS(consumoMSPercentualPVMedio)?.cor || "#5C5C58", marginTop: 2 }}>
+                    MS média {consumoMSPercentualPVMedio.toFixed(2)}% do PV
                   </div>
                 )}
+                {fechamento.custoDiarioMedioTotal != null && (
+                  <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
+                    Custo diário médio {formatBRL(fechamento.custoDiarioMedioTotal)}/cab
+                  </div>
+                )}
+                {fechamento.gmc != null && <div style={{ fontSize: 11.5, color: "#5C5C58", marginTop: 2 }}>GMC {fechamento.gmc.toFixed(3)} kg/dia</div>}
+                {fechamento.resultadoPorCabeca != null && <div style={{ fontSize: 11.5, color: fechamento.resultadoPorCabeca >= 0 ? "#247A52" : "#B34F42", marginTop: 2 }}>Lucro {formatBRL(fechamento.resultadoPorCabeca)}/animal</div>}
               </div>
             </button>
-          ))}
+          );})}
           </div>
         </>
       ) : (
@@ -803,13 +814,14 @@ function PainelCard({ label, valor, faixa }) {
 }
 
 function LoteDetalhe({
-  lote, indicadores, saidas = [], evolucao, evolucaoConsumo,
+  cliente, lote, indicadores, saidas = [], evolucao, evolucaoConsumo,
   onBack, onEditar,
   onNovaPesagem, onExcluirPesagem,
   onNovaSaida, onExcluirSaida,
   onNovoConsumo, onEditarConsumo, onExcluirConsumo,
 }) {
   const saidasOrdenadas = [...saidas].sort((a, b) => b.data.localeCompare(a.data));
+  const fechamento = indicadores.status === "Finalizado" ? calcularFechamentoCusto(lote, indicadores, saidas) : null;
   return (
     <div>
       <div style={styles.backHeaderRow}>
@@ -868,20 +880,28 @@ function LoteDetalhe({
               label="GMD entrada-saída"
               value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(2)} kg/dia` : "—"}
             />
+            {indicadores.consumoMSPercentualPVMedio != null && (
+              <Field
+                label="Consumo médio de MS em relação ao peso vivo"
+                value={`${indicadores.consumoMSPercentualPVMedio.toFixed(2)}% do PV`}
+              />
+            )}
             {lote.rendimento_carcaca != null && (
               <Field label="Rendimento de carcaça" value={`${lote.rendimento_carcaca}%`} />
             )}
+            {fechamento?.gmc != null && <Field label="GMC (ganho médio de carcaça)" value={`${fechamento.gmc.toFixed(3)} kg/cab/dia`} />}
             {lote.preco_venda_arroba != null && <Field label="Preço de venda da arroba" value={formatBRL(lote.preco_venda_arroba)} />}
             {lote.custo_operacional != null && (
               <Field label="Custo operacional" value={`${formatBRL(lote.custo_operacional)}/cab/dia`} />
             )}
+            {fechamento?.custoDiarioMedioTotal != null && <Field label="Custo diário médio total" value={`${formatBRL(fechamento.custoDiarioMedioTotal)}/cab/dia`} />}
           </>
         )}
         {lote.observacoes && <Field label="Observações" value={lote.observacoes} multiline />}
       </div>
 
       {indicadores.status === "Finalizado" && (
-        <FechamentoCustoCard lote={lote} indicadores={indicadores} saidas={saidas} />
+        <FechamentoCustoCard cliente={cliente} lote={lote} indicadores={indicadores} saidas={saidas} />
       )}
 
       {(onNovaSaida || saidasOrdenadas.length > 0) && (
@@ -1197,32 +1217,187 @@ function GraficoLinha({
   );
 }
 
-function FechamentoCustoCard({ lote, indicadores, saidas }) {
+function FechamentoCustoCard({ cliente, lote, indicadores, saidas }) {
   const f = calcularFechamentoCusto(lote, indicadores, saidas);
+  const [exportando, setExportando] = useState(false);
   const semDados =
     f.valorCompraTotal == null && f.custoAlimentarTotal == null && f.receitaTotal == null && f.custoOperacionalTotal == null;
   if (semDados) return null;
 
+  const resultadoPositivo = f.resultadoPorCabeca == null || f.resultadoPorCabeca >= 0;
+
   return (
-    <>
-      <SectionTitle>Fechamento de custo</SectionTitle>
-      <div style={styles.card}>
-        {f.valorCompraTotal != null && <Field label="Valor de compra (entrada)" value={formatBRL(f.valorCompraTotal)} />}
-        {f.custoAlimentarTotal != null && <Field label="Custo de alimentação" value={formatBRL(f.custoAlimentarTotal)} />}
-        {f.custoOperacionalTotal != null && <Field label="Custo operacional" value={formatBRL(f.custoOperacionalTotal)} />}
-        {f.custoTotalGeral != null && <Field label="Custo total" value={formatBRL(f.custoTotalGeral)} />}
-        {f.receitaTotal != null && <Field label="Receita de venda" value={formatBRL(f.receitaTotal)} />}
-        {f.resultadoTotal != null && (
-          <Field
-            label="Resultado"
-            value={`${formatBRL(f.resultadoTotal)}${f.resultadoPorCabeca != null ? ` (${formatBRL(f.resultadoPorCabeca)}/cab.)` : ""}`}
-            highlight
-          />
-        )}
-        {f.resultadoPorArroba != null && <Field label="Resultado por arroba produzida" value={formatBRL(f.resultadoPorArroba)} />}
+    <section className="resultado-lote">
+      <div className="resultado-lote-header">
+        <div><span>RELATÓRIO FINAL DO LOTE</span><h2>Resultado zootécnico e econômico</h2><p>Indicadores consolidados do período de confinamento.</p></div>
+        <button
+          onClick={async () => {
+            setExportando(true);
+            try { await exportarResultadoLotePDF(cliente, lote, indicadores, saidas); }
+            finally { setExportando(false); }
+          }}
+          disabled={exportando}
+          className="resultado-pdf-btn"
+        ><Download size={15} /> {exportando ? "Gerando..." : "Exportar resultado em PDF"}</button>
       </div>
-    </>
+      <div className="resultado-destaques">
+        <ResultadoDestaque label="Lucro por animal" value={f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "—"} tom={resultadoPositivo ? "verde" : "vermelho"} detalhe={f.resultadoTotal != null ? `${formatBRL(f.resultadoTotal)} no lote` : "Resultado total indisponível"} />
+        <ResultadoDestaque label="Margem mensal" value={f.margemMensalPercentual != null ? `${f.margemMensalPercentual.toFixed(2)}%` : "—"} tom={resultadoPositivo ? "verde" : "vermelho"} detalhe="Retorno sobre o custo a cada 30 dias" />
+        <ResultadoDestaque label="GMC" value={f.gmc != null ? `${f.gmc.toFixed(3)} kg` : "—"} tom="azul" detalhe="Ganho de carcaça por cabeça/dia" />
+        <ResultadoDestaque label="MS média / peso vivo" value={indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}%` : "—"} tom="laranja" detalhe="Média do período" />
+      </div>
+      <div className="resultado-blocos">
+        <ResultadoBloco titulo="Desempenho do lote" cor="#3B7C70">
+          <ResultadoLinha label="Período confinado" value={`${indicadores.diasConfinamento || 0} dias`} />
+          <ResultadoLinha label="GMD vivo" value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(3)} kg/cab/dia` : "—"} />
+          <ResultadoLinha label="GMC de carcaça" value={f.gmc != null ? `${f.gmc.toFixed(3)} kg/cab/dia` : "—"} />
+          <ResultadoLinha label="Arrobas produzidas com rendimento" value={f.arrobasProduzidas != null ? `${f.arrobasProduzidas.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} @` : "—"} />
+        </ResultadoBloco>
+        <ResultadoBloco titulo="Custo de produção" cor="#C47A3D">
+          <ResultadoLinha label="Alimentação" value={f.custoAlimentarTotal != null ? formatBRL(f.custoAlimentarTotal) : "—"} />
+          <ResultadoLinha label="Operacional" value={f.custoOperacionalTotal != null ? formatBRL(f.custoOperacionalTotal) : "—"} />
+          <ResultadoLinha label="Custo diário médio" value={f.custoDiarioMedioTotal != null ? `${formatBRL(f.custoDiarioMedioTotal)}/cab` : "—"} />
+          <ResultadoLinha label="Custo da @ produzida - vivo" value={f.custoArrobaProduzidaVivo != null ? formatBRL(f.custoArrobaProduzidaVivo) : "—"} />
+          <ResultadoLinha label="Custo da @ produzida - rendimento" value={f.custoArrobaProduzidaRendimento != null ? formatBRL(f.custoArrobaProduzidaRendimento) : "—"} />
+        </ResultadoBloco>
+        <ResultadoBloco titulo="Resultado financeiro" cor={resultadoPositivo ? "#2E8060" : "#B34F42"}>
+          <ResultadoLinha label="Valor de compra" value={f.valorCompraTotal != null ? formatBRL(f.valorCompraTotal) : "—"} />
+          <ResultadoLinha label="Custo total" value={f.custoTotalGeral != null ? formatBRL(f.custoTotalGeral) : "—"} />
+          <ResultadoLinha label="Receita de venda" value={f.receitaTotal != null ? formatBRL(f.receitaTotal) : "—"} />
+          <ResultadoLinha label="Lucro total" value={f.resultadoTotal != null ? formatBRL(f.resultadoTotal) : "—"} forte cor={resultadoPositivo ? "#247A52" : "#B34F42"} />
+          <ResultadoLinha label="Lucro por animal" value={f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "—"} forte cor={resultadoPositivo ? "#247A52" : "#B34F42"} />
+        </ResultadoBloco>
+      </div>
+      <div className="resultado-nota">A margem mensal representa o retorno sobre o custo total, proporcionalizado para períodos de 30 dias.</div>
+    </section>
   );
+}
+
+function ResultadoDestaque({ label, value, detalhe, tom }) {
+  return <div className={`resultado-destaque ${tom}`}><span>{label}</span><strong>{value}</strong><small>{detalhe}</small></div>;
+}
+
+function ResultadoBloco({ titulo, cor, children }) {
+  return <div className="resultado-bloco" style={{ "--resultado-cor": cor }}><h3>{titulo}</h3>{children}</div>;
+}
+
+function ResultadoLinha({ label, value, forte = false, cor }) {
+  return <div className="resultado-linha"><span>{label}</span><strong style={{ color: cor || undefined, fontSize: forte ? 13.5 : undefined }}>{value}</strong></div>;
+}
+
+export async function exportarResultadoLotePDF(cliente, lote, indicadores, saidas) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const f = calcularFechamentoCusto(lote, indicadores, saidas);
+  const largura = doc.internal.pageSize.getWidth();
+  const altura = doc.internal.pageSize.getHeight();
+  const margem = 40;
+  const verde = [31, 77, 69];
+  const verdeClaro = [231, 242, 238];
+  const laranja = [196, 122, 61];
+  const cinza = [92, 92, 88];
+  const cinzaClaro = [246, 245, 241];
+  const resultadoPositivo = f.resultadoPorCabeca == null || f.resultadoPorCabeca >= 0;
+
+  doc.setFillColor(...verde);
+  doc.roundedRect(0, 0, largura, 116, 0, 0, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text("RASTRO CONFINAMENTO", margem, 31);
+  doc.setFontSize(22);
+  doc.text("Resultado final do lote", margem, 62);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(205, 226, 220);
+  doc.text(`${cliente?.nome || "Cliente"}  |  ${lote.nome}`, margem, 82);
+  doc.text(`Período: ${formatDataBR(lote.data_entrada)} a ${formatDataBR(lote.data_saida)}  |  ${lote.num_cabecas} cabeças`, margem, 99);
+
+  let y = 140;
+  const cardGap = 8;
+  const cardLargura = (largura - margem * 2 - cardGap * 3) / 4;
+  const destaques = [
+    ["Lucro por animal", f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "-", resultadoPositivo ? verdeClaro : [250, 232, 229], resultadoPositivo ? verde : [179, 79, 66]],
+    ["Margem mensal", f.margemMensalPercentual != null ? `${f.margemMensalPercentual.toFixed(2)}%` : "-", verdeClaro, verde],
+    ["GMC", f.gmc != null ? `${f.gmc.toFixed(3)} kg/d` : "-", [232, 240, 247], [54, 103, 139]],
+    ["MS média / PV", indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}%` : "-", [252, 239, 227], laranja],
+  ];
+  destaques.forEach(([label, valor, fundo, cor], i) => {
+    const x = margem + i * (cardLargura + cardGap);
+    doc.setFillColor(...fundo);
+    doc.roundedRect(x, y, cardLargura, 67, 7, 7, "F");
+    doc.setTextColor(...cinza);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.text(label, x + 10, y + 17);
+    doc.setTextColor(...cor);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.text(String(valor), x + 10, y + 40, { maxWidth: cardLargura - 18 });
+  });
+  y += 88;
+
+  function secao(titulo, linhas, cor) {
+    doc.setFillColor(...cinzaClaro);
+    doc.roundedRect(margem, y, largura - margem * 2, 27 + linhas.length * 24, 8, 8, "F");
+    doc.setFillColor(...cor);
+    doc.roundedRect(margem, y, 5, 27 + linhas.length * 24, 3, 3, "F");
+    doc.setTextColor(...cor);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text(titulo, margem + 16, y + 19);
+    let linhaY = y + 39;
+    linhas.forEach(([label, valor, destaque]) => {
+      doc.setDrawColor(226, 225, 219);
+      doc.line(margem + 16, linhaY + 7, largura - margem - 14, linhaY + 7);
+      doc.setTextColor(...cinza);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.text(label, margem + 16, linhaY);
+      doc.setTextColor(...(destaque || [45, 62, 57]));
+      doc.setFont("helvetica", "bold");
+      doc.text(String(valor), largura - margem - 16, linhaY, { align: "right" });
+      linhaY += 24;
+    });
+    y += 39 + linhas.length * 24;
+  }
+
+  secao("Desempenho zootécnico", [
+    ["Dias de confinamento", `${indicadores.diasConfinamento || 0} dias`],
+    ["GMD vivo", indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(3)} kg/cab/dia` : "-"],
+    ["GMC de carcaça", f.gmc != null ? `${f.gmc.toFixed(3)} kg/cab/dia` : "-"],
+    ["Consumo médio de MS / peso vivo", indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}% do PV` : "-"],
+    ["Arrobas produzidas com rendimento", f.arrobasProduzidas != null ? `${f.arrobasProduzidas.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} @` : "-"],
+  ], verde);
+
+  secao("Custos de produção", [
+    ["Custo de alimentação", f.custoAlimentarTotal != null ? formatBRL(f.custoAlimentarTotal) : "-"],
+    ["Custo operacional", f.custoOperacionalTotal != null ? formatBRL(f.custoOperacionalTotal) : "-"],
+    ["Custo diário médio total", f.custoDiarioMedioTotal != null ? `${formatBRL(f.custoDiarioMedioTotal)}/cab/dia` : "-"],
+    ["Custo da @ produzida - peso vivo", f.custoArrobaProduzidaVivo != null ? formatBRL(f.custoArrobaProduzidaVivo) : "-"],
+    ["Custo da @ produzida - com rendimento", f.custoArrobaProduzidaRendimento != null ? formatBRL(f.custoArrobaProduzidaRendimento) : "-"],
+  ], laranja);
+
+  const corResultado = resultadoPositivo ? verde : [179, 79, 66];
+  secao("Resultado econômico", [
+    ["Valor de compra", f.valorCompraTotal != null ? formatBRL(f.valorCompraTotal) : "-"],
+    ["Custo total", f.custoTotalGeral != null ? formatBRL(f.custoTotalGeral) : "-"],
+    ["Receita de venda", f.receitaTotal != null ? formatBRL(f.receitaTotal) : "-"],
+    ["Lucro total", f.resultadoTotal != null ? formatBRL(f.resultadoTotal) : "-", corResultado],
+    ["Lucro por animal", f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "-", corResultado],
+    ["Margem mensal sobre o custo", f.margemMensalPercentual != null ? `${f.margemMensalPercentual.toFixed(2)}% ao mês` : "-", corResultado],
+  ], corResultado);
+
+  doc.setDrawColor(220, 219, 213);
+  doc.line(margem, altura - 46, largura - margem, altura - 46);
+  doc.setTextColor(130, 130, 125);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.text("Margem mensal: retorno sobre o custo total proporcionalizado para 30 dias.", margem, altura - 29);
+  doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")} - Rastro Confinamento`, largura - margem, altura - 29, { align: "right" });
+
+  const nomeSeguro = String(lote.nome || "lote").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+  doc.save(`resultado-${nomeSeguro || "lote"}.pdf`);
 }
 
 function FormLote({ lote, onCancel, onSave, onDelete }) {

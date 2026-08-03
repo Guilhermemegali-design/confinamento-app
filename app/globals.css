@@ -177,6 +177,32 @@ input, textarea, select {
 .gestao-year-row b { font-size: 11px; }
 .gestao-year-row span { color: #999991; font-size: 8px; }
 
+/* Fechamento visual dos lotes finalizados */
+.resultado-lote { margin-top: 22px; overflow: hidden; border: 1px solid #DDE6E2; border-radius: 18px; background: #fff; box-shadow: 0 10px 28px rgba(31, 77, 69, .08); }
+.resultado-lote-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 21px 22px; color: #fff; background: linear-gradient(120deg, #173F38, #2D7165); }
+.resultado-lote-header span { display: block; margin-bottom: 5px; color: #91CCBE; font-size: 9px; font-weight: 800; letter-spacing: .13em; }
+.resultado-lote-header h2 { margin: 0; font-size: 19px; }
+.resultado-lote-header p { margin: 5px 0 0; color: rgba(255,255,255,.68); font-size: 10.5px; }
+.resultado-pdf-btn { display: flex; align-items: center; justify-content: center; gap: 7px; flex: 0 0 auto; padding: 10px 13px; color: #17473E; border: 0; border-radius: 10px; background: #fff; font-size: 10.5px; font-weight: 800; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,.1); }
+.resultado-pdf-btn:hover { background: #F1F7F5; transform: translateY(-1px); }
+.resultado-pdf-btn:disabled { cursor: wait; opacity: .7; transform: none; }
+.resultado-destaques { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; padding: 13px 13px 0; }
+.resultado-destaque { min-width: 0; padding: 13px; border-radius: 12px; }
+.resultado-destaque span { display: block; font-size: 9px; font-weight: 700; opacity: .75; }
+.resultado-destaque strong { display: block; margin: 7px 0 3px; font-size: 18px; letter-spacing: -.025em; }
+.resultado-destaque small { display: block; overflow: hidden; font-size: 8px; opacity: .68; text-overflow: ellipsis; white-space: nowrap; }
+.resultado-destaque.verde { color: #226447; background: #E5F2EA; }
+.resultado-destaque.vermelho { color: #A2463B; background: #F9E7E4; }
+.resultado-destaque.azul { color: #376B8C; background: #E8F0F6; }
+.resultado-destaque.laranja { color: #A55F2C; background: #FBEDE1; }
+.resultado-blocos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 10px; padding: 13px; }
+.resultado-bloco { overflow: hidden; border: 1px solid #E8E6DF; border-top: 4px solid var(--resultado-cor); border-radius: 12px; background: #FCFCFA; }
+.resultado-bloco h3 { margin: 0; padding: 11px 12px 9px; color: var(--resultado-cor); font-size: 11.5px; }
+.resultado-linha { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-top: 1px solid #EEECE6; }
+.resultado-linha span { color: #85857F; font-size: 8.5px; }
+.resultado-linha strong { color: #344A44; font-size: 10px; text-align: right; }
+.resultado-nota { margin: 0 13px 13px; padding: 9px 11px; color: #777771; border-radius: 9px; background: #F3F2ED; font-size: 8.5px; text-align: center; }
+
 @media (max-width: 899px) {
   .gestao-hero { align-items: flex-start; padding: 18px; flex-direction: column; }
   .gestao-year-filter { align-self: stretch; justify-content: center; }
@@ -189,6 +215,10 @@ input, textarea, select {
   .gestao-chart-wide { min-width: 900px; }
   .gestao-client-row { align-items: stretch; flex-direction: column; }
   .gestao-payment-button { align-self: stretch; }
+  .resultado-lote-header { align-items: stretch; flex-direction: column; }
+  .resultado-pdf-btn { align-self: stretch; }
+  .resultado-destaques { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .resultado-blocos { grid-template-columns: 1fr; }
 }
 
 /* Respeita usuários que preferem menos animação */
