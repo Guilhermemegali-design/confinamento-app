@@ -1258,12 +1258,13 @@ function FechamentoCustoCard({ cliente, lote, indicadores, saidas }) {
           <ResultadoLinha label="Operacional" value={f.custoOperacionalTotal != null ? formatBRL(f.custoOperacionalTotal) : "—"} />
           <ResultadoLinha label="Custo diário médio" value={f.custoDiarioMedioTotal != null ? `${formatBRL(f.custoDiarioMedioTotal)}/cab` : "—"} />
           <ResultadoLinha label="Custo da @ produzida - vivo" value={f.custoArrobaProduzidaVivo != null ? formatBRL(f.custoArrobaProduzidaVivo) : "—"} />
-          <ResultadoLinha label="Custo da @ produzida - rendimento" value={f.custoArrobaProduzidaRendimento != null ? formatBRL(f.custoArrobaProduzidaRendimento) : "—"} />
+          <ResultadoLinha label="Custo da @ com rendimento (abatido)" value={f.custoArrobaProduzidaRendimento != null ? formatBRL(f.custoArrobaProduzidaRendimento) : "—"} />
         </ResultadoBloco>
         <ResultadoBloco titulo="Resultado financeiro" cor={resultadoPositivo ? "#2E8060" : "#B34F42"}>
           <ResultadoLinha label="Valor de compra" value={f.valorCompraTotal != null ? formatBRL(f.valorCompraTotal) : "—"} />
           <ResultadoLinha label="Custo total" value={f.custoTotalGeral != null ? formatBRL(f.custoTotalGeral) : "—"} />
           <ResultadoLinha label="Receita de venda" value={f.receitaTotal != null ? formatBRL(f.receitaTotal) : "—"} />
+          <ResultadoLinha label="Resultado por @ produzida" value={f.resultadoPorArroba != null ? formatBRL(f.resultadoPorArroba) : "—"} forte cor={resultadoPositivo ? "#247A52" : "#B34F42"} />
           <ResultadoLinha label="Lucro total" value={f.resultadoTotal != null ? formatBRL(f.resultadoTotal) : "—"} forte cor={resultadoPositivo ? "#247A52" : "#B34F42"} />
           <ResultadoLinha label="Lucro por animal" value={f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "—"} forte cor={resultadoPositivo ? "#247A52" : "#B34F42"} />
         </ResultadoBloco>
@@ -1375,7 +1376,7 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
     ["Custo operacional", f.custoOperacionalTotal != null ? formatBRL(f.custoOperacionalTotal) : "-"],
     ["Custo diário médio total", f.custoDiarioMedioTotal != null ? `${formatBRL(f.custoDiarioMedioTotal)}/cab/dia` : "-"],
     ["Custo da @ produzida - peso vivo", f.custoArrobaProduzidaVivo != null ? formatBRL(f.custoArrobaProduzidaVivo) : "-"],
-    ["Custo da @ produzida - com rendimento", f.custoArrobaProduzidaRendimento != null ? formatBRL(f.custoArrobaProduzidaRendimento) : "-"],
+    ["Custo da @ com rendimento (abatido)", f.custoArrobaProduzidaRendimento != null ? formatBRL(f.custoArrobaProduzidaRendimento) : "-"],
   ], laranja);
 
   const corResultado = resultadoPositivo ? verde : [179, 79, 66];
@@ -1383,6 +1384,7 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
     ["Valor de compra", f.valorCompraTotal != null ? formatBRL(f.valorCompraTotal) : "-"],
     ["Custo total", f.custoTotalGeral != null ? formatBRL(f.custoTotalGeral) : "-"],
     ["Receita de venda", f.receitaTotal != null ? formatBRL(f.receitaTotal) : "-"],
+    ["Resultado por @ produzida", f.resultadoPorArroba != null ? formatBRL(f.resultadoPorArroba) : "-", corResultado],
     ["Lucro total", f.resultadoTotal != null ? formatBRL(f.resultadoTotal) : "-", corResultado],
     ["Lucro por animal", f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "-", corResultado],
     ["Margem mensal sobre o custo", f.margemMensalPercentual != null ? `${f.margemMensalPercentual.toFixed(2)}% ao mês` : "-", corResultado],

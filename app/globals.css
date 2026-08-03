@@ -171,7 +171,7 @@ input, textarea, select {
 .gestao-payment-button.pendente { color: #9A6036; border: 1px solid #E7CDB8; background: #FFF5ED; }
 .gestao-payment-button.recebido { color: #247A52; border: 1px solid #BFDDCB; background: #E8F3EC; }
 .gestao-payment-button:disabled { cursor: wait; opacity: .65; }
-.gestao-year-row { display: grid; grid-template-columns: 50px repeat(3, 1fr); align-items: center; gap: 8px; padding: 12px 0; border-top: 1px solid #EFEEE9; }
+.gestao-year-row { display: grid; grid-template-columns: 50px repeat(4, 1fr); align-items: center; gap: 8px; padding: 12px 0; border-top: 1px solid #EFEEE9; }
 .gestao-year-row > strong { color: #1F5B50; font-size: 15px; }
 .gestao-year-row div { display: flex; flex-direction: column; gap: 2px; }
 .gestao-year-row b { font-size: 11px; }

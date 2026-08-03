@@ -7,7 +7,7 @@ import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryBut
 import ConfinamentoTab from "./ConfinamentoTab";
 
 export default function ClientesTab({
-  clientes, lotes, pesagens, consumos, saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], recebimentosConsultoria = [], view, setView,
+  clientes, lotes, pesagens, consumos, saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
@@ -17,7 +17,6 @@ export default function ClientesTab({
   onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
   onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais, onMoverLoteParaCurral,
   onRemoveAcessoCliente, onUpdateAcessoCliente,
-  onMarcarRecebimento,
 }) {
   const [abaGeral, setAbaGeral] = useState("clientes");
   const [buscaCliente, setBuscaCliente] = useState("");
@@ -227,7 +226,7 @@ export default function ClientesTab({
       </div>
 
       {abaGeral === "painel" ? (
-        <PainelGeral clientes={clientes} lotes={lotes} saidas={saidas} consumos={consumos} cargasVagao={cargasVagao} recebimentosConsultoria={recebimentosConsultoria} onMarcarRecebimento={onMarcarRecebimento} setView={setView} />
+        <PainelGeral clientes={clientes} lotes={lotes} saidas={saidas} consumos={consumos} cargasVagao={cargasVagao} setView={setView} />
       ) : (
         <>
           <ListHeader title="Clientes" actionLabel="Novo cliente" onAction={() => setView({ screen: "novo-cliente" })} />
@@ -274,7 +273,7 @@ export default function ClientesTab({
 
 const MESES_CURTOS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
-function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [], recebimentosConsultoria = [], onMarcarRecebimento, setView }) {
+function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [], setView }) {
   const hoje = new Date();
   const anosComDados = [...new Set([
     hoje.getFullYear(),
@@ -282,8 +281,6 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
     ...consumos.map((c) => Number(String(c.data || "").slice(0, 4))),
   ].filter((ano) => Number.isFinite(ano) && ano > 2000))].sort((a, b) => b - a);
   const [ano, setAno] = useState(anosComDados[0] || hoje.getFullYear());
-  const [mesRecebimento, setMesRecebimento] = useState(hoje.getMonth());
-  const [salvandoRecebimento, setSalvandoRecebimento] = useState(null);
 
   const saidasPorLote = new Map();
   for (const saida of saidas) {
@@ -358,13 +355,10 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
     const entradas = lotes.filter((l) => String(l.data_entrada).startsWith(`${anoItem}-`)).reduce((s, l) => s + Number(l.num_cabecas || 0), 0);
     const clientesAno = new Set(lotes.filter((l) => String(l.data_entrada).startsWith(`${anoItem}-`)).map((l) => l.cliente_id)).size;
     const consumo = consumos.filter((c) => String(c.data).startsWith(`${anoItem}-`)).reduce((s, c) => s + Number(c.consumo_total_lote || 0), 0) / 1000;
-    return { ano: anoItem, entradas, clientes: clientesAno, consumo };
+    const saidasRegistradas = saidas.filter((s) => String(s.data).startsWith(`${anoItem}-`)).reduce((total, s) => total + Number(s.num_cabecas || 0), 0);
+    const saidasDiretas = lotes.filter((l) => String(l.data_saida).startsWith(`${anoItem}-`) && !(saidasPorLote.get(l.id) || []).length).reduce((total, l) => total + Number(l.num_cabecas || 0), 0);
+    return { ano: anoItem, entradas, abatidos: saidasRegistradas + saidasDiretas, clientes: clientesAno, consumo };
   });
-  const competenciaRecebimento = `${ano}-${String(mesRecebimento + 1).padStart(2, "0")}-01`;
-  const recebidosNaCompetencia = new Set(
-    recebimentosConsultoria.filter((item) => item.competencia === competenciaRecebimento && item.recebido).map((item) => item.cliente_id)
-  );
-
   if (lotes.length === 0) return <EmptyHint text="Cadastre os primeiros lotes para começar a análise da consultoria." />;
 
   return (
@@ -406,6 +400,15 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
         <GraficoBarras dados={meses.map((m) => m.consumo)} rotulos={MESES_CURTOS} />
       </CardGrafico>
 
+      <div className="gestao-chart-grid">
+        <CardGrafico titulo="Animais abatidos por mês" subtitulo={`Cabeças com saída registrada em cada mês de ${ano}`}>
+          <GraficoBarras dados={meses.map((m) => m.saidas)} rotulos={MESES_CURTOS} />
+        </CardGrafico>
+        <CardGrafico titulo="Animais abatidos por ano" subtitulo="Comparativo anual de cabeças com saída registrada">
+          <GraficoBarras dados={comparativoAnual.map((item) => item.abatidos)} rotulos={comparativoAnual.map((item) => String(item.ano))} />
+        </CardGrafico>
+      </div>
+
       <div className="gestao-section-header"><div><span>DETALHAMENTO</span><h3>Desempenho mensal de {ano}</h3></div></div>
       <div className="gestao-table-wrap">
         <table className="gestao-table">
@@ -416,17 +419,16 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
 
       <div className="gestao-bottom-grid">
         <div className="gestao-panel">
-          <div className="gestao-panel-title"><div><span>CARTEIRA E RECEBIMENTOS</span><h3>Clientes em acompanhamento</h3></div><label className="gestao-payment-period"><select value={mesRecebimento} onChange={(e) => setMesRecebimento(Number(e.target.value))}>{MESES_CURTOS.map((mes, indice) => <option key={mes} value={indice}>{mes}</option>)}</select><b>{ano}</b></label></div>
+          <div className="gestao-panel-title"><div><span>CARTEIRA DE CLIENTES</span><h3>Clientes em acompanhamento</h3></div></div>
           {porCliente.map(({ cliente, lotes: qtdLotes, cabecas, entradas, consumo }) => (
             <div key={cliente.id} className="gestao-client-row">
               <button className="gestao-client-main" onClick={() => setView({ screen: "confinamento", id: cliente.id })}><div className="gestao-client-avatar">{cliente.nome.charAt(0)}</div><div className="gestao-client-name"><strong>{cliente.nome}</strong><span>{qtdLotes} lotes ativos · {entradas.toLocaleString("pt-BR")} entradas no ano</span></div><div className="gestao-client-volume"><strong>{cabecas.toLocaleString("pt-BR")}</strong><span>animais · {consumo.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} t</span></div></button>
-              {onMarcarRecebimento && <button disabled={salvandoRecebimento === cliente.id} className={`gestao-payment-button ${recebidosNaCompetencia.has(cliente.id) ? "recebido" : "pendente"}`} onClick={async () => { setSalvandoRecebimento(cliente.id); try { await onMarcarRecebimento(cliente.id, competenciaRecebimento, !recebidosNaCompetencia.has(cliente.id)); } finally { setSalvandoRecebimento(null); } }}>{salvandoRecebimento === cliente.id ? "Salvando…" : recebidosNaCompetencia.has(cliente.id) ? "✓ Recebido" : "Pendente"}</button>}
             </div>
           ))}
         </div>
         <div className="gestao-panel">
           <div className="gestao-panel-title"><div><span>EVOLUÇÃO</span><h3>Comparativo anual</h3></div><TrendingUp size={20} /></div>
-          {comparativoAnual.map((item) => <div className="gestao-year-row" key={item.ano}><strong>{item.ano}</strong><div><b>{item.entradas.toLocaleString("pt-BR")}</b><span>animais recebidos</span></div><div><b>{item.clientes}</b><span>clientes</span></div><div><b>{item.consumo.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} t</b><span>consumo</span></div></div>)}
+          {comparativoAnual.map((item) => <div className="gestao-year-row" key={item.ano}><strong>{item.ano}</strong><div><b>{item.entradas.toLocaleString("pt-BR")}</b><span>animais recebidos</span></div><div><b>{item.abatidos.toLocaleString("pt-BR")}</b><span>animais abatidos</span></div><div><b>{item.clientes}</b><span>clientes</span></div><div><b>{item.consumo.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} t</b><span>consumo</span></div></div>)}
         </div>
       </div>
     </div>

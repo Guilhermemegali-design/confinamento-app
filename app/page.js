@@ -88,7 +88,6 @@ export default function Home() {
           clientesUsuarios={dados.clientesUsuarios}
           currais={dados.currais}
           curralOcupacoes={dados.curralOcupacoes}
-          recebimentosConsultoria={dados.recebimentosConsultoria}
           view={view}
           setView={setView}
           onAddCliente={async (c) => {
@@ -99,10 +98,6 @@ export default function Home() {
           onUpdateCliente={async (id, c) => {
             await dados.atualizarCliente(id, c);
             mostrarToast("Cliente atualizado");
-          }}
-          onMarcarRecebimento={async (clienteId, competencia, recebido) => {
-            await dados.marcarRecebimento(clienteId, competencia, recebido);
-            mostrarToast(recebido ? "Recebimento confirmado" : "Recebimento marcado como pendente");
           }}
           onDeleteCliente={async (id) => {
             await dados.excluirCliente(id);
