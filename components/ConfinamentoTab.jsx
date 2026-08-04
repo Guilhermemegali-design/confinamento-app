@@ -384,6 +384,8 @@ export default function ConfinamentoTab({
         saidas={saidasLote}
         evolucao={evolucao}
         evolucaoConsumo={evolucaoConsumo}
+        cargasVagao={cargasVagao}
+        ingredientesMs={ingredientesMs}
         onBack={() => setTela({ modo: "lista" })}
         onEditar={() => setTela({ modo: "editar", id: lote.id })}
         onNovaPesagem={onAdicionarPesagem && (() => setTela({ modo: "nova-pesagem", loteId: lote.id }))}
@@ -827,6 +829,7 @@ function PainelCard({ label, valor, faixa }) {
 
 function LoteDetalhe({
   cliente, lote, indicadores, saidas = [], evolucao, evolucaoConsumo,
+  cargasVagao = [], ingredientesMs = [],
   onBack, onEditar,
   onNovaPesagem, onExcluirPesagem,
   onNovaSaida, onExcluirSaida,
@@ -834,6 +837,7 @@ function LoteDetalhe({
 }) {
   const saidasOrdenadas = [...saidas].sort((a, b) => b.data.localeCompare(a.data));
   const fechamento = indicadores.status === "Finalizado" ? calcularFechamentoCusto(lote, indicadores, saidas) : null;
+  const consumoIngredientes = calcularConsumoIngredientesLote(lote, cargasVagao, ingredientesMs);
   return (
     <div>
       <div style={styles.backHeaderRow}>
@@ -1075,6 +1079,40 @@ function LoteDetalhe({
         </>
       ) : (
         <EmptyHint text="Nenhum consumo registrado ainda — lance o consumo do dia para acompanhar a nutrição do lote." />
+      )}
+
+      {consumoIngredientes.length > 0 && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
+            <div style={{ ...styles.sectionTitle, margin: 0 }}>Consumo acumulado por ingrediente</div>
+          </div>
+          {consumoIngredientes.map((item) => {
+            const erroAlto = item.erroPercentual != null && Math.abs(item.erroPercentual) > 5;
+            return (
+              <div key={item.chave} style={styles.rowCard}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13.5 }}>{item.nome}</div>
+                  {indicadores.status === "Finalizado" && (
+                    <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
+                      {item.custo != null ? `Custo ${formatBRL(item.custo)}` : ""}
+                      {item.erroPercentual != null
+                        ? `${item.custo != null ? " · " : ""}Erro vs dieta proposta ${item.erroPercentual > 0 ? "+" : ""}${item.erroPercentual.toFixed(1)}%`
+                        : ""}
+                    </div>
+                  )}
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>
+                    {item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg
+                  </div>
+                  {indicadores.status === "Finalizado" && erroAlto && (
+                    <div style={{ fontSize: 11, color: "#B34F42" }}>Fora da dieta</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </>
       )}
     </div>
   );
@@ -3014,6 +3052,51 @@ function calcularComposicaoCarga(carga, configuracoes) {
       ? itens.reduce((soma, item) => soma + Number(item.peso_real) * configuracoes.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)).custo, 0) / pesoTotal
       : null,
   };
+}
+
+// Consumo acumulado por ingrediente de um lote: cada descarga de vagão no
+// lote carrega uma fração proporcional (peso descarregado / peso real da
+// carga) da composição real e prevista (dieta programada, já escalada pro
+// peso realmente pesado) daquela carga. Somando essas frações por
+// ingrediente ao longo de todo o histórico dá o acumulado real e o
+// previsto — a base tanto pro consumo acumulado (ativo e finalizado)
+// quanto pro erro entre dieta proposta e realizada (só faz sentido pra
+// lote finalizado, onde o período fechou).
+function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = []) {
+  const custoPorChave = new Map(
+    ingredientesMs.map((item) => [item.ingrediente_chave, item.custo_kg_mn == null ? null : Number(item.custo_kg_mn)])
+  );
+  const porIngrediente = new Map();
+  for (const carga of cargas) {
+    const itens = Array.isArray(carga.itens) ? carga.itens : [];
+    const pesoTotalCarga = itens.reduce((soma, item) => soma + Number(item.peso_real || 0), 0);
+    if (!(pesoTotalCarga > 0)) continue;
+    const pesoNoLote = (Array.isArray(carga.descargas) ? carga.descargas : [])
+      .filter((descarga) => encontrarLoteDescarga(descarga.lote_codigo, [lote]))
+      .reduce((soma, descarga) => soma + Number(descarga.peso || 0), 0);
+    if (!(pesoNoLote > 0)) continue;
+    const proporcao = pesoNoLote / pesoTotalCarga;
+    for (const item of itens) {
+      const chave = item.ingrediente_chave || chaveIngrediente(item.ingrediente);
+      const atual = porIngrediente.get(chave) || { nome: item.ingrediente, real: 0, previsto: 0 };
+      atual.real += Number(item.peso_real || 0) * proporcao;
+      atual.previsto += Number(item.peso_previsto || 0) * proporcao;
+      porIngrediente.set(chave, atual);
+    }
+  }
+  return [...porIngrediente.entries()]
+    .map(([chave, dados]) => {
+      const custoUnit = custoPorChave.get(chave);
+      return {
+        chave,
+        nome: dados.nome,
+        real: dados.real,
+        previsto: dados.previsto,
+        erroPercentual: dados.previsto > 0 ? ((dados.real - dados.previsto) / dados.previsto) * 100 : null,
+        custo: custoUnit != null ? dados.real * custoUnit : null,
+      };
+    })
+    .sort((a, b) => b.real - a.real);
 }
 
 function montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesMs) {
