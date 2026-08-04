@@ -276,6 +276,7 @@ export default function ConfinamentoTab({
       <FormConsumo
         lote={lote}
         cliente={cliente}
+        consumos={consumosPorLote[lote.id] || []}
         saidas={saidasPorLote[lote.id] || []}
         onCancel={() => setTela({ modo: "lote", id: lote.id })}
         onSave={async (dados) => {
@@ -295,6 +296,7 @@ export default function ConfinamentoTab({
         lote={lote}
         cliente={cliente}
         consumo={consumo}
+        consumos={consumosPorLote[lote.id] || []}
         saidas={saidasPorLote[lote.id] || []}
         onCancel={() => setTela({ modo: "lote", id: lote.id })}
         onSave={async (dados) => {
@@ -1656,14 +1658,19 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
   );
 }
 
-function FormConsumo({ lote, cliente, consumo, saidas = [], onCancel, onSave }) {
+function FormConsumo({ lote, cliente, consumo, consumos = [], saidas = [], onCancel, onSave }) {
   const editando = Boolean(consumo);
-  const [data, setData] = useState(consumo?.data || new Date().toISOString().slice(0, 10));
+  const dataInicial = consumo?.data || new Date().toISOString().slice(0, 10);
+  const ultimoConsumo = [...consumos]
+    .filter((item) => item.id !== consumo?.id && item.data < dataInicial)
+    .sort((a, b) => String(b.data || "").localeCompare(String(a.data || "")))[0];
+  const [data, setData] = useState(dataInicial);
   const [consumoTotalLote, setConsumoTotalLote] = useState(consumo?.consumo_total_lote != null ? String(consumo.consumo_total_lote) : "");
   const [msDieta, setMsDieta] = useState(consumo?.ms_dieta != null ? String(consumo.ms_dieta) : "");
   const [dietaFase, setDietaFase] = useState(consumo?.dieta_fase || null);
   const [custoKgMn, setCustoKgMn] = useState(
     consumo?.custo_kg_mn != null ? String(consumo.custo_kg_mn)
+      : ultimoConsumo?.custo_kg_mn != null ? String(ultimoConsumo.custo_kg_mn)
       : consumo?.dieta_fase ? (custoKgMnDaFase(lote, consumo.dieta_fase) != null ? String(custoKgMnDaFase(lote, consumo.dieta_fase)) : "")
       : ""
   );
@@ -1793,6 +1800,7 @@ function preencherComUltimoConsumo(lotesAtivos, consumos, dataRef) {
       const custoLote = custoKgMnDaFase(lote, fase);
       const ultimoDaFase = consumosLote.find((c) => c.dieta_fase === fase);
       custoPorFase[fase] = ultimoDaFase?.custo_kg_mn != null ? String(ultimoDaFase.custo_kg_mn)
+        : ultimo?.custo_kg_mn != null ? String(ultimo.custo_kg_mn)
         : custoLote != null ? String(custoLote) : "";
     }
     resultado[lote.id] = {
