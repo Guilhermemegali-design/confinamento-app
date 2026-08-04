@@ -582,7 +582,7 @@ export default function ConfinamentoTab({
           {ativos.map((item, index) => {
             const {
               lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje,
-              consumoMS, consumoMSPercentualPV, consumoMSPercentualPVMedio,
+              consumoMS, consumoMSMedio, consumoMSPercentualPV, consumoMSPercentualPVMedio,
               custoAcumuladoAnimal, custoMedioDiarioAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate,
             } = item;
             const faixaMSUltimo = faixaConsumoMS(consumoMSPercentualPV);
@@ -620,6 +620,11 @@ export default function ConfinamentoTab({
                     {consumoMS != null && (
                       <div style={{ fontSize: 11.5, color: "#1F4D45", fontWeight: 600, marginTop: 3 }}>
                         MS {consumoMS.toFixed(2)} kg/cab/dia
+                      </div>
+                    )}
+                    {consumoMSMedio != null && (
+                      <div style={{ fontSize: 11.5, color: "#5C5C58", marginTop: 2 }}>
+                        MS média {consumoMSMedio.toFixed(2)} kg/cab/dia
                       </div>
                     )}
                     {(faixaMSUltimo || faixaMSMedio) && (
@@ -674,7 +679,7 @@ export default function ConfinamentoTab({
           {finalizados.length === 0 && <EmptyHint text="Nenhum lote finalizado ainda." />}
           <div className="desktop-lotes-grid">
           {finalizados.map((item) => {
-            const { lote, diasConfinamento, gmdVivoEntradaSaida, consumoMS, consumoMSPercentualPVMedio } = item;
+            const { lote, diasConfinamento, gmdVivoEntradaSaida, consumoMS, consumoMSMedio, consumoMSPercentualPVMedio } = item;
             const fechamento = calcularFechamentoCusto(lote, item, saidasPorLote[lote.id] || []);
             return (
             <button key={lote.id} style={styles.listItem} className="desktop-lote-card" onClick={() => setTela({ modo: "lote", id: lote.id })}>
@@ -695,6 +700,11 @@ export default function ConfinamentoTab({
                 {consumoMS != null && (
                   <div style={{ fontSize: 11.5, color: "#1F4D45", marginTop: 2 }}>
                     MS {consumoMS.toFixed(2)} kg/cab/dia
+                  </div>
+                )}
+                {consumoMSMedio != null && (
+                  <div style={{ fontSize: 11.5, color: "#5C5C58", marginTop: 2 }}>
+                    MS média {consumoMSMedio.toFixed(2)} kg/cab/dia
                   </div>
                 )}
                 {consumoMSPercentualPVMedio != null && (
@@ -882,6 +892,12 @@ function LoteDetalhe({
               label="GMD entrada-saída"
               value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(2)} kg/dia` : "—"}
             />
+            {indicadores.consumoMSMedio != null && (
+              <Field
+                label="Consumo médio de MS por cabeça"
+                value={`${indicadores.consumoMSMedio.toFixed(2)} kg/dia`}
+              />
+            )}
             {indicadores.consumoMSPercentualPVMedio != null && (
               <Field
                 label="Consumo médio de MS em relação ao peso vivo"
@@ -997,6 +1013,11 @@ function LoteDetalhe({
       {indicadores.consumoMS != null && (
         <div style={{ margin: "-4px 4px 4px", fontSize: 13, color: "#A85A2A", fontWeight: 700 }}>
           Consumo de MS por cabeça (mais recente): {indicadores.consumoMS.toFixed(2)} kg/dia
+        </div>
+      )}
+      {indicadores.consumoMSMedio != null && (
+        <div style={{ margin: "0 4px 4px", fontSize: 13, color: "#7A4B26" }}>
+          Consumo médio de MS por cabeça: {indicadores.consumoMSMedio.toFixed(2)} kg/dia
         </div>
       )}
       {(indicadores.custoMedioDiarioAnimal != null || indicadores.custoAcumuladoAnimal != null) && (
@@ -1246,7 +1267,7 @@ function FechamentoCustoCard({ cliente, lote, indicadores, saidas }) {
         <ResultadoDestaque label="Lucro por animal" value={f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "—"} tom={resultadoPositivo ? "verde" : "vermelho"} detalhe={f.resultadoTotal != null ? `${formatBRL(f.resultadoTotal)} no lote` : "Resultado total indisponível"} />
         <ResultadoDestaque label="Margem mensal" value={f.margemMensalPercentual != null ? `${f.margemMensalPercentual.toFixed(2)}%` : "—"} tom={resultadoPositivo ? "verde" : "vermelho"} detalhe="Retorno sobre o custo a cada 30 dias" />
         <ResultadoDestaque label="GMC" value={f.gmc != null ? `${f.gmc.toFixed(3)} kg` : "—"} tom="azul" detalhe="Ganho de carcaça por cabeça/dia" />
-        <ResultadoDestaque label="MS média / peso vivo" value={indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}%` : "—"} tom="laranja" detalhe="Média do período" />
+        <ResultadoDestaque label="MS média / peso vivo" value={indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}%` : "—"} tom="laranja" detalhe={indicadores.consumoMSMedio != null ? `${indicadores.consumoMSMedio.toFixed(2)} kg/cab/dia` : "Média do período"} />
       </div>
       <div className="resultado-blocos">
         <ResultadoBloco titulo="Desempenho do lote" cor="#3B7C70">
@@ -1371,6 +1392,7 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
     ["Dias de confinamento", `${indicadores.diasConfinamento || 0} dias`],
     ["GMD vivo", indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(3)} kg/cab/dia` : "-"],
     ["GMC de carcaça", f.gmc != null ? `${f.gmc.toFixed(3)} kg/cab/dia` : "-"],
+    ["Consumo médio de MS por cabeça", indicadores.consumoMSMedio != null ? `${indicadores.consumoMSMedio.toFixed(2)} kg/cab/dia` : "-"],
     ["Consumo médio de MS / peso vivo", indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}% do PV` : "-"],
     ["Arrobas produzidas com rendimento", f.arrobasProduzidas != null ? `${f.arrobasProduzidas.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} @` : "-"],
   ], verde);
