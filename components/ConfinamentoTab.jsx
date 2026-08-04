@@ -1292,7 +1292,7 @@ function FechamentoCustoCard({ cliente, lote, indicadores, saidas, consumoIngred
         <button
           onClick={async () => {
             setExportando(true);
-            try { await exportarResultadoLotePDF(cliente, lote, indicadores, saidas); }
+            try { await exportarResultadoLotePDF(cliente, lote, indicadores, saidas, consumoIngredientes); }
             finally { setExportando(false); }
           }}
           disabled={exportando}
@@ -1359,7 +1359,7 @@ function ResultadoLinha({ label, value, forte = false, cor }) {
   return <div className="resultado-linha"><span>{label}</span><strong style={{ color: cor || undefined, fontSize: forte ? 13.5 : undefined }}>{value}</strong></div>;
 }
 
-export async function exportarResultadoLotePDF(cliente, lote, indicadores, saidas) {
+export async function exportarResultadoLotePDF(cliente, lote, indicadores, saidas, consumoIngredientes = []) {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const f = calcularFechamentoCusto(lote, indicadores, saidas);
@@ -1412,6 +1412,11 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
   y += 88;
 
   function secao(titulo, linhas, cor) {
+    const altoNecessario = 27 + linhas.length * 24;
+    if (y + altoNecessario > altura - 60) {
+      doc.addPage();
+      y = margem;
+    }
     doc.setFillColor(...cinzaClaro);
     doc.roundedRect(margem, y, largura - margem * 2, 27 + linhas.length * 24, 8, 8, "F");
     doc.setFillColor(...cor);
@@ -1465,6 +1470,17 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
     ["Lucro por animal", f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "-", corResultado],
     ["Margem mensal sobre o custo", f.margemMensalPercentual != null ? `${f.margemMensalPercentual.toFixed(2)}% ao mês` : "-", corResultado],
   ], corResultado);
+
+  if (consumoIngredientes.length > 0) {
+    const oliva = [107, 91, 62];
+    secao("Consumo por ingrediente", consumoIngredientes.map((item) => {
+      const erroAlto = item.erroPercentual != null && Math.abs(item.erroPercentual) > 5;
+      const partes = [`${item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`];
+      if (item.custo != null) partes.push(formatBRL(item.custo));
+      if (item.erroPercentual != null) partes.push(`${item.erroPercentual > 0 ? "+" : ""}${item.erroPercentual.toFixed(1)}%`);
+      return [item.nome, partes.join(" · "), erroAlto ? [179, 79, 66] : undefined];
+    }), oliva);
+  }
 
   doc.setDrawColor(220, 219, 213);
   doc.line(margem, altura - 46, largura - margem, altura - 46);
