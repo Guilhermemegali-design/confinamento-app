@@ -923,7 +923,7 @@ function LoteDetalhe({
       </div>
 
       {indicadores.status === "Finalizado" && (
-        <FechamentoCustoCard cliente={cliente} lote={lote} indicadores={indicadores} saidas={saidas} />
+        <FechamentoCustoCard cliente={cliente} lote={lote} indicadores={indicadores} saidas={saidas} consumoIngredientes={consumoIngredientes} />
       )}
 
       {(onNovaSaida || saidasOrdenadas.length > 0) && (
@@ -1081,40 +1081,38 @@ function LoteDetalhe({
         <EmptyHint text="Nenhum consumo registrado ainda — lance o consumo do dia para acompanhar a nutrição do lote." />
       )}
 
-      {consumoIngredientes.length > 0 && (
-        <>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
-            <div style={{ ...styles.sectionTitle, margin: 0 }}>Consumo acumulado por ingrediente</div>
-          </div>
-          {consumoIngredientes.map((item) => {
-            const erroAlto = item.erroPercentual != null && Math.abs(item.erroPercentual) > 5;
-            return (
-              <div key={item.chave} style={styles.rowCard}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13.5 }}>{item.nome}</div>
-                  {indicadores.status === "Finalizado" && (
-                    <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
-                      {item.custo != null ? `Custo ${formatBRL(item.custo)}` : ""}
-                      {item.erroPercentual != null
-                        ? `${item.custo != null ? " · " : ""}Erro vs dieta proposta ${item.erroPercentual > 0 ? "+" : ""}${item.erroPercentual.toFixed(1)}%`
-                        : ""}
-                    </div>
-                  )}
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>
-                    {item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg
-                  </div>
-                  {indicadores.status === "Finalizado" && erroAlto && (
-                    <div style={{ fontSize: 11, color: "#B34F42" }}>Fora da dieta</div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </>
-      )}
+      {indicadores.status === "Ativo" && <QuadroConsumoIngredientes consumoIngredientes={consumoIngredientes} />}
     </div>
+  );
+}
+
+// Quadro de consumo acumulado por ingrediente no mesmo estilo visual dos
+// quadros de custo (ResultadoBloco/ResultadoLinha) — em lote ativo aparece
+// como card próprio aqui na aba Nutrição; em lote finalizado é embutido
+// direto no grid do FechamentoCustoCard (ver mais abaixo).
+function QuadroConsumoIngredientes({ consumoIngredientes, titulo = "Consumo acumulado por ingrediente" }) {
+  if (!consumoIngredientes.length) return null;
+  return (
+    <section className="resultado-lote" style={{ marginTop: 20 }}>
+      <div className="resultado-lote-header">
+        <div>
+          <span>NUTRIÇÃO</span>
+          <h2>{titulo}</h2>
+          <p>Total de cada ingrediente já consumido pelo lote.</p>
+        </div>
+      </div>
+      <div className="resultado-blocos" style={{ gridTemplateColumns: "1fr" }}>
+        <ResultadoBloco titulo="Ingredientes" cor="#6B5B3E">
+          {consumoIngredientes.map((item) => (
+            <ResultadoLinha
+              key={item.chave}
+              label={item.nome}
+              value={`${item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`}
+            />
+          ))}
+        </ResultadoBloco>
+      </div>
+    </section>
   );
 }
 
@@ -1278,7 +1276,7 @@ function GraficoLinha({
   );
 }
 
-function FechamentoCustoCard({ cliente, lote, indicadores, saidas }) {
+function FechamentoCustoCard({ cliente, lote, indicadores, saidas, consumoIngredientes = [] }) {
   const f = calcularFechamentoCusto(lote, indicadores, saidas);
   const [exportando, setExportando] = useState(false);
   const semDados =
@@ -1331,6 +1329,18 @@ function FechamentoCustoCard({ cliente, lote, indicadores, saidas }) {
           <ResultadoLinha label="Lucro total" value={f.resultadoTotal != null ? formatBRL(f.resultadoTotal) : "—"} forte cor={resultadoPositivo ? "#247A52" : "#B34F42"} />
           <ResultadoLinha label="Lucro por animal" value={f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "—"} forte cor={resultadoPositivo ? "#247A52" : "#B34F42"} />
         </ResultadoBloco>
+        {consumoIngredientes.length > 0 && (
+          <ResultadoBloco titulo="Consumo por ingrediente" cor="#6B5B3E">
+            {consumoIngredientes.map((item) => (
+              <ResultadoLinha
+                key={item.chave}
+                label={item.nome}
+                value={`${item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg${item.custo != null ? ` · ${formatBRL(item.custo)}` : ""}${item.erroPercentual != null ? ` · ${item.erroPercentual > 0 ? "+" : ""}${item.erroPercentual.toFixed(1)}%` : ""}`}
+                cor={item.erroPercentual != null && Math.abs(item.erroPercentual) > 5 ? "#B34F42" : undefined}
+              />
+            ))}
+          </ResultadoBloco>
+        )}
       </div>
       <div className="resultado-nota">A margem mensal representa o retorno sobre o custo total, proporcionalizado para períodos de 30 dias.</div>
     </section>
