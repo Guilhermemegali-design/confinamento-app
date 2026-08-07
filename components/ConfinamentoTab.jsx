@@ -4,7 +4,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
-  LayoutDashboard, Beef, ClipboardList, BarChart3, Map as MapIcon, Settings2, Truck,
+  LayoutDashboard, Beef, ClipboardList, BarChart3, Map as MapIcon, Settings2, Truck, Wheat, Plus, AlertTriangle,
 } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
@@ -14,7 +14,8 @@ import {
   NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, obterConsumoReferenciaAntesDe,
   ajustePercentualDaNota, calcularHistoricoEsperadoRealizado, montarTabelaConsumoEsperado,
 } from "@/lib/confinamento";
-import { BackHeader, SectionTitle, EmptyHint, Field, InputField, TextAreaField, PrimaryButton } from "./UI";
+import { TIPOS_DIETA, labelTipoDieta, ingredienteVazio, calcularDieta } from "@/lib/dieta";
+import { BackHeader, SectionTitle, EmptyHint, Field, InputField, TextAreaField, SelectField, PrimaryButton } from "./UI";
 
 // Leaflet mexe com "window"/"document" ao criar o mapa — precisa ficar fora
 // do SSR do Next, senão quebra o build.
@@ -109,7 +110,7 @@ function usarOrdenacaoPersistida(clienteId) {
 
 function usarAbaPersistida(clienteId) {
   const chave = `confinamento_aba_${clienteId || "geral"}`;
-  const abasValidas = ["painel", "lotes-ativos", "lotes-finalizados", "cocho", "esperado", "graficos", "cargas", "mapa"];
+  const abasValidas = ["painel", "lotes-ativos", "lotes-finalizados", "cocho", "esperado", "graficos", "cargas", "dieta", "mapa"];
   const [aba, setAbaState] = useState(() => {
     if (typeof window === "undefined") return "painel";
     const salva = window.localStorage.getItem(chave);
@@ -171,13 +172,14 @@ function msDaFase(cliente, fase) {
 // Reaproveitado tanto na tela do consultor (com criar/excluir) quanto no portal
 // do cliente (ver e editar).
 export default function ConfinamentoTab({
-  cliente, lotes, pesagens = [], consumos = [], saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], currais = [], curralOcupacoes = [],
+  cliente, lotes, pesagens = [], consumos = [], saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], currais = [], curralOcupacoes = [],
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
   onAdicionarSaida, onExcluirSaida,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
+  onAdicionarDieta, onAtualizarDieta, onExcluirDieta,
   onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onMoverLoteParaCurral, onAtualizarCliente,
   onBack, onGerenciarCliente,
 }) {
@@ -367,6 +369,42 @@ export default function ConfinamentoTab({
     );
   }
 
+  if (tela.modo === "nova-dieta") {
+    return (
+      <FormDieta
+        onCancel={() => setTela({ modo: "lista" })}
+        onSave={async (dados) => {
+          await onAdicionarDieta(dados);
+          setTela({ modo: "lista" });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "editar-dieta") {
+    const dieta = dietas.find((d) => d.id === tela.id);
+    if (!dieta) return <EmptyHint text="Dieta não encontrada." />;
+    return (
+      <FormDieta
+        dietaExistente={dieta}
+        onCancel={() => setTela({ modo: "lista" })}
+        onSave={async (dados) => {
+          await onAtualizarDieta(dieta.id, dados);
+          setTela({ modo: "lista" });
+        }}
+        onDelete={
+          onExcluirDieta &&
+          (async () => {
+            if (confirm(`Excluir a dieta "${dieta.nome}"? Essa ação não pode ser desfeita.`)) {
+              await onExcluirDieta(dieta.id);
+              setTela({ modo: "lista" });
+            }
+          })
+        }
+      />
+    );
+  }
+
   if (tela.modo === "lote") {
     const lote = lotes.find((l) => l.id === tela.id);
     if (!lote) return <EmptyHint text="Lote não encontrado." />;
@@ -483,6 +521,11 @@ export default function ConfinamentoTab({
                 + Novo lote
               </button>
             )}
+            {aba === "dieta" && onAdicionarDieta && (
+              <button onClick={() => setTela({ modo: "nova-dieta" })} style={styles.editLinkBtn}>
+                + Nova dieta
+              </button>
+            )}
           </div>
         </div>
         <div style={styles.contextLabel}>
@@ -492,16 +535,18 @@ export default function ConfinamentoTab({
           {aba === "graficos" && "Indicadores e evolução"}
           {aba === "mapa" && "Localização dos currais"}
           {aba === "cargas" && "Precisão do abastecimento e matéria seca"}
+          {aba === "dieta" && "Formulação de dieta por fase"}
         </div>
       </div>
 
       <div className="desktop-workspace">
-        <nav style={styles.mainNav} className="main-navigation" aria-label="Áreas do confinamento">
+        <nav style={{ ...styles.mainNav, gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }} className="main-navigation" aria-label="Áreas do confinamento">
           <NavArea icon={LayoutDashboard} label="Resumo" active={aba === "painel"} onClick={() => setAba("painel")} />
           <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos" || aba === "lotes-finalizados"} onClick={() => setAba("lotes-ativos")} />
           <NavArea icon={ClipboardList} label="Rotina" active={aba === "cocho" || aba === "esperado"} onClick={() => setAba(onRegistrarLeituraCocho ? "cocho" : "esperado")} />
           <NavArea icon={BarChart3} label="Análises" active={aba === "graficos"} onClick={() => setAba("graficos")} />
           <NavArea icon={Truck} label="Cargas" active={aba === "cargas"} onClick={() => setAba("cargas")} />
+          <NavArea icon={Wheat} label="Dieta" active={aba === "dieta"} onClick={() => setAba("dieta")} />
           <NavArea icon={MapIcon} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
         </nav>
 
@@ -551,6 +596,8 @@ export default function ConfinamentoTab({
           onImportar={onImportarCargas && (() => setTela({ modo: "importar-cargas" }))}
           onExcluirCarga={onExcluirCarga}
         />
+      ) : aba === "dieta" ? (
+        <AbaDietas dietas={dietas} onAbrir={(id) => setTela({ modo: "editar-dieta", id })} />
       ) : aba === "mapa" ? (
         <MapaCurrais
           cliente={cliente}
@@ -3538,6 +3585,176 @@ function corErroCarga(percentual) {
   if (absoluto <= 2) return { cor: "#2F7D5B", fundo: "#E7F3EC" };
   if (absoluto <= 5) return { cor: "#9A6B16", fundo: "#FFF3D6" };
   return { cor: "#B4473D", fundo: "#FBE8E6" };
+}
+
+// Lista de dietas formuladas (Adaptação/Recria/Crescimento/Terminação/
+// Sequestro) do cliente — cada uma com sua própria lista de ingredientes.
+function AbaDietas({ dietas, onAbrir }) {
+  const ordenadas = [...dietas].sort((a, b) => a.nome.localeCompare(b.nome));
+
+  if (ordenadas.length === 0) return <EmptyHint text="Nenhuma dieta cadastrada." />;
+
+  return (
+    <div>
+      {ordenadas.map((d) => {
+        const { custoPorKgMn } = calcularDieta(d.ingredientes);
+        return (
+          <div key={d.id} style={styles.listItem} onClick={() => onAbrir(d.id)}>
+            <div style={styles.avatar}>
+              <Wheat size={17} color="#1F4D45" />
+            </div>
+            <div style={{ flex: 1, textAlign: "left" }}>
+              <div style={styles.listItemTitle}>{d.nome}</div>
+              <div style={styles.listItemSub}>
+                {(d.ingredientes || []).length} ingrediente(s)
+                {custoPorKgMn > 0 ? ` · ${formatBRL(custoPorKgMn)}/kg MN` : ""}
+              </div>
+            </div>
+            <span style={styles.dietaTipoTag}>{labelTipoDieta(d.tipo)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function FormDieta({ onCancel, onSave, dietaExistente, onDelete }) {
+  const ehEdicao = Boolean(dietaExistente);
+  const [nome, setNome] = useState(dietaExistente?.nome || "");
+  const [tipo, setTipo] = useState(dietaExistente?.tipo || TIPOS_DIETA[0].value);
+  const [ingredientes, setIngredientes] = useState(
+    dietaExistente?.ingredientes?.length ? dietaExistente.ingredientes : [ingredienteVazio()]
+  );
+  const [salvando, setSalvando] = useState(false);
+
+  function atualizarIngrediente(index, campo, valor) {
+    setIngredientes((lista) => lista.map((ing, i) => (i === index ? { ...ing, [campo]: valor } : ing)));
+  }
+
+  function removerIngrediente(index) {
+    setIngredientes((lista) => lista.filter((_, i) => i !== index));
+  }
+
+  function adicionarIngrediente() {
+    setIngredientes((lista) => [...lista, ingredienteVazio()]);
+  }
+
+  const ingredientesValidos = ingredientes.filter((ing) => ing.nome.trim());
+  const { linhas, totalParticipacaoMs, custoPorKgMs, custoPorKgMn } = calcularDieta(ingredientesValidos);
+  const msForaDoEsperado = ingredientesValidos.length > 0 && Math.abs(totalParticipacaoMs - 100) > 0.5;
+
+  const valido = nome.trim() && ingredientesValidos.length > 0;
+
+  async function handleSave() {
+    setSalvando(true);
+    try {
+      await onSave({ nome: nome.trim(), tipo, ingredientes: ingredientesValidos });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title={ehEdicao ? "Editar dieta" : "Nova dieta"} onBack={onCancel} />
+      <div style={styles.card}>
+        <InputField label="Nome da dieta *" value={nome} onChange={setNome} placeholder="Ex: Dieta padrão terminação" />
+        <SelectField label="Fase *" value={tipo} onChange={setTipo} options={TIPOS_DIETA} />
+      </div>
+
+      <SectionTitle>Ingredientes</SectionTitle>
+
+      {ingredientes.map((ing, i) => {
+        const linha = linhas[i];
+        return (
+          <div key={i} style={styles.ingredienteCard}>
+            <div style={styles.ingredienteHeaderRow}>
+              <input
+                value={ing.nome}
+                onChange={(e) => atualizarIngrediente(i, "nome", e.target.value)}
+                placeholder={`Ingrediente ${i + 1}`}
+                style={{ ...styles.ingredienteMiniInput, border: "none", background: "transparent", fontSize: 14.5, fontWeight: 600, padding: 0 }}
+              />
+              {ingredientes.length > 1 && (
+                <button onClick={() => removerIngrediente(i)} style={styles.ingredienteRemoveBtn}>
+                  <Trash2 size={15} />
+                </button>
+              )}
+            </div>
+            <div style={styles.ingredienteGrid}>
+              <label style={styles.ingredienteMiniField}>
+                <div style={styles.ingredienteMiniLabel}>% MS do alimento</div>
+                <input
+                  type="number"
+                  value={ing.ms}
+                  onChange={(e) => atualizarIngrediente(i, "ms", e.target.value)}
+                  placeholder="Ex: 88"
+                  style={styles.ingredienteMiniInput}
+                />
+              </label>
+              <label style={styles.ingredienteMiniField}>
+                <div style={styles.ingredienteMiniLabel}>% na dieta (MS)</div>
+                <input
+                  type="number"
+                  value={ing.participacao_ms}
+                  onChange={(e) => atualizarIngrediente(i, "participacao_ms", e.target.value)}
+                  placeholder="Ex: 20"
+                  style={styles.ingredienteMiniInput}
+                />
+              </label>
+              <label style={styles.ingredienteMiniField}>
+                <div style={styles.ingredienteMiniLabel}>Preço R$/kg</div>
+                <input
+                  type="number"
+                  value={ing.preco}
+                  onChange={(e) => atualizarIngrediente(i, "preco", e.target.value)}
+                  placeholder="Ex: 0,90"
+                  style={styles.ingredienteMiniInput}
+                />
+              </label>
+            </div>
+            {ing.nome.trim() && (
+              <div style={styles.ingredienteMnResult}>
+                Participação em matéria natural: <span style={styles.ingredienteMnValor}>{linha ? linha.participacaoMn.toFixed(1) : "0,0"}%</span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <button onClick={adicionarIngrediente} style={styles.addIngredienteBtn}>
+        <Plus size={16} /> Adicionar ingrediente
+      </button>
+
+      {ingredientesValidos.length > 0 && (
+        <div style={styles.dietaResumoCard}>
+          <div style={styles.dietaResumoRow}>
+            <span style={styles.dietaResumoLabel}>Custo por kg de matéria natural</span>
+            <span style={styles.dietaResumoValor}>{formatBRL(custoPorKgMn)}</span>
+          </div>
+          <div style={styles.dietaResumoRow}>
+            <span style={styles.dietaResumoLabel}>Custo por kg de matéria seca</span>
+            <span style={styles.dietaResumoValor}>{formatBRL(custoPorKgMs)}</span>
+          </div>
+          {msForaDoEsperado && (
+            <div style={styles.dietaResumoAviso}>
+              <AlertTriangle size={11} style={{ verticalAlign: -1, marginRight: 4 }} />
+              A soma da participação em MS está em {totalParticipacaoMs.toFixed(1)}% (o esperado é 100%).
+            </div>
+          )}
+        </div>
+      )}
+
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : ehEdicao ? "Salvar alterações" : "Salvar dieta"}
+      </PrimaryButton>
+      {ehEdicao && onDelete && (
+        <button onClick={onDelete} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir dieta
+        </button>
+      )}
+    </div>
+  );
 }
 
 function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSincronizar, onImportar, onExcluirCarga }) {

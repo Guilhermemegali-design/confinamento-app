@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-07-30 (suporte ao formato longo da planilha do vagão + exclusão de carga + custo médio diário na lista de lotes)
+Última atualização: 2026-08-07 (aba de Dieta por cliente/fase)
 
 ## O que é
 
@@ -39,6 +39,11 @@ Produção: **https://confinamento-nine.vercel.app**
 - `app/page.js` — tela do consultor (login fixo + `ClientesTab`).
 - `app/portal/page.js` — tela do cliente (login próprio, vincular por código
   de convite, `ConfinamentoTab` direto).
+- `lib/dieta.js` — cálculo de formulação de dieta (`calcularDieta`): a
+  partir de %MS do ingrediente + % de participação na dieta (base seca) +
+  preço R$/kg, calcula % em matéria natural e custo/kg (MS e MN). Usado
+  pela aba "Dieta" dentro de `ConfinamentoTab.jsx` (componentes `AbaDietas`
+  e `FormDieta`, no fim do arquivo).
 - `supabase/schema.sql` (no repo **Consultoria-main**, não neste) — schema de
   referência, mantido em sincronia manualmente a cada mudança de banco. Não é
   executado automaticamente — é o arquivo que o usuário colaria no SQL Editor
@@ -68,7 +73,17 @@ Produção: **https://confinamento-nine.vercel.app**
   (ver item 35).
 
 Fases de dieta: `adaptacao`, `recria`, `crescimento`, `terminacao` (recria foi
-adicionada nesta sessão para atender a Belmont).
+adicionada em sessão anterior para atender a Belmont).
+
+- `dietas` (2026-08-07) — formulação de dieta por cliente/fase, separada de
+  `ingredientes_ms`/`consumos_lote` (que tratam de consumo real medido, não
+  de formulação). Cada linha: `cliente_id`, `nome`, `tipo` (agora com 5
+  fases: as 4 de cima + `sequestro`), `ingredientes` (jsonb: array de
+  `{nome, ms, participacao_ms, preco}`). RLS igual a `ingredientes_ms`:
+  consultor tem acesso total; qualquer pessoa vinculada ao cliente vê
+  (`SELECT`); só `papel` `editor`/`administrador` cria e edita; **exclusão é
+  só do consultor** (não há policy de DELETE pra cliente, de propósito —
+  mesmo padrão de `lotes_confinamento`).
 
 ## RLS (permissões)
 
@@ -703,9 +718,54 @@ adicionada nesta sessão para atender a Belmont).
     (já calculado por `calcularIndicadoresLote` como
     `custoMedioDiarioAnimal`, só não estava exibido nessas telas — já
     aparecia no detalhe do lote).
+60. **Nova aba "Dieta"** (2026-08-07): formulação de dieta por cliente/fase
+    (Adaptação, Recria, Crescimento, Terminação, Sequestro — a 5ª fase é
+    exclusiva desta tabela, não existe nas demais que usam só as 4 de
+    sempre). Cada dieta tem nome + lista de ingredientes; cada ingrediente
+    tem %MS próprio, % de participação na dieta (base seca) e preço R$/kg —
+    o app calcula automaticamente a % em matéria natural de cada
+    ingrediente e o custo/kg (MS e MN) da dieta inteira (`lib/dieta.js`,
+    `calcularDieta`). Nova aba no nav principal do `ConfinamentoTab`
+    (`AbaDietas`/`FormDieta`, ícone `Wheat`), disponível tanto pro
+    consultor (`app/page.js` → `ClientesTab`) quanto pro cliente
+    (`app/portal/page.js`, respeitando `somenteLeitura` e a RLS por papel
+    — só editor/administrador cria/edita, só o consultor exclui). Tabela
+    nova `dietas` no Supabase (ver Modelo de dados acima).
+61. **Corrigido push acidental do zip do Consultoria neste repo**
+    (2026-08-07): o usuário, ao tentar publicar a aba de Dieta (que eu
+    tinha construído primeiro, por engano, no app Consultoria), arrastou o
+    zip errado pro GitHub deste repo (`confinamento-app`) em vez do
+    `Consultoria`. O commit `6c659d7` ("Add files via upload") sobrescreveu
+    `app/page.js` e `handoff.md` inteiros com as versões do Consultoria e
+    adicionou arquivos estranhos a este projeto (`components/BottomNav.jsx`,
+    `components/DietaTab.jsx`, `lib/dieta.js` antigo, `lib/useDados.js`,
+    `supabase/schema.sql`) — quebrou o build (`Module not found:
+    @/lib/useConexao` e outros, todos específicos do Consultoria). A
+    Vercel nunca promoveu esse deploy quebrado pra produção (ficou em
+    `ERROR`), então o site no ar não chegou a cair. Corrigido com
+    `git revert 6c659d7` (commit `2bb1254`) antes de aplicar a Dieta de
+    verdade por cima — histórico do Git preserva o incidente, nada foi
+    apagado à força.
 
 ## Pendências / coisas para prestar atenção
 
+- **Aba de Dieta (2026-08-07): não verificada no navegador nesta sessão** —
+  login exige a conta real do consultor/cliente, que não tenho aqui.
+  Validado só por `npm run build` (compila e passa lint) + carregar as
+  telas de login (`/` e `/portal`) sem erro no console. Vale um teste
+  manual assim que subir: cadastrar uma dieta com 2-3 ingredientes, tanto
+  pelo painel do consultor quanto pelo portal (como editor e como
+  administrador), e conferir se o cálculo de %MN e custo bate.
+- **Grid do nav principal ajustado de 5 pra 4 colunas** (`styles.mainNav`,
+  `gridTemplateColumns`) pra acomodar a 7ª aba (Dieta) numa distribuição
+  4+3 — antes já eram 6 botões (Resumo/Lotes/Rotina/Análises/Cargas/Mapa)
+  espremidos numa grade de 5 colunas (o 6º "vazava" pra uma segunda linha
+  sozinho); não conferido visualmente, vale olhar no celular depois do
+  deploy.
+- **Ainda não publicado**: as mudanças estão commitadas localmente
+  (`git log` no repo) mas não foram enviadas pro GitHub — aguardando
+  confirmação do usuário antes do push, já que a última tentativa de
+  publicar quebrou o repo (ver item 61 acima).
 - **Data de entrada dos 4 lotes do Adelmilson (Boi 1, Boi 2, C1, C2) pode
   estar errada**: cadastrada como 01/06/2026, mas a planilha de consumo
   mostra claramente adaptação começando 03/04/2026 e crescimento até

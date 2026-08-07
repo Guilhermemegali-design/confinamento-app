@@ -184,6 +184,7 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
   const [leiturasCocho, setLeiturasCocho] = useState([]);
   const [cargasVagao, setCargasVagao] = useState([]);
   const [ingredientesMs, setIngredientesMs] = useState([]);
+  const [dietas, setDietas] = useState([]);
   const [currais, setCurrais] = useState([]);
   const [curralOcupacoes, setCurralOcupacoes] = useState([]);
   const [relatorios, setRelatorios] = useState([]);
@@ -213,6 +214,8 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
     setCargasVagao(cv || []);
     const { data: im } = await supabase.from("ingredientes_ms").select("*").eq("cliente_id", cliente.id);
     setIngredientesMs(im || []);
+    const { data: dt } = await supabase.from("dietas").select("*").eq("cliente_id", cliente.id);
+    setDietas(dt || []);
     const curralIds = (cu || []).map((x) => x.id);
     if (curralIds.length > 0) {
       const { data: co } = await supabase.from("curral_ocupacoes").select("*").in("curral_id", curralIds);
@@ -422,6 +425,35 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
     return data;
   }
 
+  async function adicionarDieta(dados) {
+    const { data, error } = await supabase
+      .from("dietas")
+      .insert({ ...dados, cliente_id: cliente.id, consultor_id: cliente.consultor_id })
+      .select()
+      .single();
+    if (error) throw error;
+    setDietas((ds) => [...ds, data]);
+    return data;
+  }
+
+  async function atualizarDieta(dietaId, dados) {
+    const { data, error } = await supabase
+      .from("dietas")
+      .update({ ...dados, atualizado_em: new Date().toISOString() })
+      .eq("id", dietaId)
+      .select()
+      .single();
+    if (error) throw error;
+    setDietas((ds) => ds.map((d) => (d.id === dietaId ? data : d)));
+    return data;
+  }
+
+  async function excluirDieta(dietaId) {
+    const { error } = await supabase.from("dietas").delete().eq("id", dietaId);
+    if (error) throw error;
+    setDietas((ds) => ds.filter((d) => d.id !== dietaId));
+  }
+
   async function adicionarCurral(clienteId, dados) {
     const { data, error } = await supabase
       .from("currais")
@@ -519,6 +551,7 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
             leiturasCocho={leiturasCocho}
             cargasVagao={cargasVagao}
             ingredientesMs={ingredientesMs}
+            dietas={dietas}
             currais={currais}
             curralOcupacoes={curralOcupacoes}
             onAdicionar={somenteLeitura ? undefined : adicionarLote}
@@ -535,6 +568,8 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
             onExcluirCarga={somenteLeitura ? undefined : excluirCarga}
             onSalvarMsIngrediente={somenteLeitura ? undefined : salvarMsIngrediente}
             onSincronizarCustosMs={somenteLeitura ? undefined : sincronizarCustosMsConsumos}
+            onAdicionarDieta={somenteLeitura ? undefined : adicionarDieta}
+            onAtualizarDieta={somenteLeitura ? undefined : atualizarDieta}
             onAdicionarCurral={somenteLeitura ? undefined : adicionarCurral}
             onAtualizarCurral={somenteLeitura ? undefined : atualizarCurral}
             onExcluirCurral={somenteLeitura ? undefined : excluirCurral}

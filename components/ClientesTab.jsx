@@ -7,7 +7,7 @@ import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryBut
 import ConfinamentoTab from "./ConfinamentoTab";
 
 export default function ClientesTab({
-  clientes, lotes, pesagens, consumos, saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
+  clientes, lotes, pesagens, consumos, saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
@@ -15,6 +15,7 @@ export default function ClientesTab({
   onAddConsumo, onUpdateConsumo, onDeleteConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
+  onAddDieta, onUpdateDieta, onDeleteDieta,
   onAddCurral, onUpdateCurral, onDeleteCurral, onImportarCurrais, onMoverLoteParaCurral,
   onRemoveAcessoCliente, onUpdateAcessoCliente,
 }) {
@@ -32,6 +33,7 @@ export default function ClientesTab({
     const leiturasCochoCliente = leiturasCocho.filter((l) => loteIdsCliente.has(l.lote_id));
     const cargasCliente = cargasVagao.filter((c) => c.cliente_id === cliente.id);
     const ingredientesMsCliente = ingredientesMs.filter((i) => i.cliente_id === cliente.id);
+    const dietasCliente = dietas.filter((d) => d.cliente_id === cliente.id);
     const curraisCliente = currais.filter((c) => c.cliente_id === cliente.id);
     const curralIdsCliente = new Set(curraisCliente.map((c) => c.id));
     const curralOcupacoesCliente = curralOcupacoes.filter((o) => curralIdsCliente.has(o.curral_id));
@@ -45,6 +47,7 @@ export default function ClientesTab({
         leiturasCocho={leiturasCochoCliente}
         cargasVagao={cargasCliente}
         ingredientesMs={ingredientesMsCliente}
+        dietas={dietasCliente}
         currais={curraisCliente}
         curralOcupacoes={curralOcupacoesCliente}
         onAdicionar={(dados) => onAddLote(cliente.id, dados)}
@@ -64,6 +67,9 @@ export default function ClientesTab({
         onExcluirCarga={onExcluirCarga}
         onSalvarMsIngrediente={onSalvarMsIngrediente && ((ingrediente) => onSalvarMsIngrediente(cliente.id, ingrediente))}
         onSincronizarCustosMs={onSincronizarCustosMs}
+        onAdicionarDieta={onAddDieta && ((dados) => onAddDieta(cliente.id, dados))}
+        onAtualizarDieta={onUpdateDieta}
+        onExcluirDieta={onDeleteDieta}
         onAdicionarCurral={onAddCurral}
         onAtualizarCurral={onUpdateCurral}
         onExcluirCurral={onDeleteCurral}

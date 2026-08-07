@@ -85,6 +85,7 @@ export default function Home() {
           leiturasCocho={dados.leiturasCocho}
           cargasVagao={dados.cargasVagao}
           ingredientesMs={dados.ingredientesMs}
+          dietas={dados.dietas}
           clientesUsuarios={dados.clientesUsuarios}
           currais={dados.currais}
           curralOcupacoes={dados.curralOcupacoes}
@@ -174,6 +175,18 @@ export default function Home() {
             const sincronizados = await dados.sincronizarCustosMsConsumos(atualizacoes);
             mostrarToast(`${sincronizados.length} consumo${sincronizados.length !== 1 ? "s" : ""} sincronizado${sincronizados.length !== 1 ? "s" : ""}`);
             return sincronizados;
+          }}
+          onAddDieta={async (clienteId, d) => {
+            await dados.adicionarDieta(clienteId, d);
+            mostrarToast("Dieta cadastrada");
+          }}
+          onUpdateDieta={async (id, d) => {
+            await dados.atualizarDieta(id, d);
+            mostrarToast("Dieta atualizada");
+          }}
+          onDeleteDieta={async (id) => {
+            await dados.excluirDieta(id);
+            mostrarToast("Dieta excluída");
           }}
           onAddCurral={async (clienteId, c) => {
             await dados.adicionarCurral(clienteId, c);
