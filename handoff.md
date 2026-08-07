@@ -1,773 +1,226 @@
-# Confinamento — Handoff
+# Consultoria — Handoff
 
-Última atualização: 2026-07-30 (suporte ao formato longo da planilha do vagão + exclusão de carga + custo médio diário na lista de lotes)
+Última atualização: 2026-08-07
 
 ## O que é
 
-App de acompanhamento de confinamento de gado (zootecnista/consultor + portal do
-cliente), separado do app de consultoria geral. Duas telas de entrada:
+App de gestão da consultoria de pecuária do usuário (zootecnista/consultor
+solo): clientes, agenda de visitas, relatórios (com fotos/documentos, offline-
+first), despesas, gestão financeira (pago/a receber) e um portal para os
+clientes acessarem os próprios relatórios. Duas telas de entrada:
 
-- `/` — painel do consultor (login fixo, `CONSULTOR_UID` hardcoded em `app/page.js`)
-- `/portal` — portal do cliente (várias pessoas por fazenda, ver abaixo)
+- `/` — painel do consultor (login fixo, `CONSULTOR_UID` hardcoded em
+  `app/page.js`)
+- `/portal` — portal do cliente (link fixo `URL_PRODUCAO + "/portal"`,
+  `lib/consultoria.js`, exibido na tela de detalhe do cliente)
 
-Produção: **https://confinamento-nine.vercel.app**
+Produção: **https://consultoria-ruddy.vercel.app** (domínio estável — os
+domínios com hash tipo `consultoria-xxxxx-....vercel.app` são de deployment
+específico, não usar esses com o cliente).
 
 ## Stack
 
 - Next.js 14 (App Router), sem TypeScript
-- Supabase (Postgres + Auth + RLS) — **mesmo projeto** usado pelo app de
-  Consultoria (`Consultoria-main`), projeto `vvukwhxlsymjsjajzeyl`
-- Deploy: Vercel, projeto `confinamento`, conectado ao GitHub
-  (`Guilhermemegali-design/confinamento-app`, branch `main`) — **todo `git push`
-  na main dispara deploy automático em produção**
-- PWA com Service Worker (`public/sw.js`) — cuidado, ele guarda cache antigo e
-  já causou confusão (usuário vendo tela desatualizada até dar hard refresh)
+- Supabase (Postgres + Auth + Storage + RLS) — **mesmo projeto** usado pelo
+  app irmão de confinamento (`Confinamento-main`), projeto
+  `vvukwhxlsymjsjajzeyl`. Por isso o `supabase/schema.sql` deste repo também
+  documenta tabelas de confinamento (`lotes_confinamento`, `pesagens_lote`,
+  `consumos_lote`) que pertencem ao outro app — não é lixo, é intencional
+  (schema de referência compartilhado).
+- Deploy: Vercel, projeto `consultoria`. **Não é repositório git local** —
+  o usuário não é técnico. Fluxo de deploy: eu edito os arquivos localmente
+  (tenho acesso direto ao filesystem), monto um zip com tudo que mudou, o
+  usuário descompacta e arrasta os arquivos pro GitHub web UI
+  ("Add file → Upload files"), o que dispara deploy automático no Vercel.
+  Nunca rodei `npm install`/`build`/lint neste ambiente (sem Node no
+  sandbox) — toda verificação é por revisão manual de código + MCP do
+  Supabase/Vercel.
+- IndexedDB (`idb`) para relatórios offline-first (`lib/db.js`, `lib/sync.js`)
+- Web Push (VAPID, `web-push` no servidor) para notificação de aniversário
+  de cliente
+- PWA: `manifest.json`, `public/sw.js` (agora também trata `push` e
+  `notificationclick`), ícones em `public/icon-192.png`, `icon-512.png`,
+  `apple-touch-icon.png`
+- Integração Google Calendar (OAuth2, `lib/googleCalendar.js`,
+  `lib/googleSync.js`, rotas em `app/api/auth/google/*` e
+  `app/api/google-calendar/*`)
 
 ## Arquivos-chave
 
-- `lib/confinamento.js` — todos os cálculos (GMD, peso esperado, custo
-  acumulado/diário, painel agregado). Não é UI, só funções puras.
-- `lib/useDadosConfinamento.js` — hook central de dados do lado do consultor
-  (clientes, lotes, pesagens, consumos, clientes_usuarios) + todas as
-  mutações (CRUD) via Supabase.
-- `components/ConfinamentoTab.jsx` — arquivo grande, é toda a UI de
-  confinamento (Painel, lista de lotes, detalhe do lote, formulários de
-  lote/pesagem/consumo, lançamento em massa, gráficos). Compartilhado entre
-  a tela do consultor e o portal do cliente.
-- `components/ClientesTab.jsx` — cadastro de clientes + tela de detalhe
-  (MS por fase, acesso ao portal, lista de pessoas com acesso).
-- `app/page.js` — tela do consultor (login fixo + `ClientesTab`).
-- `app/portal/page.js` — tela do cliente (login próprio, vincular por código
-  de convite, `ConfinamentoTab` direto).
-- `supabase/schema.sql` (no repo **Consultoria-main**, não neste) — schema de
-  referência, mantido em sincronia manualmente a cada mudança de banco. Não é
-  executado automaticamente — é o arquivo que o usuário colaria no SQL Editor
-  se precisasse recriar do zero.
+- `lib/useDados.js` — hook central de dados do consultor (clientes, visitas,
+  relatórios, despesas) + todas as mutações CRUD via Supabase, com fallback
+  pra IndexedDB quando offline.
+- `lib/sync.js` — sincronização de relatórios pendentes (upload de
+  fotos/documentos pro Storage, upsert por `id` ou `client_uuid`). Cada
+  upload usa um nome de arquivo único (`sufixoUnico()`) — ver Pendências.
+- `lib/db.js` — camada IndexedDB (`idb`) pros relatórios offline.
+- `lib/push.js` — helpers client-side de push notification (assinar/
+  desassinar).
+- `lib/pdf.js` — geração do PDF de exportação do relatório (jsPDF, roda
+  100% no navegador). Fotos centralizadas, texto justificado por parágrafo,
+  Cobrança/Quilometragem no final do documento.
+- `lib/consultoria.js` — dados fixos da consultoria (nome, contato) +
+  `URL_PRODUCAO`, o domínio estável usado pra montar o link do portal do
+  cliente (nunca usar `window.location.origin` pra isso — ver Pendências).
+- `app/api/cron/aniversarios/route.js` — cron diário (11h, `vercel.json`)
+  que varre `clientes.data_nascimento` e dispara push pros aniversariantes
+  do dia. Protegido por `CRON_SECRET` (bearer) se configurado.
+- `app/api/push/subscribe|unsubscribe/route.js` — registram/removem
+  inscrição push em `push_subscriptions`.
+- `components/ClientesTab.jsx` — cadastro/edição/exclusão de cliente,
+  aniversário, link do portal, ordenação alfabética.
+- `components/RelatoriosTab.jsx` — criação/edição/exclusão de relatório,
+  anexo de foto (galeria + câmera) e documento.
+- `components/DespesasTab.jsx` — despesas com navegação mês a mês.
+- `components/GestaoTab.jsx` — visão financeira, toggle pago/a receber
+  direto na lista.
+- `components/ConfiguracoesTab.jsx` — notificações de aniversário
+  (ativar/desativar), status e reconexão do Google Calendar.
+- `components/DietaTab.jsx` + `lib/dieta.js` — cadastro de formulações de
+  dieta (fase + lista de ingredientes com %MS, % participação na dieta em
+  base seca e preço R$/kg); cálculo de % em matéria natural e custo/kg
+  fica em `lib/dieta.js` (`calcularDieta`), nunca gravado no banco.
+- `supabase/schema.sql` — schema de referência (não roda automático; é o
+  que o usuário colaria no SQL Editor pra recriar do zero). **Compartilhado
+  com o Confinamento** — ver acima.
 
 ## Modelo de dados (resumo)
 
-- `clientes` — uma fazenda. Tem `codigo_convite` (reutilizável) e MS (%) por
-  fase (`ms_adaptacao`, `ms_recria`, `ms_crescimento`, `ms_terminacao`).
-- `clientes_usuarios` — **várias pessoas por fazenda** (substituiu o antigo
-  `clientes.auth_user_id` único). Cada linha é um login vinculado a um
-  cliente. O código de convite é o mesmo pra todo mundo da fazenda. Tem
-  `papel` (`editor`/`leitor`, default `editor`) — ver item 34 abaixo.
-- `lotes_confinamento` — um lote/curral. Tem `gmd_esperado`, custo do kg de
-  MN por fase (`custo_kg_mn_adaptacao/recria/crescimento/terminacao`),
-  `ordem` (posição na ordenação manual da lista de ativos),
-  `peso_esperado_abate`/`preco_arroba_entrada`/`rendimento_entrada`
-  (entrada) e `rendimento_carcaca`/`preco_venda_arroba`/`custo_operacional`
-  (saída, usados quando o lote é finalizado de uma vez só — ver item 35).
-- `pesagens_lote` — histórico de pesagens (peso ao longo do tempo).
-- `consumos_lote` — histórico de consumo diário. Cada registro "trava" a
-  `dieta_fase` e o `custo_kg_mn` no momento do lançamento (copiado do
-  cliente/lote), pra não mudar retroativamente se o preço mudar depois.
-- `saidas_lote` — histórico de saídas parciais (venda/abate de parte do
-  lote aos poucos, até esvaziar). Ver item 29 abaixo. Tem
-  `rendimento_carcaca`/`preco_venda_arroba`/`custo_operacional` por saída
-  (ver item 35).
-
-Fases de dieta: `adaptacao`, `recria`, `crescimento`, `terminacao` (recria foi
-adicionada nesta sessão para atender a Belmont).
+- `clientes` — um cliente do consultor. Tem `data_nascimento` (usada pelo
+  cron de aniversário).
+- `visitas` — agenda, com `google_event_id` quando sincronizada com o
+  Google Calendar.
+- `relatorios` — chave estável `client_uuid` (gerado no client, nunca muda)
+  + `id` de servidor quando já sincronizado. Tem `pago` (bool),
+  `fotos`/`documentos` (arrays de `{url, descricao}`/`{url, nome}`, podem
+  estar em base64 localmente até sincronizar).
+- `despesas` — simples, por mês (`data` no formato `YYYY-MM-DD`).
+- `dietas` — formulação de dieta do consultor (não vinculada a cliente/
+  lote), com `tipo` (adaptacao/recria/crescimento/terminacao/sequestro) e
+  `ingredientes` (jsonb: array de `{nome, ms, participacao_ms, preco}`). A
+  % em matéria natural e o custo da dieta são sempre calculados no
+  front-end (`lib/dieta.js`), nunca gravados no banco.
+- `push_subscriptions` — inscrições Web Push por `consultor_id`, sem RLS
+  (só service-role acessa, como `google_tokens`).
+- `google_tokens` — tokens OAuth do Google Calendar (refresh token),
+  service-role only.
 
 ## RLS (permissões)
 
-- Consultor: `auth.uid() = consultor_id` em tudo — acesso total aos próprios
-  clientes/lotes/pesagens/consumos.
-- Cliente (via `clientes_usuarios`): vê e edita lotes da própria fazenda, lê e
-  insere pesagens/consumos, mas **não edita nem exclui** pesagens/consumos já
-  lançados (só o consultor pode). `saidas_lote` segue a mesma regra restrita
-  de `pesagens_lote`: cliente insere e vê, só o consultor exclui. Tudo isso
-  vale só pra `papel = 'editor'` — `papel = 'leitor'` só tem as políticas de
-  `SELECT` (ver item 34).
+- Consultor: `auth.uid() = consultor_id` em `clientes`/`visitas`/
+  `relatorios`/`despesas`, com `with check` nas políticas de insert/update
+  (faltava isso originalmente — foi a causa do primeiro bug de RLS desta
+  sessão).
+- Storage (`fotos-relatorios`, `documentos-relatorios`): políticas por
+  `(storage.foldername(name))[1] = auth.uid()::text`. Precisa de políticas
+  **separadas para INSERT e UPDATE** — o `upsert:true` do sync usa UPDATE
+  quando o arquivo já existe, e por muito tempo só existia a política de
+  INSERT (segundo bug de RLS desta sessão, mais difícil de achar).
+- `push_subscriptions`/`google_tokens`: sem policy nenhuma — só acessíveis
+  via `service_role` (usado nas rotas de API, nunca no client).
+
+## Sessões anteriores (resumo)
+
+- Edição de cliente + aniversário com push real (VAPID sem Node, cron
+  diário no Vercel). Ícones de PWA. Exclusão de cliente (cascade). Input de
+  foto no iPhone corrigido (removido `capture="environment"`). Navegação
+  mês a mês em Despesas. Toggle pago/a receber na Gestão. Dois bugs de RLS
+  (ver seção RLS acima — Storage precisa de política separada pra
+  INSERT/UPDATE). Exclusão de relatório. Reconexão de Google Calendar sem
+  precisar desconectar. Ordenação alfabética de clientes.
+- Link do portal passou de string fixa pra `${window.location.origin}/portal`
+  — decisão **revertida nesta sessão** porque `window.location.origin`
+  dependia de qual URL o consultor estava usando pra acessar o app (ver
+  item 3 abaixo).
 
 ## O que foi feito nesta sessão (ordem cronológica)
 
-1. Logo real + ícone do PWA (foto do gado).
-2. Corrigido link do portal (URL fixa de produção, não mais dinâmica).
-3. Card "GMD esperado médio" no Painel.
-4. Campo de MS "aplica a todos os lotes" no lançamento de consumo em massa.
-5. Dados históricos da Alterosa (Fazenda Santa Helena) lançados via PDF —
-   depois corrigido: custo_kg_mn estava nulo em ~400 registros (bug do
-   lançamento em massa original), preenchido retroativamente com o preço
-   atual da fase de cada lote.
-6. **Migração de arquivo único para deploy via Git**: projeto conectado ao
-   GitHub, Vercel configurado para deploy automático a cada push. Antes disso
-   o deploy era manual via upload de arquivo, muito frágil (várias tentativas
-   falhas por esquecer arquivos).
-7. Botão de editar consumo já lançado (antes só dava pra excluir e relançar).
-8. Ordenação da lista de lotes ativos: nome (A-Z, com ordenação numérica
-   correta tipo "Curral 2" antes de "Curral 10"), mais recentes/antigos, nº
-   de cabeças, e **ordem manual** (setas ▲▼, persiste no campo `ordem`).
-9. Cards de custo no Painel: acumulado/diário médio por animal (ativos) e
-   total/diário médio por animal (finalizados) — ponderados por cabeças.
-10. **Múltiplos usuários por fazenda** (`clientes_usuarios`): antes só um
-    login por cliente. Agora o código de convite é reutilizável e a tela do
-    cliente lista quem tem acesso, com botão de remover.
-11. Corrigido bug de e-mail de confirmação do cliente redirecionando para a
-    tela do consultor em vez do portal (`emailRedirectTo` explícito +
-    Redirect URL cadastrada no Supabase Auth).
-12. Linha de tendência (regressão linear) no gráfico de "Consumo de MS em
-    relação ao peso vivo (%)".
-13. Fase "Recria" adicionada (banco + app) para atender formulação de dieta
-    da Belmont.
-14. 19 lotes da Belmont Agropecuaria lançados via PDF (Curral 10100–10118),
-    com 218 registros de consumo diário (03–14/07/2026).
-
-## Sessão de 2026-07-17
-
-15. **Dados diários da Junco Agropecuaria** lançados via PDF (pivot table,
-    05/05 a 11/07/2026, 11 lotes: 3,4,5,6,7,8,11,12,33,66,99) — 427 registros
-    de consumo. PDF extraído com PyMuPDF (coordenadas x/y das palavras, não
-    texto corrido) pra casar valor→coluna→lote com precisão, já que a
-    extração de texto simples embaralhava/perdia células em branco. **Lote
-    13** da Junco não existe no banco (só existe pra outros dois clientes) —
-    ficou de fora, os 24 registros dele (10/06–11/07) estão pendentes até o
-    usuário criar o lote com `num_cabecas`/`peso_entrada`/`data_entrada`
-    reais. O registro de 12/07 já existente no app foi mantido como estava
-    (conflitava com o valor do PDF) em vez de sobrescrito.
-16. **Bug crítico corrigido**: PostgREST corta em 1000 linhas por padrão
-    qualquer `.select()` sem `.range()`. O import da Junco levou
-    `consumos_lote` desse consultor de ~664 para 1091 linhas, passando do
-    limite pela primeira vez — resultado: dias sumindo silenciosamente da
-    tela (reportado como "Lote 12 não aparece de 03/07 a 11/07"). Corrigido
-    em `lib/useDadosConfinamento.js`: todas as 6 tabelas agora buscam em
-    páginas de 1000 até não sobrar nada (`buscarTodasLinhas`). **Atenção**:
-    `app/portal/page.js` ainda busca `consumos_lote` sem paginação (linha
-    ~185), só que filtrado por `lote_id` do cliente — hoje bem abaixo de
-    1000 linhas por cliente, mas pode precisar do mesmo tratamento se algum
-    cliente crescer muito.
-17. **MS da dieta corrigida em massa**: os 438 registros de consumo da Junco
-    foram lançados do PDF com MS=44.89% (valor da planilha), mas o real é
-    46.81% — corrigido direto via SQL (`UPDATE consumos_lote ... where
-    cliente ilike '%Junco%'`), incluindo os poucos registros antigos que já
-    estavam em 34.27%/46.10% (usuário confirmou que queria todos uniformes).
-18. **Dropdown de ordenação na aba Gráficos**: reaproveita
-    `OPCOES_ORDENACAO`/`compararLotes` (mesmas opções do Painel: manual,
-    mais recentes/antigos, nome, nº de cabeças) — antes os gráficos vinham
-    na ordem crua de `lotes`, sem opção de ordenar.
-19. **Investigado (não é bug de código) — botão "Exportar PDF" sumindo**:
-    o botão só aparece se pelo menos um lançamento do cliente tiver MS da
-    dieta preenchida (senão não dá pra montar nenhum gráfico e a aba mostra
-    só o aviso vazio). Achado: **Agropecuária Porto Pará** tem 5 lançamentos,
-    nenhum com MS — por isso a aba fica vazia pra esse cliente. Falta o
-    usuário passar o MS real da dieta dele pra eu preencher (igual fiz com a
-    Junco).
-20. **Investigado — "app do Mac" mostrando tela desatualizada**: confirmado
-    via curl que o bundle publicado em `confinamento-nine.vercel.app` já
-    tinha as duas mudanças (export + ordenação) — servidor 100% correto. O
-    app instalado no Dock do Mac é que está preso em cache/numa URL de
-    deploy antiga (cada deploy da Vercel gera uma URL própria e imutável,
-    tipo `confinamento-i2hp8mu1i-...vercel.app` — se o PWA foi instalado a
-    partir de uma URL dessas em vez do domínio fixo, ele nunca mais atualiza
-    sozinho). Orientado o usuário a: 1) fechar e reabrir o app
-    (Cmd+Q); se não resolver, 2) remover do Dock e reinstalar a partir de
-    `https://confinamento-nine.vercel.app` (o domínio fixo). Ainda sem
-    confirmação se resolveu.
-21. **Import de planilha na aba de consumo**: botão "Importar planilha" (ao
-    lado de "+ Consumo") sobe um `.xlsx` no formato real que o consultor
-    exporta — **uma linha por lote/data**, com colunas "Data", "Lote",
-    "Dieta" e "Quantidade"/"Consumo" (não é pivot table; a v1 tinha assumido
-    pivot e foi refeita depois que o usuário mandou um print do formato
-    real). Colunas são reconhecidas pelo **nome do cabeçalho** (não pela
-    posição), então podem vir em qualquer ordem. O nome/número do lote na
-    célula é casado com o lote pelo número final (ex: "3" → "Lote 3").
-    Linhas do mesmo lote+data são **somadas** num único lançamento (o
-    export do cliente pode ter mais de um trato no mesmo dia pro mesmo
-    lote). MS da dieta: usa o valor da própria planilha se a coluna "MS"
-    existir e vier preenchida naquela linha; senão cai pro MS cadastrado no
-    cliente pra aquela fase (`cliente.ms_adaptacao/recria/crescimento/terminacao`
-    — mesma regra do lançamento manual, `msDaFase()`). Custo do kg de MN
-    vem de `custoKgMnDaFase(lote, fase)` a partir da fase lida da coluna
-    "Dieta". Pula linhas que já existem pro mesmo lote+data (evita duplicar
-    se a planilha for reimportada). Usa `lib/useDadosConfinamento.js` →
-    `importarConsumosEmLote` (um único INSERT em array, não um por linha).
-    **Importante**: instalado `xlsx` a partir do CDN do próprio SheetJS
-    (`cdn.sheetjs.com`), não do npm — a versão do registro npm tem
-    vulnerabilidades (prototype pollution/ReDoS) sem correção publicada lá.
-    Testada a lógica de parsing/soma/fallback de MS isolada via script Node
-    reproduzindo os dados exatos do print que o usuário mandou — não
-    consegui testar a tela em si porque preciso de login do consultor.
-22. **Painel dividido em 3 abas**: "Painel" ficou só com os cartões de
-    resumo — "Lotes ativos" e "Lotes finalizados" (que antes vinham
-    empilhados embaixo do Painel) agora são abas próprias.
-23. **Mapa de currais** (aba nova "Mapa"): mapa com satélite (Leaflet +
-    tiles do Esri World Imagery, sem precisar de chave de API) mostrando
-    cada curral como um pino. O consultor/cliente toca no mapa pra marcar
-    um curral novo, e **arrasta o crachá do lote** (da bandeja "sem
-    curral" ou de outro curral) pra cima de um curral pra realocar —
-    soltar em cima de um curral já ocupado **troca os dois lotes de
-    lugar**. O arrasto usa Pointer Events puros (down/move/up), não o
-    drag-and-drop nativo do HTML5, porque esse não funciona direito em
-    touch — testado e confirmado funcionando em mouse simulado.
-    - **Novo modelo de dados**: tabela `currais` (id, cliente_id, nome,
-      lat, lng) + `lotes_confinamento.curral_id` — separa "lote" (o lote de
-      gado, com todo o histórico dele) de "curral" (o piquete físico,
-      fixo), porque um lote pode mudar de curral durante o confinamento
-      sem perder o histórico. RLS espelha `lotes_confinamento`: consultor
-      tem acesso total; cliente/funcionário (via `clientes_usuarios`) pode
-      ver/criar/editar curral (não excluir), e já pode mudar o
-      `curral_id` do lote pela política "cliente_edita_seus_lotes" que já
-      existia — não precisou de RLS nova pra isso.
-    - **Import de KML com múltiplos currais**: reconhece cada `<Polygon>`
-      nomeado do KML como um curral (posição = centro do polígono), e o
-      polígono sem nome (ou o maior, se nenhum for "sem título") como o
-      contorno da fazenda (desenha o limite e centraliza o mapa nele).
-      Desambigua nomes repetidos dentro do próprio arquivo (o
-      `Belmont.kml` real que o usuário mandou tinha dois Placemarks
-      chamados "11" — o segundo virou "11 (2)" automaticamente, com aviso
-      na tela pra revisar). Ignora `<Point>` (são "LookAt" — marcadores de
-      câmera do Google Earth Pro, não posição de curral).
-    - **Import de KML é só do consultor por enquanto**: salvar
-      `mapa_contorno`/`mapa_centro_lat`/`mapa_centro_lng` exige dar
-      UPDATE em `clientes`, e não existe política de RLS pra
-      cliente/funcionário fazer isso (só existe a bem restrita
-      "cliente_aceita_convite", que não serve pra isso). Dava pra abrir
-      isso pro portal também, mas decidi não criar uma RLS nova de
-      "cliente edita o próprio cadastro" sem confirmar com o usuário — é
-      mais permissão do que ele pediu. **Se pedir**: falta uma policy tipo
-      `create policy "cliente_atualiza_mapa_do_proprio_cadastro" on
-      clientes for update using (id in (select cliente_id from
-      clientes_usuarios where auth_user_id = auth.uid())) with check
-      (...)`, e passar `onAtualizarCliente` no wiring do portal
-      (`app/portal/page.js`) do jeito que já foi feito pro lado do
-      consultor. Enquanto isso, cliente/funcionário já conseguem marcar
-      currais manualmente e arrastar lotes — só o import de KML que fica
-      esperando o consultor.
-    - **Bug real encontrado e corrigido durante o teste**: o `fitBounds`
-      rodava antes do container do mapa ter o tamanho final (0px de
-      largura por um instante, por causa do import dinâmico do Leaflet +
-      layout do resto da tela ainda assentando) — o Leaflet travava num
-      zoom degenerado (bate no teto, 19) que nunca mais se corrigia
-      sozinho, e todo marcador nascia centenas de pixels fora da posição
-      visual real dos tiles. Corrigido esperando um tamanho de container
-      diferente de zero antes do primeiro fitBounds/setView, mais um
-      `ResizeObserver` pra manter certo se o container mudar de tamanho
-      depois. Testado de ponta a ponta (mapa renderiza, marcador na
-      posição certa, arrastar pra curral vazio, arrastar-trocar com
-      curral ocupado) numa rota de teste descartável com dados fictícios
-      e o `Belmont.kml` real — não deu pra testar logado como consultor de
-      verdade por falta de credencial.
-24. **Histórico de ocupação do curral**: clicar no rótulo do curral agora
-    mostra o ocupante atual (lote, nº de cabeças, "desde" quando) e o
-    **histórico completo de todo lote que já passou por ali** (entrada →
-    saída ou "até hoje"). Antes só dava pra saber o lote ATUAL
-    (`lotes_confinamento.curral_id`) — arrastar sobrescrevia sem deixar
-    rastro. Nova tabela `curral_ocupacoes` (curral_id, lote_id,
-    data_inicio, data_fim — `data_fim` null = ocupação em aberto) e
-    `lib/useDadosConfinamento.js` → `moverLoteParaCurral()`, que
-    substituiu o `onAtualizarLote(loteId, {curral_id})` cru no
-    drag/troca/desvincular: fecha a ocupação anterior (`data_fim = hoje`)
-    antes de abrir a nova. RLS espelha as outras tabelas de curral —
-    cliente/funcionário já registram e fecham ocupação pelo mesmo gesto
-    de arrastar, sem permissão nova. Testado de ponta a ponta (clicar no
-    curral → ver ocupante atual; arrastar lote → nova linha de ocupação
-    aparece no histórico com a data de hoje) na mesma rota de teste
-    descartável.
-25. **Ordenação de lotes na tela de lançar consumo + preferência salva**:
-    o mesmo dropdown de ordenação (manual/recentes/antigos/nome/cabeças)
-    das abas Lotes ativos e Gráficos agora também está na tela "Lançar
-    consumo do dia" (`FormConsumoEmMassa`). Além disso, a ordenação
-    escolhida em qualquer uma das três telas fica salva no
-    `localStorage` do navegador por cliente (`usarOrdenacaoPersistida` em
-    `ConfinamentoTab.jsx`) — antes voltava sempre para "Ordem manual" ao
-    reabrir a tela/recarregar a página.
-26. **Importar planilha de leitura de cocho**: nova tela
-    `ImportarLeituraCochoPlanilha`, aberta pelo botão "Importar planilha"
-    na aba Leitura de cocho. Mesmo modelo de planilha do importador de
-    consumo (colunas "Data"/"Lote"), mais uma coluna "Nota" (escore -2 a
-    2, aceita sinônimos "escore"/"pontuação"/"score"/"avaliação"). Para
-    cada linha, `consumo_referencia` e `quantidade_esperada` são
-    recalculados a partir do consumo já lançado no app **antes** daquela
-    data (`lib/confinamento.js` → `obterConsumoReferenciaAntesDe`, usado
-    também para refatorar `obterConsumoReferenciaCocho` sem mudar seu
-    comportamento) — linha sem consumo lançado antes é ignorada e
-    reportada no resumo. Leituras cujo lote/data já existem no app são
-    puladas (sem duplicar/sobrescrever), igual ao importador de consumo.
-    Novo `importarLeiturasCochoEmLote()` em `useDadosConfinamento.js`
-    (insert em lote) e equivalente local em `app/portal/page.js` — o
-    cliente/funcionário também vê o botão "Importar planilha" no
-    portal dele (RLS de `leituras_cocho` já permitia insert do cliente,
-    não precisou de migration nova). Testado de ponta a ponta com
-    planilha .xlsx real (linha duplicada de lote/data existente pulada,
-    linha sem consumo de referência ignorada, linha nova importada e
-    aparecendo no histórico do lote) numa rota de teste descartável.
-27. **Aba "Painel" na tela inicial do consultor**: `PainelGeral` em
-    `ClientesTab.jsx` — mostra o total de cabeças confinadas (soma de
-    `num_cabecas` dos lotes sem `data_saida`) e o breakdown por cliente,
-    ordenado do maior pro menor, cada linha clicável levando direto pro
-    cliente. Fica numa aba própria ("Painel" / "Clientes", mesmo padrão
-    de abas do `ConfinamentoTab`), não mais fixo acima da lista.
-28. **Fix do PWA que não atualizava sozinho**: `RegistroServiceWorker.jsx`
-    registrava o Service Worker uma vez e nunca verificava de novo — em
-    apps instalados na tela inicial (iOS/Mac), isso fazia o usuário ficar
-    preso na versão antiga até excluir e reinstalar o ícone. Agora
-    registra com `updateViaCache: "none"`, chama `registration.update()`
-    toda vez que o app volta ao primeiro plano (`visibilitychange`), e dá
-    `window.location.reload()` automático quando um novo Service Worker
-    assume o controle (`controllerchange`, com guarda contra loop).
-    Reduz bastante a necessidade de excluir/reinstalar, mas não elimina
-    100% em todos os cenários do iOS (ver pendência abaixo).
-29. **Ordenação por peso atual na aba Lotes ativos**: duas novas opções no
-    dropdown de ordenação (só nessa tela, `OPCOES_ORDENACAO_ATIVOS` em
-    `ConfinamentoTab.jsx`) — "Peso atual (maior-menor)" e "(menor-maior)",
-    usando o `pesoEsperadoHoje` já calculado por lote. Não entrou no array
-    `OPCOES_ORDENACAO` compartilhado porque as outras telas que o reusam
-    (lançar consumo em massa, gráficos) não carregam esse indicador.
-30. **Saída fracionada de lote** (cliente ia tirando boi aos poucos até
-    esvaziar o lote inteiro, sem jeito de registrar isso — só dava pra
-    finalizar tudo de uma vez): nova tabela `saidas_lote` (`lote_id`, `data`,
-    `num_cabecas`, `peso_saida_vivo`, `observacoes`) — uma linha por
-    retirada parcial. `lib/confinamento.js` → `calcularResumoSaidas(lote,
-    saidas)` soma as retiradas e devolve `cabecasRestantes`. Quando as
-    retiradas somam o `num_cabecas` inteiro do lote, o app **finaliza o
-    lote sozinho**: preenche `data_saida` (data da última retirada) e
-    `peso_saida_vivo` (média ponderada pelas cabeças de cada retirada) —
-    é por isso que o lote passa a aparecer em "Lotes finalizados" sem
-    precisar editar nada à mão. Excluir a saída que fechou o lote reabre
-    ele automaticamente (`sincronizarFinalizacaoLote` em
-    `useDadosConfinamento.js`, espelhado localmente em
-    `app/portal/page.js`). Na tela do lote: nova seção "Saídas
-    registradas" (histórico + botão "+ Saída"), campo "Nº de cabeças"
-    mostra "X restantes de Y" quando há saída parcial, e a lista de
-    "Lotes ativos" mostra "X de Y cab." no lugar do total bruto. O Painel
-    (cabeças ativas, peso médio, custo por animal dos ativos) passa a
-    somar/ponderar pelas cabeças **restantes**, não mais pelo total
-    original — inclusive no painel consultoria-wide (`PainelGeral` em
-    `ClientesTab.jsx`). RLS de `saidas_lote` espelha `pesagens_lote`:
-    cliente insere e vê, só o consultor exclui (registrar saída errada
-    exige pedir pro consultor apagar).
-31. **Consumo/custo por cabeça corrigido após saída parcial** (fecha a
-    limitação deixada no item 30): antes, o consumo de MS e o custo por
-    animal sempre dividiam pelo `num_cabecas` **original** do lote, mesmo
-    depois de uma saída parcial — subestimando o consumo/custo real por
-    animal nos dias seguintes (a mesma ração dividida por menos bocas).
-    Nova função `calcularCabecasNaData(lote, saidas, dataISO)` em
-    `lib/confinamento.js` — desconta as saídas parciais lançadas até
-    aquela data (inclusive) — usada agora em todo lugar que antes dividia
-    por `lote.num_cabecas` direto: `calcularIndicadoresLote`
-    (consumo/custo do lançamento mais recente), `calcularCustoAcumulado`
-    (custo acumulado, dia a dia), `calcularEvolucaoConsumo` (histórico e
-    gráficos), e as prévias de cálculo em `FormConsumo` e
-    `FormConsumoEmMassa` (o consultor já vê o valor certo antes de salvar,
-    usando a data escolhida no formulário). Testado lançando consumo antes
-    e depois de uma saída parcial no mesmo lote (500 kg/dia de MN, 60% MS,
-    saída de 20 de 50 cabeças): 6.00 kg MS/cab/dia antes da saída (÷50) e
-    10.00 kg MS/cab/dia depois (÷30), confirmado tanto na prévia do
-    formulário quanto no histórico salvo.
-32. **Escore de leitura de cocho ampliado de -2/+2 para -4/+4**: `NOTAS_LEITURA_COCHO`
-    em `lib/confinamento.js` agora tem 9 notas (-4 a 4), cada uma com
-    ajuste de 5% no trato (-20% a +20%, mesmo passo de antes, só
-    estendido). Os 9 botões da aba "Leitura de cocho" e a validação do
-    importador de planilha (`ImportarLeituraCochoPlanilha`) vêm direto
-    desse array, então não precisou mexer em mais nada na lógica — só os
-    textos/mensagens que citavam "-2 a 2" na tela de import. Migration na
-    tabela `leituras_cocho`: `CHECK (nota = ANY (ARRAY[-4,-3,-2,-1,0,1,2,3,4]))`
-    (antes só aceitava -2 a 2). Testado visualmente em mobile (375px) — os
-    9 botões cabem numa linha só sem quebrar — e o cálculo do ajuste
-    (nota +4 → +20% → quantidade esperada correta).
-33. **Rendimento de carcaça + peso esperado de abate + data provável de abate**:
-    3 campos novos, pensados pro fluxo de abate. `lotes_confinamento` ganha
-    `peso_esperado_abate` (kg vivo alvo, preenchido no cadastro/edição do
-    lote, campo novo perto de "GMD esperado") e `rendimento_carcaca` (%,
-    preenchido na seção "Saída" do `FormLote` — usado quando o lote é
-    finalizado de uma vez só). `saidas_lote` também ganha
-    `rendimento_carcaca` (usado no `FormSaida`, já que a saída fracionada
-    tem uma finalização por retirada, não uma única). Nova função
-    `calcularDataProvavelAbate` em `lib/confinamento.js` (dentro de
-    `calcularIndicadoresLote`, campo `dataProvavelAbate`): projeta a partir
-    da última pesagem (ou peso de entrada) usando o GMD esperado até
-    atingir o peso esperado de abate — só calculado pra lote ativo com
-    GMD esperado e peso esperado de abate preenchidos; se o peso já foi
-    atingido, retorna hoje. Aparece em dois lugares: no detalhe do lote
-    ("Data provável de abate", só quando ativo) e na lista de "Lotes
-    ativos" ("Abate previsto: DD/MM/AAAA"). "Rendimento de carcaça"
-    aparece no detalhe do lote finalizado (ao lado de "Peso de saída
-    vivo"/"GMD entrada-saída") e em cada linha do histórico de "Saídas
-    registradas", quando preenchido. **Bug encontrado e corrigido durante
-    o teste**: o botão "+ Saída" (saída fracionada) aparecia mesmo em
-    lotes já finalizados pelo método antigo (data_saída preenchida
-    direto no cadastro) — a condição só checava `cabecasRestantes > 0`
-    (que dá o `num_cabecas` inteiro quando não há nenhuma saída parcial
-    lançada), sem checar se o lote já estava `Finalizado`. Corrigido
-    adicionando `indicadores.status === "Ativo"` à condição. Testado com
-    um lote ativo (GMD 1.5, peso entrada 400, abate esperado 550 →
-    projetou 09/09/2026 corretamente) e um lote finalizado (rendimento
-    54.2% aparecendo no detalhe); confirmado que "+ Saída" some no lote
-    já finalizado.
-34. **Papel editor/leitor por pessoa da fazenda**: até então, toda pessoa
-    vinculada via `clientes_usuarios` tinha acesso de edição completo — não
-    dava pra convidar alguém só pra acompanhar sem poder mexer em nada.
-    Nova coluna `clientes_usuarios.papel` (`editor`/`leitor`, default
-    `editor` — ninguém que já tinha acesso perdeu permissão). Todas as
-    políticas de RLS que davam INSERT/UPDATE/DELETE pro cliente (12 no
-    total, em `lotes_confinamento`, `pesagens_lote`, `consumos_lote`,
-    `saidas_lote`, `leituras_cocho`, `currais`, `curral_ocupacoes`) agora
-    exigem `papel = 'editor'` — `leitor` só tem as políticas de `SELECT`
-    (que não mudaram). Na tela do cliente (`ClientesTab.jsx`, seção
-    "Pessoas com acesso"), cada pessoa tem um `<select>` Editor/Leitor
-    (`atualizarAcessoCliente` em `useDadosConfinamento.js`). No portal
-    (`app/portal/page.js`), o próprio login busca o `papel` do vínculo e,
-    se for `leitor`, **não passa nenhum handler de escrita** pro
-    `ConfinamentoTab` (`onAdicionar`, `onAtualizar`, `onAdicionarPesagem`,
-    etc. viram `undefined`) — como esses botões só aparecem quando o
-    handler existe, o leitor nunca vê "+ Novo lote"/"+ Pesagem"/"+
-    Consumo"/etc, sem precisar duplicar lógica de UI; a RLS é quem
-    garante de verdade, a UI só evita ele clicar em algo que ia falhar.
-    Mostra "Portal do cliente · Somente leitura" no topo quando aplicável.
-    Testado com dois usuários fictícios (editor/leitor) na tela de acesso,
-    trocando o papel pelo select e confirmando que persiste.
-35. **Preço da arroba (entrada/saída), rendimento de entrada e custo
-    operacional + fechamento de custo**: `lotes_confinamento` ganha
-    `preco_arroba_entrada` (R$/@, preenchido perto de "Peso esperado de
-    abate" no cadastro) e `rendimento_entrada` (%) — junto com
-    `peso_entrada`, dá o valor de compra do lote em arrobas. Na seção
-    "Saída" do `FormLote` (finalização de uma vez só) e no `FormSaida`
-    (saída fracionada), dois campos novos: `preco_venda_arroba` (R$/@) e
-    `custo_operacional` — esse último é uma **taxa diária por cabeça**
-    (R$/cab/dia: mão de obra, depreciação, sanidade etc., ratejados no
-    dia), não um valor total. Ambas as colunas foram replicadas em
-    `lotes_confinamento` (fluxo de uma vez só) e `saidas_lote` (fluxo
-    fracionado), igual já era feito com `rendimento_carcaca`. Nova função
-    `calcularFechamentoCusto(lote, indicadores, saidas)` em
-    `lib/confinamento.js`: converte peso vivo em arrobas usando o
-    rendimento de cada ponta (1 @ = 15 kg de carcaça); o custo operacional
-    de cada saída é `taxa × dias confinados daquele lote de cabeças (da
-    entrada até a data daquela saída) × nº de cabeças da saída` — numa
-    saída fracionada, cada lote de boi que saiu em datas diferentes tem
-    seus próprios dias confinados. Cruza valor de compra (entrada) + custo
-    de alimentação acumulado (`indicadores.custoAcumuladoAnimal ×
-    num_cabecas`) + custo operacional (somado de todas as saídas) contra a
-    receita de venda somada de todas as saídas, retornando custo total,
-    receita total, resultado (R$ e R$/cab.) e resultado por arroba
-    produzida. Se o lote foi finalizado de uma vez só (nenhuma linha em
-    `saidas_lote`), a função monta uma "saída virtual" a partir dos campos
-    do próprio lote (incluindo a `data_saida` do lote, usada pro cálculo
-    de dias) — não precisa duplicar a conta.
-    Card "Fechamento de custo" aparece no detalhe do lote **só quando
-    `indicadores.status === "Finalizado"`** (ou seja, `data_saida`
-    preenchida) — igual ao resto do app, uma saída fracionada que zera as
-    cabeças não muda esse status sozinha, o consultor ainda precisa editar
-    o lote e preencher "Data de saída" pra fechar de vez (é o mesmo
-    comportamento já existente do botão "+ Saída", ver item 33). Cada
-    campo do card só aparece se os dados necessários pra calculá-lo
-    estiverem preenchidos (não força R$ 0,00 quando falta informação).
-    Também corrigido, de passagem, um bug pré-existente: "Peso de saída
-    vivo" mostrava `undefined kg` no detalhe de um lote finalizado via
-    saída fracionada (sem esse campo preenchido direto no lote) — faltava
-    o mesmo guard `!= null` que os outros campos da seção já tinham.
-    Testado com dois lotes fictícios (saída única e saída fracionada em
-    duas partes com preços/rendimentos diferentes) — os totais de compra,
-    alimentação, operacional, receita e resultado bateram na mão em ambos
-    os casos.
-36. **Bug de importação: lotes com nome numérico ambíguo se misturavam**.
-    O Adelmilson (pasta do cliente às vezes grafada "Ademilson Buriti
-    Grande") tem 4 lotes: "Boi 1", "Boi 2", "C1", "C2". Ao importar a
-    planilha de consumo pelo app, o consumo de "Boi 1"/"Boi 2" não apareceu
-    em lugar nenhum — na verdade foi parar dentro de "C1"/"C2", porque
-    `encontrarLotePorNomeOuNumero` comparava por **número extraído do nome
-    primeiro** quando os dois lados tinham número: "Boi 1" e "C1" têm o
-    mesmo número ("1"), e como C1/C2 foram criados antes de Boi 1/Boi 2, o
-    `.find()` batia em C1 primeiro. Corrigido: agora o **texto exato bate
-    primeiro** ("Boi 1" só reconhece o lote "Boi 1"); o fallback por número
-    (pro caso documentado de planilha só ter "3" reconhecendo "Lote 3") só
-    roda se nenhum nome bateu exato E só se existir um único lote com
-    aquele número — caso contrário retorna null (não escolhe arbitrariamente
-    entre vários). Os 108 registros de `consumos_lote` que tinham ido pro
-    lote errado (C1/C2, criados às 12:56 do dia 24/07) foram apagados e os
-    164 lançamentos corretos (Boi 1: 54 dias, Boi 2: 54 dias, C1: 28 dias,
-    C2: 28 dias, extraídos direto da planilha
-    `Lancamento conf.xlsx` do OneDrive do cliente, somando os lançamentos
-    que caem no mesmo lote/dia) foram inseridos direto no banco pro
-    `cliente_id` do Adelmilson. Confirmado por soma: total por lote bateu
-    exatamente com a soma da planilha original.
-37. **Reimport do consumo do Adelmilson com mais dias (planilha ampliada
-    até abril)**: o cliente atualizou `Lancamento conf.xlsx` com o
-    histórico completo — 890 linhas, cobrindo 03/04/2026 a 24/07/2026 nas
-    3 fases (`Adaptacao`, `Crescimento`, `Terminacao`), não só a
-    `Terminacao` do item 36. Comparei cada (lote, data) da planilha contra
-    o que já estava no banco: 161 dias já lançados batiam exatamente, 3
-    dias (01/06, Boi 1/Boi 2/C2) tinham uma linha nova na planilha que
-    ainda não estava importada — **atualizados** para o novo total — e 223
-    (lote, data) novos (basicamente todo o período de 03/04 a 31/05, que
-    ainda não existia no banco) foram **inseridos**, com `dieta_fase` e
-    `ms_dieta` batendo o que a própria planilha trazia por linha
-    (adaptação/crescimento têm MS diferente da terminação). Conferido de
-    novo por soma total por lote (Boi 1: 142.230, Boi 2: 131.760, C1:
-    86.745, C2: 82.060) — bate exatamente com a soma da planilha inteira.
-    **Atenção**: os lotes continuam com `data_entrada = 01/06/2026`
-    cadastrada — os lançamentos de 03/04 a 31/05 (adaptação/crescimento)
-    ficam visíveis no histórico de nutrição, mas **não entram** no cálculo
-    de custo acumulado nem na projeção de peso (que só andam a partir da
-    `data_entrada`), porque essas contas em `lib/confinamento.js` sempre
-    partiram do princípio de que `data_entrada` é o primeiro dia do lote.
-    Perguntei ao usuário se a data de entrada devia ser corrigida pra
-    03/04 (já que a planilha mostra claramente um programa de 3 fases
-    começando nessa data) — a pergunta foi dispensada sem resposta direta,
-    então **não mexi na `data_entrada` nem no `peso_entrada`** dos 4 lotes;
-    só garanti que o consumo lançado bate com a planilha. Se o usuário
-    quiser que o custo acumulado e a projeção de peso considerem esse
-    período de adaptação/crescimento também, a data de entrada dos 4 lotes
-    precisa ser ajustada (e provavelmente também um peso de entrada real
-    de 03/04, que não temos ainda).
-38. **Nova identidade "Rastro Confinamento" + atualização de quem já tem o
-    PWA instalado**: nome, cabeçalhos, telas de login, metadados e manifests
-    foram atualizados. Nova logo horizontal em `public/rastro-logo.png` e
-    ícones 192/512/Apple Touch com o boi integrado ao "R". A marca do
-    desenvolvedor aparece discretamente no rodapé como "Desenvolvido por
-    GMegali Consultoria". O cache do Service Worker mudou para
-    `rastro-confinamento-cache-v2`, inclui os novos assets e agora chama
-    `registration.update()` imediatamente ao abrir, além da checagem já
-    existente ao voltar ao primeiro plano. Assim, o conteúdo de quem já
-    instalou atualiza sem novo link/reinstalação; o nome/ícone exibido pelo
-    sistema operacional ainda pode demorar a mudar em alguns iPhones/Macs,
-    pois essa parte é controlada pelo próprio sistema.
-39. **Sentido das notas de leitura de cocho corrigido**: notas negativas
-    agora aumentam a quantidade fornecida (-1 = +5% até -4 = +20%); notas
-    positivas diminuem (+1 = -5% até +4 = -20%); nota zero mantém o trato.
-    A tela mostra uma legenda visual completa (verde = aumenta, cinza =
-    mantém, laranja = diminui), com cada nota e seu percentual exato; são
-    três colunas no celular e nove no computador. A correção vale para novos
-    lançamentos; históricos já salvos preservam o ajuste e a quantidade
-    esperada registrados na época.
-40. **Importação direta do arquivo bruto do vagão e consumo diário único**:
-    o importador reconhece automaticamente a aba `DESCARGAS`, encontra os
-    pares lote/peso, soma todas as descargas do mesmo lote no mesmo dia e
-    tenta identificar a fase pelas abas `CARGAS` e `AUTONOMOS`. Códigos com
-    zero à esquerda (ex.: `08`) são reconhecidos, enquanto códigos distintos
-    (ex.: `3B`) não são misturados com o lote numérico. O leitor XLSX passou
-    a ser importado estaticamente, corrigindo a falha do Safari/PWA. No banco,
-    a migration `garantir_consumo_unico_por_lote_data` removeu 80 repetições
-    antigas mantendo o lançamento mais recente e criou uma restrição única em
-    `(lote_id, data)`. Novas importações ignoram conflitos, então repetir o
-    arquivo não duplica nem sobrescreve um consumo diário já confirmado.
-    Lançamentos manuais também não substituem uma data existente.
-41. **Importação liberada no portal do cliente**: o botão não aparecia porque
-    `app/portal/page.js` não passava `onImportarConsumos` ao confinamento. O
-    portal agora faz a mesma importação em lote do consultor, ignorando
-    conflitos em `(lote_id, data)`. A função só é fornecida para papéis com
-    edição; usuários `leitor` continuam sem o botão.
-42. **Leitor Excel isolado do bundle para Safari/PWA**: mesmo com importação
-    ESM estática, o SheetJS continuava falhando no iPhone com `Object is not a
-    constructor`. A distribuição oficial de navegador foi copiada para
-    `public/xlsx.full.min.js` e agora é carregada sob demanda, sem passar pela
-    transformação do Next/Webpack. Tanto consumo quanto leitura de cocho usam
-    esse mesmo carregador e exibem uma mensagem amigável se o arquivo não
-    puder ser carregado.
-43. **Conflito entre ícone e estrutura `Map` corrigido**: o ícone `Map` do
-    Lucide sombreava o `Map` nativo do JavaScript dentro do importador. Por
-    isso, ao agrupar lotes, o navegador tentava instanciar o componente do
-    ícone e mostrava `Object is not a constructor (evaluating 'new u.Z')`.
-    O ícone passou a se chamar `MapIcon`, preservando o `Map` nativo.
-44. **Nova área Cargas**: o confinamento ganhou uma aba própria para analisar
-    o abastecimento do vagão. O importador lê `CARGAS` e `RECETAS` no mesmo
-    arquivo bruto já usado pelo consumo, cruza o número da receita, ajusta a
-    formulação prevista ao tamanho real de cada batida e mostra, por dia,
-    previsto, realizado, erro em kg e erro percentual de cada ingrediente.
-    Também há resumo individual de cada carga, com faixas de atenção de até
-    2%, de 2% a 5% e acima de 5%.
-45. **MS persistente por ingrediente**: a tabela `ingredientes_ms` mantém um
-    teor de MS por cliente/ingrediente. O valor é digitado uma vez na aba
-    Cargas e continua valendo nas importações seguintes até ser alterado. A
-    tela calcula automaticamente os kg de MS de cada ingrediente e o total
-    diário. As cargas ficam em `cargas_vagao`, com chave única
-    `(cliente_id, carga_codigo)`, para repetir a planilha sem duplicar dados.
-    Ambas as tabelas têm RLS para consultor e usuários vinculados ao cliente.
-46. **Custo persistente dos ingredientes e das cargas**: `ingredientes_ms`
-    também guarda `custo_kg_mn`. Na aba Cargas, cada ingrediente tem um campo
-    fixo de custo por kg, custo diário, e os cards passam a exibir custo total
-    das cargas, custo médio da dieta por kg de matéria natural e custo por kg
-    de matéria seca. O detalhamento individual mostra custo total e custo/kg
-    de cada carga quando todos os ingredientes usados têm preço informado.
-47. **Receitas reconhecidas em planilhas filtradas/reexportadas**: o
-    importador de cargas tenta primeiro `CARGAS.Numero -> RECETAS.Id`. Se o
-    arquivo tiver renumerado esses códigos, usa o caminho alternativo
-    `CARGAS.IdAutonomo -> AUTONOMOS.Receta -> RECETAS.Nombre`, evitando que
-    cargas válidas apareçam como “receita não encontrada”.
-48. **Normalização forte dos códigos da planilha**: IDs de carga, receita e
-    autônomo agora removem apóstrofos e caracteres invisíveis e tratam `4`,
-    `04`, `4.0` e `4,0` como o mesmo código. Também há tentativa direta do
-    `IdAutonomo` como ID de receita para arquivos que trocaram essas colunas
-    ao serem filtrados/reexportados.
-49. **Detalhamento expansível por carga**: em "Resultado por carga", cada
-    vagão pode ser aberto para mostrar previsto, realizado, erro em kg e erro
-    percentual de cada ingrediente. O cabeçalho da carga também mostra a MS
-    percentual ponderada pela composição realmente carregada; se faltar a MS
-    de algum ingrediente, aparece "MS incompleta".
-50. **Carga ligada às descargas e ao consumo diário**: `cargas_vagao` ganhou
-    o campo JSONB `descargas` (migration
-    `supabase/add_descargas_cargas_vagao.sql`, já aplicada em produção). O
-    arquivo bruto da Hook é enviado uma única vez: o app importa as cargas,
-    lê `DESCARGAS`, soma o peso por lote/data e cria os consumos diários que
-    ainda não existem. A restrição única `(lote_id, data)` continua impedindo
-    duplicação. Reimportar também completa cargas antigas que ainda não
-    tinham as descargas armazenadas, sem criar outra carga.
-51. **Sincronização ponderada de MS e custo**: para cada vagão, o app calcula
-    a MS e o custo/kg pela quantidade real de cada ingrediente. Depois
-    pondera esses valores pelo peso descarregado em cada lote e atualiza
-    apenas `consumos_lote.ms_dieta` e `consumos_lote.custo_kg_mn`; a
-    `consumo_total_lote` nunca é alterada por essa sincronização. Há
-    sincronização automática na importação e botão manual para recalcular
-    depois que a MS ou o preço de um ingrediente mudar.
-52. **Importação dos PDFs Saicon**: o mesmo importador aceita:
-    - uma planilha bruta `.xlsx/.xls` da Hook; ou
-    - um PDF de Carga + um PDF de Descarga da Saicon.
-    O leitor usa `pdfjs-dist@4.10.38`, com worker local em
-    `public/pdf.worker.min.mjs` para funcionar no navegador/PWA sem serviço
-    externo. Os relatórios Saicon são relacionados por data e sequência de
-    horários; a composição real vem do PDF de Carga e os pesos por lote vêm
-    do PDF de Descarga. Antes de gravar, a tela informa cargas/consumos novos,
-    lotes não reconhecidos e pares sem correspondência. O código determinístico
-    `saicon-AAAA-MM-DD-HHMM` impede duplicar a mesma carga.
-53. **Validação com os arquivos reais da Saicon** (cliente José Fernando de
-    Almeida Junior): `Enviando por email Carga.pdf` tem 153 páginas e
-    `Enviando por email Descarga-3.pdf` tem 151. Foram reconhecidas 149
-    cargas destinadas aos lotes e 147 descargas; 147 pares foram ligados
-    com segurança. Duas cargas (06/06 e 12/06) não possuem descarga
-    correspondente e são avisadas/ignoradas. Quatro registros internos de
-    pré-mistura não são consumo de lote e também ficam fora.
-54. **Conta de Gabriel Gonzaga diagnosticada e removida**:
-    `gabriel.t.gonzaga@gmail.com` já havia confirmado o e-mail e entrado em
-    23/07; as tentativas seguintes eram cadastro repetido/senha incorreta,
-    não falha de confirmação. Como não havia vínculo em
-    `clientes_usuarios`, a conta e suas sessões foram excluídas do Supabase a
-    pedido do usuário para permitir novo cadastro com nova senha.
-55. **Publicação atual**: commits `0b00c44`, `054ce97`, `6655336` e
-    `5a360a5` foram enviados para `main`. A Vercel confirmou o deploy do
-    commit `5a360a51dc40338637b4cbfb5d21d4bba61fde44` em 30/07/2026. Produção
-    respondeu HTTP 200 e o worker de PDF publicado respondeu HTTP 200
-    (1.417.586 bytes).
-56. **Seletor de dia/período na aba Cargas**: `AbaCargas` em
-    `ConfinamentoTab.jsx` ganhou um alternador "Dia"/"Período" ao lado do
-    título "Cargas do vagão". No modo "Dia" (padrão, comportamento
-    inalterado) continua o mesmo `<select>` de uma data só. No modo
-    "Período", dois `<input type="date">` (início/fim, com `min`/`max`
-    cruzados pra não deixar inverter o intervalo) substituem o select;
-    todos os cálculos da aba (cards de resumo, tabela de ingredientes,
-    "Resultado por carga") já eram derivados de um único array filtrado
-    (`cargasDia`) — só troquei o filtro de `c.data === data` para
-    `c.data >= inicio && c.data <= fim` quando em modo período, então
-    nenhuma outra conta precisou mudar. Duas coisas a mais no modo
-    período: a lista "Resultado por carga" passa a mostrar a data de cada
-    carga (fica ambíguo sem isso quando há mais de um dia) e é ordenada
-    cronologicamente (por data + hora), já que a ordem de `cargas` como
-    vem do banco não é garantida. Testado numa rota de teste descartável
-    com 3 cargas fictícias em dias seguidos: período completo soma as 3
-    (bate a soma manual), estreitar o intervalo pra 2 dias exclui a carga
-    de fora corretamente, e a lista por carga aparece ordenada com a data
-    de cada uma.
-57. **Sincronização automática ao configurar MS/custo do ingrediente**: a
-    importação da planilha Hook já tentava sincronizar consumo↔descarga
-    sozinha ao final (`confirmar()` em `ImportarCargasPlanilha`), mas isso
-    só produz resultado se a MS/custo dos ingredientes envolvidos já
-    estiver cadastrada em `ingredientes_ms` — na primeira importação de um
-    cliente novo, os ingredientes ainda não têm MS/custo (é descoberto
-    justamente ao importar), então nada era sincronizado até o usuário
-    clicar manualmente em "Sincronizar descargas com consumo" depois de
-    preencher os campos na tabela da aba Cargas. Agora `salvarConfiguracao`
-    (em `AbaCargas`, chamada no `onBlur` de cada campo MS/R$ por
-    ingrediente) monta a lista de ingredientes já incluindo o valor recém
-    salvo e chama `onSincronizar` na hora, sempre que isso resulta em pelo
-    menos um consumo atualizável — o botão manual continua existindo (útil
-    pra forçar recálculo depois de mudar um preço antigo), mas deixa de
-    ser necessário no fluxo normal de importar → completar MS/custo.
-    Testado numa rota descartável com um consumo e uma carga de 2
-    ingredientes: preencher a MS do primeiro ingrediente não dispara nada
-    (ainda falta o segundo); preencher o segundo dispara a sincronização
-    sozinha, sem clicar em nenhum botão, com o `ms_dieta` ponderado
-    corretamente pelo peso de cada ingrediente na carga.
-58. **Suporte ao formato "longo" da planilha do vagão (Hook)**: até então o
-    importador da aba Cargas só reconhecia o formato "largo" (uma linha por
-    carga, ingredientes em pares `Ing1/Peso1...Ing15/Peso15`, abas em
-    espanhol `RECETAS`/`AUTONOMOS`). O cliente Junco Agropecuaria mandou um
-    arquivo (`DADOS VAGAO JUNCO 30.07.26.xlsx`) num formato diferente — uma
-    linha por ingrediente em `CARGAS` (`ID CARGA, DATA, HORA, ID RECEITA,
-    SET POINT, INGREDIENTE, QUANTI., IDEAL, AUTONOMO ID, PASO AUTONOMO`) e
-    uma linha por lote em `DESCARGAS` (`BAIXAR ID, DATA, HORA, GUIA ID, ID
-    CARGA, LOT, QUANTI., IDEAL, AUTONOMO ID, PASO AUTONOMO`), com abas em
-    português `RECEITAS`/`AUTONOMO` — a importação falhava com "Não
-    encontrei as colunas Id, Data e Numero na aba CARGAS". Novo helper
-    `ehFormatoVagaoLongo(workbook)` detecta o formato pelo cabeçalho da aba
-    CARGAS e desvia para um conjunto paralelo de parsers
-    (`processarCargasPlanilhaLonga`, `processarPlanilhaVagaoLonga` e
-    funções de apoio) em `components/ConfinamentoTab.jsx`, mantendo os
-    parsers do formato largo **intactos e ainda o caminho padrão** quando o
-    cabeçalho não bate com o formato novo. Testado com o arquivo real da
-    Junco antes de publicar.
-59. **Excluir carga do vagão + custo médio diário na lista de lotes**: cada
-    carga em "Resultado por carga" (aba Cargas) ganhou um ícone de lixeira
-    com confirmação (`excluirCarga` em `lib/useDadosConfinamento.js` e
-    equivalente local em `app/portal/page.js`, disponível pro cliente
-    também exceto em modo somente-leitura). Além disso, as listas "Lotes
-    ativos" e "Lotes finalizados" passam a mostrar "Diária média R$/animal"
-    (já calculado por `calcularIndicadoresLote` como
-    `custoMedioDiarioAnimal`, só não estava exibido nessas telas — já
-    aparecia no detalhe do lote).
+1. **PDF de exportação do relatório** (`lib/pdf.js`): fotos agora saem
+   centralizadas (antes ficavam encostadas na margem esquerda); texto do
+   resumo justificado, mas por parágrafo — a primeira tentativa justificava
+   o texto inteiro como um bloco só, e a última linha de cada frase curta
+   (separada por `\n` no textarea) ficava esticada até a margem com
+   espaçamento enorme e feio entre as palavras; a correção usa
+   `String(texto).split(/\r?\n/)` e justifica cada parágrafo isoladamente,
+   deixando só a última linha de cada um solta (padrão tipográfico). Seções
+   Cobrança e Quilometragem movidas pro final do documento (depois de Fotos
+   e Documentos anexados), antes ficavam logo após o resumo.
+2. **Bug: foto de relatório "voltava" pra antiga depois de editar e salvar**
+   (`lib/sync.js`). Causa: `enviarFotoParaStorage`/`enviarDocumentoParaStorage`
+   nomeavam o arquivo só por índice no array (`relatorioUuid_indice.jpg`).
+   Trocar uma foto no mesmo índice gerava a mesma URL pública de antes — o
+   navegador servia a imagem antiga do cache em vez da nova (a URL não
+   mudou, então ele nem revalida). Também podia colidir e sobrescrever a
+   foto de OUTRO índice se o array fosse reordenado/reduzido antes de
+   sincronizar. Corrigido com `sufixoUnico()` (timestamp + random) em cada
+   upload — cada foto/documento agora sempre gera uma URL nova.
+3. **Bug: link do portal abria tela de login do Vercel pro cliente**
+   (`lib/consultoria.js`, `components/ClientesTab.jsx`). Causa: o link era
+   `${window.location.origin}/portal` — se o consultor tivesse aberto o app
+   por um link de deployment específico do Vercel (hash tipo
+   `consultoria-xxxxx-....vercel.app`, protegido por login), o link copiado
+   pro cliente saía errado. Confirmado testando `consultoria-ruddy.vercel.app/portal`
+   diretamente (abre normal, sem proteção) vs. o link que o usuário
+   reportou (`consultoria-re7mbi4nb-....vercel.app/portal`, o de
+   deployment). Corrigido fixando `URL_PRODUCAO = "https://consultoria-ruddy.vercel.app"`
+   como constante em `lib/consultoria.js` — o link do portal não depende
+   mais de `window.location.origin`.
 
 ## Pendências / coisas para prestar atenção
 
-- **Data de entrada dos 4 lotes do Adelmilson (Boi 1, Boi 2, C1, C2) pode
-  estar errada**: cadastrada como 01/06/2026, mas a planilha de consumo
-  mostra claramente adaptação começando 03/04/2026 e crescimento até
-  25/05, só virando terminação em 26/05. Perguntei se a data de entrada
-  devia mudar pra 03/04 e a pergunta foi dispensada sem resposta — ver
-  item 37. Enquanto isso não for decidido, custo acumulado e projeção de
-  peso desses 4 lotes ignoram os ~2 meses de adaptação/crescimento já
-  lançados (só contam a partir de 01/06).
-- **Mapa de currais dos outros clientes**: só a Belmont tem
-  `mapa_centro_lat`/`mapa_centro_lng` preenchidos (calculado a partir do
-  `Belmont.kml` que o usuário mandou) e nenhum cliente tem currais
-  cadastrados ainda — a Belmont em si só tem o contorno salvo, os 24
-  currais do KML **não foram importados** (isso foi feito e testado numa
-  rota de teste com dados fictícios, não na Belmont real — falta o
-  usuário logar e importar pela tela mesmo, ou pedir pra eu rodar o
-  import direto no banco). Os outros clientes (Junco, Alterosa, Porto
-  Pará, Valadares) não têm KML nenhum ainda.
-- **Import de KML restrito ao consultor**: RLS não permite cliente/
-  funcionário atualizar `clientes.mapa_contorno` — ver detalhes e o SQL
-  da policy que faltaria no item 23 acima, caso o usuário peça pra abrir
-  isso pro portal também.
-- **Lote 13 da Junco Agropecuaria**: não existe no banco — precisa o usuário
-  passar `num_cabecas`, `peso_entrada` e `data_entrada` reais pra eu criar o
-  lote e lançar os 24 registros de consumo pendentes (10/06–11/07/2026).
-- **Agropecuária Porto Pará**: os 5 lançamentos de consumo estão sem MS da
-  dieta preenchida — aba Gráficos e botão de exportar ficam vazios pra esse
-  cliente até o usuário passar o MS real.
-- **App do Mac (PWA) desatualizado**: se o usuário confirmar que fechar/reabrir
-  não resolveu, o próximo passo é reinstalar o ícone do Dock a partir de
-  `https://confinamento-nine.vercel.app` (nunca a partir de uma URL de deploy
-  específica tipo `confinamento-xxxxx-...vercel.app`, que fica congelada).
-- **Belmont**: todos os 19 lotes estão com `peso_entrada = 0` (placeholder) —
-  precisa editar cada um com o peso real. `data_entrada` também é um chute
-  (primeira data de consumo do PDF, não a data real de entrada).
-- **Curral 10105 (Belmont)**: número de cabeças mudou de 142 para 226 no meio
-  do período (lote recebeu mais animais) — o app não tem histórico de
-  mudança de cabeças, ficou só o valor final (226).
-- **Curral 10115 (Belmont)**: consumo de só "4 kg/dia" na maioria dos dias
-  (exceto 06/07 com 908) — veio assim do PDF original, parece inconsistência
-  da planilha de origem da Belmont. Vale confirmar com o cliente.
-- **Pedido de acesso somente-leitura para BI** (cliente Alterosa): ficou em
-  aberto — o plano era criar views read-only + role de banco dedicada,
-  restrita a esse cliente. Não foi implementado ainda, a conversa foi
-  interrompida antes de confirmar os detalhes finais.
-- **PostgREST corta em 1000 linhas por padrão** qualquer `.select()` sem
-  `.range()`/`.limit()` — já causou um bug real (item 16 acima, corrigido em
-  `useDadosConfinamento.js`). Se aparecer outro "sumiço" de dados, checar
-  isso primeiro, e lembrar que `app/portal/page.js` ainda não tem a mesma
-  paginação (baixo risco hoje, mas não zero).
-- **Cache do Service Worker / PWA**: já causou pelo menos três vezes a
-  impressão de "bug" que na verdade era tela desatualizada em cache (ou PWA
-  preso numa URL de deploy antiga, ver item 20). O item 28 acima já reduz
-  bastante isso (o app agora se atualiza sozinho ao voltar ao primeiro
-  plano), mas se o usuário reportar algo que "sumiu" e o código/dados
-  estão corretos, ainda vale suspeitar disso primeiro — pedir pra fechar
-  e reabrir o app antes de investigar mais fundo.
-- **Nunca usar `git commit --amend`** nem forçar push nesse repo sem pedir —
-  o usuário não é super técnico e já teve dificuldade com comandos de git
-  (colar comando com caracteres estranhos, autenticação por token, etc.) — ir
-  com calma, um comando de cada vez, confirmando o resultado antes do próximo.
-- Deploy: qualquer mudança de código precisa de `git add` + `commit` +
-  `git push origin HEAD:main`. O push direto está funcionando neste
-  ambiente; depois, conferir o status do commit no GitHub até a Vercel
-  informar "Deployment has completed" e validar
-  `https://confinamento-nine.vercel.app/`.
+- **Aba de Dietas (2026-08-07): tabela `dietas` precisa ser criada no
+  Supabase antes do zip funcionar.** Adicionada em `supabase/schema.sql`
+  (RLS: só o consultor acessa, mesmo padrão de `despesas`) mas **não
+  aplicada automaticamente** — o usuário precisa colar o `create table
+  dietas (...)` + a policy correspondente no SQL Editor do Supabase (ou eu
+  aplico via MCP do Supabase se ele confirmar). Sem isso, `npm run build`
+  passa normal mas a aba dá erro ao carregar/salvar em produção.
+- **Aba de Dietas: não verificada no navegador nesta sessão** — login do
+  painel exige a conta real do consultor, que não tenho aqui. Validado só
+  por `npm run build` (compila e passa lint) + revisão de código. Vale um
+  teste manual do usuário assim que subir: cadastrar uma dieta com 2-3
+  ingredientes e conferir se o % de matéria natural e o custo/kg batem.
+- **Zip ainda não confirmado**: as correções de PDF, foto e link do portal
+  (itens 1-3 da sessão) foram entregues em zips separados
+  (`atualizacao-relatorio-pdf.zip`, `atualizacao-relatorio-fotos.zip`,
+  `atualizacao-link-portal.zip`, na pasta `App Consultoria/`) — confirmar
+  com o usuário se todos já foram subidos pro GitHub antes de assumir que
+  estão em produção.
+- **Arquivos órfãos no Storage**: como cada upload de foto/documento agora
+  gera um nome único (`sufixoUnico()`, item 2 da sessão), trocar uma foto
+  várias vezes deixa os arquivos antigos parados no bucket
+  `fotos-relatorios`/`documentos-relatorios` sem serem apagados (antes, o
+  nome fixo por índice sobrescrevia). Não é urgente (volume baixo, consultor
+  solo), mas se o bucket crescer muito vale implementar limpeza ao excluir/
+  editar relatório — hoje `excluirRelatorio` em `lib/useDados.js` não apaga
+  nada do Storage.
+- **`URL_PRODUCAO` hardcoded**: se o domínio de produção mudar algum dia
+  (novo domínio custom, por exemplo), precisa atualizar manualmente a
+  constante em `lib/consultoria.js` — não há nada automático lendo do
+  Vercel.
+- **Erros de sync de relatório**: se aparecer de novo "Falha ao sincronizar:
+  new row violates row-level security policy", primeiro suspeitar de
+  política de Storage faltando (INSERT vs UPDATE) antes de mexer nas
+  políticas de `relatorios` — já foram corrigidas duas vezes por causas
+  diferentes. `lib/sync.js` agora expõe `message`/`details`/`hint` no toast
+  de erro, ajuda a diagnosticar sem precisar de DevTools.
+- **`schema.sql` compartilhado com Confinamento**: qualquer mudança de
+  schema deve ser reconciliada manualmente entre os dois repos — não há
+  sincronização automática, e um outro processo/sessão já editou esse
+  arquivo em paralelo nesta mesma janela de tempo.
+- **Deploy manual via zip**: mais lento e sujeito a esquecer arquivo (ao
+  contrário do Confinamento, que já migrou pra deploy automático via git
+  push). Se o usuário quiser, migrar o Consultoria pro mesmo fluxo de git
+  seria uma melhoria natural — ainda não foi proposto/feito.
+- **`pip install graphifyy && graphify install`**: pedido recebido sem
+  contexto no fim da sessão anterior, recusado por suspeita de typosquat
+  (nome parecido com "graphify" mas não é um pacote reconhecido). Não
+  executar isso ou variantes sem o usuário explicar claramente a origem e
+  o motivo.
+- **Arquivos soltos na raiz do repo** (`Consultoria`, `GestaoTab.jsx`,
+  datados de 1 de julho) parecem ser sobras antigas fora de `app/`/
+  `components/` — não foram tocados nesta sessão, mas valeria confirmar
+  com o usuário se são lixo antes de excluir.
+- Variáveis de ambiente do Google Calendar (`GOOGLE_CLIENT_ID`/`SECRET`)
+  não foram tocadas nesta sessão — presume-se já configuradas no Vercel de
+  antes.
