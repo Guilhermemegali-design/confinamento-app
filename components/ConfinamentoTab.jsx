@@ -372,6 +372,8 @@ export default function ConfinamentoTab({
   if (tela.modo === "nova-dieta") {
     return (
       <FormDieta
+        ingredientesMs={ingredientesMs}
+        onSalvarMs={onSalvarMsIngrediente}
         onCancel={() => setTela({ modo: "lista" })}
         onSave={async (dados) => {
           await onAdicionarDieta(dados);
@@ -387,6 +389,8 @@ export default function ConfinamentoTab({
     return (
       <FormDieta
         dietaExistente={dieta}
+        ingredientesMs={ingredientesMs}
+        onSalvarMs={onSalvarMsIngrediente}
         onCancel={() => setTela({ modo: "lista" })}
         onSave={async (dados) => {
           await onAtualizarDieta(dieta.id, dados);
@@ -597,7 +601,7 @@ export default function ConfinamentoTab({
           onExcluirCarga={onExcluirCarga}
         />
       ) : aba === "dieta" ? (
-        <AbaDietas dietas={dietas} onAbrir={(id) => setTela({ modo: "editar-dieta", id })} />
+        <AbaDietas dietas={dietas} ingredientesMs={ingredientesMs} onAbrir={(id) => setTela({ modo: "editar-dieta", id })} />
       ) : aba === "mapa" ? (
         <MapaCurrais
           cliente={cliente}
@@ -3589,7 +3593,7 @@ function corErroCarga(percentual) {
 
 // Lista de dietas formuladas (Adaptação/Recria/Crescimento/Terminação/
 // Sequestro) do cliente — cada uma com sua própria lista de ingredientes.
-function AbaDietas({ dietas, onAbrir }) {
+function AbaDietas({ dietas, ingredientesMs, onAbrir }) {
   const ordenadas = [...dietas].sort((a, b) => a.nome.localeCompare(b.nome));
 
   if (ordenadas.length === 0) return <EmptyHint text="Nenhuma dieta cadastrada." />;
@@ -3597,7 +3601,7 @@ function AbaDietas({ dietas, onAbrir }) {
   return (
     <div>
       {ordenadas.map((d) => {
-        const { custoPorKgMn } = calcularDieta(d.ingredientes);
+        const { custoPorKgMn } = calcularDieta(d.ingredientes, ingredientesMs);
         return (
           <div key={d.id} style={styles.listItem} onClick={() => onAbrir(d.id)}>
             <div style={styles.avatar}>
@@ -3618,7 +3622,12 @@ function AbaDietas({ dietas, onAbrir }) {
   );
 }
 
-function FormDieta({ onCancel, onSave, dietaExistente, onDelete }) {
+// %MS e preço de cada ingrediente NÃO ficam gravados na dieta — vêm da
+// biblioteca compartilhada `ingredientesMs` (mesma aba Cargas), pela chave
+// normalizada do nome. Editar aqui salva direto na biblioteca (mesmo
+// upsert da aba Cargas), então atualizar o MS ou o preço de um ingrediente
+// uma vez reflete em qualquer outra dieta que o use.
+function FormDieta({ onCancel, onSave, dietaExistente, onDelete, ingredientesMs = [], onSalvarMs }) {
   const ehEdicao = Boolean(dietaExistente);
   const [nome, setNome] = useState(dietaExistente?.nome || "");
   const [tipo, setTipo] = useState(dietaExistente?.tipo || TIPOS_DIETA[0].value);
@@ -3626,9 +3635,16 @@ function FormDieta({ onCancel, onSave, dietaExistente, onDelete }) {
     dietaExistente?.ingredientes?.length ? dietaExistente.ingredientes : [ingredienteVazio()]
   );
   const [salvando, setSalvando] = useState(false);
+  const [salvandoCampo, setSalvandoCampo] = useState(null);
 
   function atualizarIngrediente(index, campo, valor) {
     setIngredientes((lista) => lista.map((ing, i) => (i === index ? { ...ing, [campo]: valor } : ing)));
+  }
+
+  function renomearIngrediente(index, novoNome) {
+    setIngredientes((lista) =>
+      lista.map((ing, i) => (i === index ? { ...ing, nome: novoNome, ingrediente_chave: chaveIngrediente(novoNome) } : ing))
+    );
   }
 
   function removerIngrediente(index) {
@@ -3639,16 +3655,42 @@ function FormDieta({ onCancel, onSave, dietaExistente, onDelete }) {
     setIngredientes((lista) => [...lista, ingredienteVazio()]);
   }
 
+  // Salva MS/custo direto na biblioteca do cliente (upsert por chave) —
+  // não fica em estado local: o valor exibido vem sempre de `ingredientesMs`.
+  async function salvarNaBiblioteca(chave, nomeAtual, campo, valor) {
+    if (!onSalvarMs || !chave) return;
+    const numero = valor === "" ? null : Number(valor);
+    if (numero != null && (isNaN(numero) || numero < 0 || (campo === "ms_percentual" && numero > 100))) return;
+    const existente = ingredientesMs.find((i) => i.ingrediente_chave === chave);
+    setSalvandoCampo(`${chave}:${campo}`);
+    try {
+      await onSalvarMs({
+        ingrediente_chave: chave,
+        ingrediente_nome: nomeAtual,
+        ms_percentual: campo === "ms_percentual" ? numero : existente?.ms_percentual ?? null,
+        custo_kg_mn: campo === "custo_kg_mn" ? numero : existente?.custo_kg_mn ?? null,
+      });
+    } finally {
+      setSalvandoCampo(null);
+    }
+  }
+
   const ingredientesValidos = ingredientes.filter((ing) => ing.nome.trim());
-  const { linhas, totalParticipacaoMs, custoPorKgMs, custoPorKgMn } = calcularDieta(ingredientesValidos);
+  const { linhas, totalParticipacaoMs, custoPorKgMs, custoPorKgMn, faltamMs, faltamCusto } = calcularDieta(ingredientesValidos, ingredientesMs);
   const msForaDoEsperado = ingredientesValidos.length > 0 && Math.abs(totalParticipacaoMs - 100) > 0.5;
 
   const valido = nome.trim() && ingredientesValidos.length > 0;
+  const nomesBiblioteca = [...new Set(ingredientesMs.map((i) => i.ingrediente_nome).filter(Boolean))];
 
   async function handleSave() {
     setSalvando(true);
     try {
-      await onSave({ nome: nome.trim(), tipo, ingredientes: ingredientesValidos });
+      const paraSalvar = ingredientesValidos.map((ing) => ({
+        ingrediente_chave: ing.ingrediente_chave || chaveIngrediente(ing.nome),
+        nome: ing.nome.trim(),
+        participacao_ms: ing.participacao_ms,
+      }));
+      await onSave({ nome: nome.trim(), tipo, ingredientes: paraSalvar });
     } finally {
       setSalvando(false);
     }
@@ -3663,16 +3705,22 @@ function FormDieta({ onCancel, onSave, dietaExistente, onDelete }) {
       </div>
 
       <SectionTitle>Ingredientes</SectionTitle>
+      <datalist id="dieta-biblioteca-ingredientes">
+        {nomesBiblioteca.map((n) => <option key={n} value={n} />)}
+      </datalist>
 
       {ingredientes.map((ing, i) => {
-        const linha = linhas[i];
+        const linha = linhas.find((l) => l.ingrediente_chave === (ing.ingrediente_chave || chaveIngrediente(ing.nome)));
+        const chave = ing.ingrediente_chave || (ing.nome.trim() ? chaveIngrediente(ing.nome) : "");
+        const semBiblioteca = chave && !ingredientesMs.some((item) => item.ingrediente_chave === chave);
         return (
           <div key={i} style={styles.ingredienteCard}>
             <div style={styles.ingredienteHeaderRow}>
               <input
                 value={ing.nome}
-                onChange={(e) => atualizarIngrediente(i, "nome", e.target.value)}
+                onChange={(e) => renomearIngrediente(i, e.target.value)}
                 placeholder={`Ingrediente ${i + 1}`}
+                list="dieta-biblioteca-ingredientes"
                 style={{ ...styles.ingredienteMiniInput, border: "none", background: "transparent", fontSize: 14.5, fontWeight: 600, padding: 0 }}
               />
               {ingredientes.length > 1 && (
@@ -3686,8 +3734,10 @@ function FormDieta({ onCancel, onSave, dietaExistente, onDelete }) {
                 <div style={styles.ingredienteMiniLabel}>% MS do alimento</div>
                 <input
                   type="number"
-                  value={ing.ms}
-                  onChange={(e) => atualizarIngrediente(i, "ms", e.target.value)}
+                  defaultValue={linha?.ms || ""}
+                  key={`ms-${chave}-${linha?.ms ?? ""}`}
+                  disabled={!chave || !onSalvarMs}
+                  onBlur={(e) => salvarNaBiblioteca(chave, ing.nome.trim(), "ms_percentual", e.target.value)}
                   placeholder="Ex: 88"
                   style={styles.ingredienteMiniInput}
                 />
@@ -3706,16 +3756,22 @@ function FormDieta({ onCancel, onSave, dietaExistente, onDelete }) {
                 <div style={styles.ingredienteMiniLabel}>Preço R$/kg</div>
                 <input
                   type="number"
-                  value={ing.preco}
-                  onChange={(e) => atualizarIngrediente(i, "preco", e.target.value)}
+                  defaultValue={linha?.preco || ""}
+                  key={`preco-${chave}-${linha?.preco ?? ""}`}
+                  disabled={!chave || !onSalvarMs}
+                  onBlur={(e) => salvarNaBiblioteca(chave, ing.nome.trim(), "custo_kg_mn", e.target.value)}
                   placeholder="Ex: 0,90"
                   style={styles.ingredienteMiniInput}
                 />
               </label>
             </div>
-            {ing.nome.trim() && (
+            {salvandoCampo?.startsWith(`${chave}:`) && (
+              <div style={styles.ingredienteMnResult}>Salvando na biblioteca do cliente...</div>
+            )}
+            {!salvandoCampo && ing.nome.trim() && (
               <div style={styles.ingredienteMnResult}>
                 Participação em matéria natural: <span style={styles.ingredienteMnValor}>{linha ? linha.participacaoMn.toFixed(1) : "0,0"}%</span>
+                {semBiblioteca && " · novo na biblioteca — preencha %MS e preço acima"}
               </div>
             )}
           </div>
@@ -3740,6 +3796,14 @@ function FormDieta({ onCancel, onSave, dietaExistente, onDelete }) {
             <div style={styles.dietaResumoAviso}>
               <AlertTriangle size={11} style={{ verticalAlign: -1, marginRight: 4 }} />
               A soma da participação em MS está em {totalParticipacaoMs.toFixed(1)}% (o esperado é 100%).
+            </div>
+          )}
+          {(faltamMs > 0 || faltamCusto > 0) && (
+            <div style={styles.dietaResumoAviso}>
+              <AlertTriangle size={11} style={{ verticalAlign: -1, marginRight: 4 }} />
+              {faltamMs > 0 && `${faltamMs} ingrediente(s) sem %MS cadastrado`}
+              {faltamMs > 0 && faltamCusto > 0 && " · "}
+              {faltamCusto > 0 && `${faltamCusto} sem preço cadastrado`}
             </div>
           )}
         </div>
