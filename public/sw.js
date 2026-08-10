@@ -6,10 +6,11 @@
 // dados — só garante que a interface carregue offline.
 // ============================================================
 
-const CACHE_NAME = "rastro-confinamento-cache-v3";
+const CACHE_NAME = "rastro-confinamento-cache-v4";
 
 const ARQUIVOS_ESSENCIAIS = [
   "/",
+  "/portal",
   "/manifest.json",
   "/manifest-portal.json",
   "/rastro-logo.png",
@@ -25,10 +26,33 @@ const ARQUIVOS_ESSENCIAIS = [
   "/logo.jpg",
 ];
 
+// Um Service Worker recém-registrado NÃO intercepta os próprios arquivos
+// carregados durante a visita que o instalou (limitação conhecida de todo
+// SW) — sem isso, na primeira visita só os arquivos da lista acima ficavam
+// salvos, e abrir offline logo depois de instalar o ícone mostrava tela
+// branca (o HTML carregava do cache, mas o JS/CSS que desenha a tela nunca
+// tinha sido salvo). Por isso buscamos "/" e "/portal" de novo aqui dentro
+// e cacheamos também tudo que elas referenciam (_next/static/...), já na
+// instalação — tanto pro consultor quanto pro cliente.
+async function precacheChunksDe(caminho, cache) {
+  try {
+    const resposta = await fetch(caminho);
+    const html = await resposta.text();
+    const urls = [...html.matchAll(/(?:src|href)="(\/_next\/static\/[^"]+)"/g)].map((m) => m[1]);
+    if (urls.length) await cache.addAll(urls);
+  } catch {
+    // sem internet no instante da instalação — sem problema, o fetch
+    // handler abaixo ainda cacheia tudo normalmente nas próximas visitas
+  }
+}
+
+async function precache(cache) {
+  await cache.addAll(ARQUIVOS_ESSENCIAIS);
+  await Promise.all([precacheChunksDe("/", cache), precacheChunksDe("/portal", cache)]);
+}
+
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ARQUIVOS_ESSENCIAIS))
-  );
+  event.waitUntil(caches.open(CACHE_NAME).then(precache));
   self.skipWaiting();
 });
 
