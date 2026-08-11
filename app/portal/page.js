@@ -3,10 +3,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { styles } from "@/lib/styles";
-import { LogOut, Beef, FileText } from "lucide-react";
+import { LogOut, Beef, FileText, KeyRound } from "lucide-react";
 import ConfinamentoTab from "@/components/ConfinamentoTab";
 import RelatoriosPortalTab from "@/components/RelatoriosPortalTab";
 import MarcaDesenvolvedor from "@/components/MarcaDesenvolvedor";
+import { BackHeader, InputField, PrimaryButton } from "@/components/UI";
 import { calcularResumoSaidas } from "@/lib/confinamento";
 
 export default function PortalCliente() {
@@ -177,6 +178,7 @@ function TelaVincularConvite({ onVinculado }) {
 // ---------- Painel principal ----------
 function PainelCliente({ cliente, somenteLeitura, papel }) {
   const [abaPortal, setAbaPortal] = useState("confinamento");
+  const [trocandoSenha, setTrocandoSenha] = useState(false);
   const [lotes, setLotes] = useState([]);
   const [pesagens, setPesagens] = useState([]);
   const [consumos, setConsumos] = useState([]);
@@ -532,12 +534,23 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
               <div style={styles.brandSub}>{cliente.nome}{somenteLeitura ? " · Somente leitura" : ""}</div>
             </div>
           </div>
-          <button onClick={() => supabase.auth.signOut()} style={styles.iconBtn} title="Sair">
-            <LogOut size={16} />
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setTrocandoSenha(true)} style={styles.iconBtn} title="Trocar senha">
+              <KeyRound size={16} />
+            </button>
+            <button onClick={() => supabase.auth.signOut()} style={styles.iconBtn} title="Sair">
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
       </div>
 
+      {trocandoSenha ? (
+        <div style={styles.content} className="app-content">
+          <TrocarSenha onVoltar={() => setTrocandoSenha(false)} />
+        </div>
+      ) : (
+      <>
       <div style={styles.content} className="app-content">
         {abaPortal === "relatorios" && papel === "administrador" ? (
           <RelatoriosPortalTab relatorios={relatorios} />
@@ -597,8 +610,67 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
           </button>
         </div>
       )}
+      </>
+      )}
 
       <MarcaDesenvolvedor />
+    </div>
+  );
+}
+
+// ---------- Trocar senha ----------
+// Não pede a senha atual: quem chega aqui já está logado (sessão válida),
+// e supabase.auth.updateUser troca a senha sem precisar reautenticar.
+// Serve tanto pra quem recebeu uma senha temporária do consultor quanto
+// pra trocar a senha por vontade própria.
+function TrocarSenha({ onVoltar }) {
+  const [novaSenha, setNovaSenha] = useState("");
+  const [confirmacao, setConfirmacao] = useState("");
+  const [erro, setErro] = useState("");
+  const [sucesso, setSucesso] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+
+  async function handleSalvar() {
+    setErro("");
+    if (novaSenha.length < 6) {
+      setErro("A senha precisa ter pelo menos 6 caracteres.");
+      return;
+    }
+    if (novaSenha !== confirmacao) {
+      setErro("As senhas não são iguais.");
+      return;
+    }
+    setSalvando(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: novaSenha });
+      if (error) throw error;
+      setSucesso(true);
+    } catch (err) {
+      setErro(traduzErro(err.message));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  if (sucesso) {
+    return (
+      <div>
+        <BackHeader title="Trocar senha" onBack={onVoltar} />
+        <div style={styles.errorBox}>Senha alterada com sucesso!</div>
+        <PrimaryButton onClick={onVoltar}>Voltar</PrimaryButton>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <BackHeader title="Trocar senha" onBack={onVoltar} />
+      <InputField label="Nova senha" type="password" value={novaSenha} onChange={setNovaSenha} placeholder="••••••••" />
+      <InputField label="Confirmar nova senha" type="password" value={confirmacao} onChange={setConfirmacao} placeholder="••••••••" />
+      {erro && <div style={styles.errorBox}>{erro}</div>}
+      <PrimaryButton disabled={salvando} onClick={handleSalvar}>
+        {salvando ? "Salvando..." : "Salvar nova senha"}
+      </PrimaryButton>
     </div>
   );
 }
