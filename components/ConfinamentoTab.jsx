@@ -110,7 +110,7 @@ function usarOrdenacaoPersistida(clienteId) {
 
 function usarAbaPersistida(clienteId) {
   const chave = `confinamento_aba_${clienteId || "geral"}`;
-  const abasValidas = ["painel", "lotes-ativos", "lotes-finalizados", "cocho", "esperado", "graficos", "cargas", "dieta", "mapa"];
+  const abasValidas = ["painel", "lotes-ativos", "lotes-finalizados", "cocho", "esperado", "graficos", "graficos-finalizados", "cargas", "dieta", "mapa"];
   const [aba, setAbaState] = useState(() => {
     if (typeof window === "undefined") return "painel";
     const salva = window.localStorage.getItem(chave);
@@ -565,10 +565,10 @@ export default function ConfinamentoTab({
         </div>
         <div style={styles.contextLabel}>
           {aba === "painel" && "Resumo da operação"}
-          {aba === "lotes-ativos" && "Gestão dos lotes ativos"}
+          {(aba === "lotes-ativos" || aba === "lotes-finalizados") && "Gestão dos lotes"}
           {(aba === "cocho" || aba === "esperado") && "Consumo e leitura diária"}
-          {aba === "graficos" && "Indicadores e evolução"}
-          {aba === "lotes-finalizados" && "Histórico de lotes finalizados"}
+          {aba === "graficos" && "Gráficos dos lotes ativos"}
+          {aba === "graficos-finalizados" && "Gráficos dos lotes finalizados"}
           {aba === "mapa" && "Localização dos currais"}
           {aba === "cargas" && "Precisão do abastecimento e matéria seca"}
           {aba === "dieta" && "Formulação de dieta por fase"}
@@ -578,20 +578,31 @@ export default function ConfinamentoTab({
       <div className="desktop-workspace">
         <nav style={{ ...styles.mainNav, gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }} className="main-navigation" aria-label="Áreas do confinamento">
           <NavArea icon={LayoutDashboard} label="Resumo" active={aba === "painel"} onClick={() => setAba("painel")} />
-          <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos"} onClick={() => setAba("lotes-ativos")} />
+          <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos" || aba === "lotes-finalizados"} onClick={() => setAba("lotes-ativos")} />
           <NavArea icon={ClipboardList} label="Rotina" active={aba === "cocho" || aba === "esperado"} onClick={() => setAba(onRegistrarLeituraCocho ? "cocho" : "esperado")} />
-          <NavArea icon={BarChart3} label="Análises" active={aba === "graficos" || aba === "lotes-finalizados"} onClick={() => setAba("graficos")} />
+          <NavArea icon={BarChart3} label="Análises" active={aba === "graficos" || aba === "graficos-finalizados"} onClick={() => setAba("graficos")} />
           <NavArea icon={Truck} label="Cargas" active={aba === "cargas"} onClick={() => setAba("cargas")} />
           <NavArea icon={Wheat} label="Dieta" active={aba === "dieta"} onClick={() => setAba("dieta")} />
           <NavArea icon={MapIcon} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
         </nav>
 
         <main className="desktop-main-content">
-          {(aba === "graficos" || aba === "lotes-finalizados") && (
+          {(aba === "lotes-ativos" || aba === "lotes-finalizados") && (
             <SubNav
               options={[
-                { value: "graficos", label: "Gráficos e indicadores" },
+                { value: "lotes-ativos", label: `Lotes ativos (${ativos.length})` },
                 { value: "lotes-finalizados", label: `Lotes finalizados (${finalizados.length})` },
+              ]}
+              value={aba}
+              onChange={setAba}
+            />
+          )}
+
+          {(aba === "graficos" || aba === "graficos-finalizados") && (
+            <SubNav
+              options={[
+                { value: "graficos", label: `Lotes ativos (${ativos.length})` },
+                { value: "graficos-finalizados", label: `Lotes finalizados (${finalizados.length})` },
               ]}
               value={aba}
               onChange={setAba}
@@ -610,7 +621,9 @@ export default function ConfinamentoTab({
           )}
 
       {aba === "graficos" ? (
-        <AbaGraficos lotes={lotes} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} clienteId={cliente?.id} />
+        <AbaGraficos lotes={ativos.map((item) => item.lote)} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} clienteId={cliente?.id} />
+      ) : aba === "graficos-finalizados" ? (
+        <AbaGraficos lotes={finalizados.map((item) => item.lote)} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} clienteId={cliente?.id} />
       ) : aba === "cocho" && onRegistrarLeituraCocho ? (
         <AbaLeituraCocho
           lotes={lotes}
@@ -1061,7 +1074,10 @@ function LoteDetalhe({
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 600, fontSize: 13.5 }}>{formatDataBR(e.data)}</div>
                 <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
-                  +{e.num_cabecas} cab.{e.observacoes ? ` · ${e.observacoes}` : ""}
+                  +{e.num_cabecas} cab.{e.peso_entrada != null ? ` · ${e.peso_entrada} kg/cab.` : ""}
+                  {e.rendimento_entrada != null ? ` · ${e.rendimento_entrada}% rendimento` : ""}
+                  {e.preco_arroba_entrada != null ? ` · ${formatBRL(e.preco_arroba_entrada)}/@` : ""}
+                  {e.observacoes ? ` · ${e.observacoes}` : ""}
                 </div>
               </div>
               {onExcluirEntrada && (
@@ -1781,10 +1797,16 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave }) {
   const hoje = new Date().toISOString().slice(0, 10);
   const [data, setData] = useState(hoje);
   const [numCabecas, setNumCabecas] = useState("");
+  const [pesoEntrada, setPesoEntrada] = useState("");
+  const [gmdEsperado, setGmdEsperado] = useState("");
+  const [pesoEsperadoAbate, setPesoEsperadoAbate] = useState("");
+  const [precoArrobaEntrada, setPrecoArrobaEntrada] = useState("");
+  const [rendimentoEntrada, setRendimentoEntrada] = useState("");
   const [observacoes, setObservacoes] = useState("");
   const [salvando, setSalvando] = useState(false);
   const quantidade = Number(numCabecas);
-  const valido = data && data >= dataEntradaLote && data <= hoje && Number.isInteger(quantidade) && quantidade > 0;
+  const peso = Number(pesoEntrada);
+  const valido = data && data >= dataEntradaLote && data <= hoje && Number.isInteger(quantidade) && quantidade > 0 && peso > 0;
 
   async function handleSave() {
     if (!valido) return;
@@ -1793,6 +1815,11 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave }) {
       await onSave({
         data,
         num_cabecas: quantidade,
+        peso_entrada: peso,
+        gmd_esperado: gmdEsperado !== "" ? Number(gmdEsperado) : null,
+        peso_esperado_abate: pesoEsperadoAbate !== "" ? Number(pesoEsperadoAbate) : null,
+        preco_arroba_entrada: precoArrobaEntrada !== "" ? Number(precoArrobaEntrada) : null,
+        rendimento_entrada: rendimentoEntrada !== "" ? Number(rendimentoEntrada) : null,
         observacoes: observacoes.trim() || null,
       });
     } finally {
@@ -1805,7 +1832,12 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave }) {
       <BackHeader title="Adicionar animais ao lote" onBack={onCancel} />
       <div style={styles.card}>
         <InputField label="Data da entrada *" type="date" value={data} onChange={setData} min={dataEntradaLote} max={hoje} />
-        <InputField label="Quantidade de animais *" type="number" value={numCabecas} onChange={setNumCabecas} placeholder="Ex: 25" min="1" step="1" />
+        <InputField label="Nº de cabeças *" type="number" value={numCabecas} onChange={setNumCabecas} placeholder="Ex: 25" min="1" step="1" />
+        <InputField label="Peso de entrada (kg) *" type="number" value={pesoEntrada} onChange={setPesoEntrada} placeholder="Ex: 410" min="1" />
+        <InputField label="GMD esperado (kg/dia)" type="number" value={gmdEsperado} onChange={setGmdEsperado} placeholder="Ex: 1.5" />
+        <InputField label="Peso esperado de abate (kg)" type="number" value={pesoEsperadoAbate} onChange={setPesoEsperadoAbate} placeholder="Ex: 550" />
+        <InputField label="Preço da arroba na entrada (R$/@)" type="number" value={precoArrobaEntrada} onChange={setPrecoArrobaEntrada} placeholder="Ex: 280" />
+        <InputField label="Rendimento de entrada (%)" type="number" value={rendimentoEntrada} onChange={setRendimentoEntrada} placeholder="Ex: 50" />
         <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: complemento para formação do lote" />
         <div style={{ fontSize: 12, color: "#7C7C76", padding: "6px 0 2px" }}>
           A quantidade será somada ao total do lote a partir desta data.

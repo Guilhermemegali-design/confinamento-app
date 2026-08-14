@@ -1,6 +1,6 @@
 # Confinamento — Handoff
 
-Última atualização: 2026-08-07 (aba de Dieta por cliente/fase)
+Última atualização: 2026-08-14 (lotes finalizados e entradas adicionais)
 
 ## O que é
 
@@ -97,6 +97,17 @@ adicionada em sessão anterior para atender a Belmont).
   `SELECT` (ver item 34).
 
 ## O que foi feito nesta sessão (ordem cronológica)
+
+- **Organização de Lotes e Análises (2026-08-14, ainda não publicada)**:
+  "Lotes finalizados" voltou a ser uma subdivisão da aba Lotes. A aba
+  Análises agora separa os gráficos de lotes ativos e de lotes finalizados.
+- **Cadastro de entradas adicionais (2026-08-14, ainda não publicado)**:
+  o formulário `+ Entrada` passou a registrar, além da data e do número de
+  cabeças, peso de entrada obrigatório e os mesmos campos zootécnicos do
+  cadastro inicial (GMD esperado, peso esperado de abate, preço da arroba e
+  rendimento de entrada). A migração
+  `20260814143000_adicionar_dados_cadastro_entrada_lote.sql` ainda precisa ser
+  aplicada ao banco no momento da publicação.
 
 **Atualização recente — entradas adicionais em lotes ainda em formação**:
 lotes ativos agora
