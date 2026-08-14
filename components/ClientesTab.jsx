@@ -7,11 +7,12 @@ import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryBut
 import ConfinamentoTab from "./ConfinamentoTab";
 
 export default function ClientesTab({
-  clientes, lotes, pesagens, consumos, saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
+  clientes, lotes, pesagens, consumos, saidas = [], entradas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
   onAddCliente, onUpdateCliente, onDeleteCliente,
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
   onAddSaida, onDeleteSaida,
+  onAddEntrada, onDeleteEntrada,
   onAddConsumo, onUpdateConsumo, onDeleteConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
@@ -30,6 +31,7 @@ export default function ClientesTab({
     const pesagensCliente = pesagens.filter((p) => loteIdsCliente.has(p.lote_id));
     const consumosCliente = consumos.filter((c) => loteIdsCliente.has(c.lote_id));
     const saidasCliente = saidas.filter((s) => loteIdsCliente.has(s.lote_id));
+    const entradasCliente = entradas.filter((e) => loteIdsCliente.has(e.lote_id));
     const leiturasCochoCliente = leiturasCocho.filter((l) => loteIdsCliente.has(l.lote_id));
     const cargasCliente = cargasVagao.filter((c) => c.cliente_id === cliente.id);
     const ingredientesMsCliente = ingredientesMs.filter((i) => i.cliente_id === cliente.id);
@@ -44,6 +46,7 @@ export default function ClientesTab({
         pesagens={pesagensCliente}
         consumos={consumosCliente}
         saidas={saidasCliente}
+        entradas={entradasCliente}
         leiturasCocho={leiturasCochoCliente}
         cargasVagao={cargasCliente}
         ingredientesMs={ingredientesMsCliente}
@@ -57,6 +60,8 @@ export default function ClientesTab({
         onExcluirPesagem={onDeletePesagem}
         onAdicionarSaida={onAddSaida}
         onExcluirSaida={onDeleteSaida}
+        onAdicionarEntrada={onAddEntrada}
+        onExcluirEntrada={onDeleteEntrada}
         onAdicionarConsumo={onAddConsumo}
         onAtualizarConsumo={onUpdateConsumo}
         onExcluirConsumo={onDeleteConsumo}

@@ -40,7 +40,7 @@ export function Field({ label, value, multiline, highlight }) {
   );
 }
 
-export function InputField({ label, value, onChange, placeholder, type = "text" }) {
+export function InputField({ label, value, onChange, placeholder, type = "text", ...inputProps }) {
   return (
     <label style={styles.field}>
       <div style={styles.fieldLabel}>{label}</div>
@@ -48,6 +48,7 @@ export function InputField({ label, value, onChange, placeholder, type = "text" 
         type={type}
         value={value}
         placeholder={placeholder}
+        {...inputProps}
         onChange={(e) => onChange(e.target.value)}
         style={styles.input}
       />

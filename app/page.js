@@ -82,6 +82,7 @@ export default function Home() {
           pesagens={dados.pesagens}
           consumos={dados.consumos}
           saidas={dados.saidas}
+          entradas={dados.entradas}
           leiturasCocho={dados.leiturasCocho}
           cargasVagao={dados.cargasVagao}
           ingredientesMs={dados.ingredientesMs}
@@ -131,6 +132,14 @@ export default function Home() {
           onDeleteSaida={async (id) => {
             await dados.excluirSaida(id);
             mostrarToast("Saída excluída");
+          }}
+          onAddEntrada={async (loteId, e) => {
+            await dados.adicionarEntrada(loteId, e);
+            mostrarToast("Entrada registrada");
+          }}
+          onDeleteEntrada={async (id) => {
+            await dados.excluirEntrada(id);
+            mostrarToast("Entrada excluída");
           }}
           onAddConsumo={async (loteId, c) => {
             await dados.adicionarConsumo(loteId, c);

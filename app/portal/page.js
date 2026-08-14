@@ -183,6 +183,7 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
   const [pesagens, setPesagens] = useState([]);
   const [consumos, setConsumos] = useState([]);
   const [saidas, setSaidas] = useState([]);
+  const [entradas, setEntradas] = useState([]);
   const [leiturasCocho, setLeiturasCocho] = useState([]);
   const [cargasVagao, setCargasVagao] = useState([]);
   const [ingredientesMs, setIngredientesMs] = useState([]);
@@ -202,12 +203,15 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
       setConsumos(c || []);
       const { data: s } = await supabase.from("saidas_lote").select("*").in("lote_id", loteIds);
       setSaidas(s || []);
+      const { data: e } = await supabase.from("entradas_lote").select("*").in("lote_id", loteIds);
+      setEntradas(e || []);
       const { data: lc } = await supabase.from("leituras_cocho").select("*").in("lote_id", loteIds);
       setLeiturasCocho(lc || []);
     } else {
       setPesagens([]);
       setConsumos([]);
       setSaidas([]);
+      setEntradas([]);
       setLeiturasCocho([]);
     }
     const { data: cu } = await supabase.from("currais").select("*").eq("cliente_id", cliente.id);
@@ -291,6 +295,24 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
         await atualizarLote(loteId, { data_saida: dataSaidaCalculada, peso_saida_vivo: pesoSaidaVivoCalculado });
       }
     }
+    return data;
+  }
+
+  async function adicionarEntrada(loteId, dados) {
+    const { data, error } = await supabase
+      .from("entradas_lote")
+      .insert({ ...dados, lote_id: loteId, consultor_id: cliente.consultor_id })
+      .select()
+      .single();
+    if (error) throw error;
+    setEntradas((es) => [...es, data]);
+    const { data: loteAtualizado, error: erroLote } = await supabase
+      .from("lotes_confinamento")
+      .select("*")
+      .eq("id", loteId)
+      .single();
+    if (erroLote) throw erroLote;
+    setLotes((ls) => ls.map((l) => (l.id === loteId ? loteAtualizado : l)));
     return data;
   }
 
@@ -561,6 +583,7 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
             pesagens={pesagens}
             consumos={consumos}
             saidas={saidas}
+            entradas={entradas}
             leiturasCocho={leiturasCocho}
             cargasVagao={cargasVagao}
             ingredientesMs={ingredientesMs}
@@ -571,6 +594,7 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
             onAtualizar={somenteLeitura ? undefined : atualizarLote}
             onAdicionarPesagem={somenteLeitura ? undefined : adicionarPesagem}
             onAdicionarSaida={somenteLeitura ? undefined : adicionarSaida}
+            onAdicionarEntrada={somenteLeitura ? undefined : adicionarEntrada}
             onAdicionarConsumo={somenteLeitura ? undefined : adicionarConsumo}
             onAtualizarConsumo={somenteLeitura ? undefined : atualizarConsumo}
             onExcluirConsumo={somenteLeitura ? undefined : excluirConsumo}

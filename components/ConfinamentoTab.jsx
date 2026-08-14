@@ -172,10 +172,11 @@ function msDaFase(cliente, fase) {
 // Reaproveitado tanto na tela do consultor (com criar/excluir) quanto no portal
 // do cliente (ver e editar).
 export default function ConfinamentoTab({
-  cliente, lotes, pesagens = [], consumos = [], saidas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], currais = [], curralOcupacoes = [],
+  cliente, lotes, pesagens = [], consumos = [], saidas = [], entradas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], currais = [], curralOcupacoes = [],
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
   onAdicionarSaida, onExcluirSaida,
+  onAdicionarEntrada, onExcluirEntrada,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
@@ -199,6 +200,10 @@ export default function ConfinamentoTab({
   const saidasPorLote = {};
   for (const s of saidas) {
     (saidasPorLote[s.lote_id] ||= []).push(s);
+  }
+  const entradasPorLote = {};
+  for (const e of entradas) {
+    (entradasPorLote[e.lote_id] ||= []).push(e);
   }
   const leiturasCochoPorLote = {};
   for (const l of leiturasCocho) {
@@ -271,6 +276,21 @@ export default function ConfinamentoTab({
     );
   }
 
+  if (tela.modo === "nova-entrada") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    return (
+      <FormEntrada
+        dataEntradaLote={lote.data_entrada}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAdicionarEntrada(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
   if (tela.modo === "novo-consumo") {
     const lote = lotes.find((l) => l.id === tela.loteId);
     if (!lote) return <EmptyHint text="Lote não encontrado." />;
@@ -280,6 +300,7 @@ export default function ConfinamentoTab({
         cliente={cliente}
         consumos={consumosPorLote[lote.id] || []}
         saidas={saidasPorLote[lote.id] || []}
+        entradas={entradasPorLote[lote.id] || []}
         onCancel={() => setTela({ modo: "lote", id: lote.id })}
         onSave={async (dados) => {
           await onAdicionarConsumo(lote.id, dados);
@@ -300,6 +321,7 @@ export default function ConfinamentoTab({
         consumo={consumo}
         consumos={consumosPorLote[lote.id] || []}
         saidas={saidasPorLote[lote.id] || []}
+        entradas={entradasPorLote[lote.id] || []}
         onCancel={() => setTela({ modo: "lote", id: lote.id })}
         onSave={async (dados) => {
           await onAtualizarConsumo(consumo.id, dados);
@@ -315,6 +337,7 @@ export default function ConfinamentoTab({
       <FormConsumoEmMassa
         lotesAtivos={lotesAtivos}
         saidasPorLote={saidasPorLote}
+        entradasPorLote={entradasPorLote}
         cliente={cliente}
         consumos={consumos}
         onCancel={() => setTela({ modo: "lista" })}
@@ -415,15 +438,17 @@ export default function ConfinamentoTab({
     const pesagensLote = pesagensPorLote[lote.id] || [];
     const consumosLote = consumosPorLote[lote.id] || [];
     const saidasLote = saidasPorLote[lote.id] || [];
-    const indicadores = calcularIndicadoresLote(lote, pesagensLote, consumosLote, saidasLote);
+    const entradasLote = entradasPorLote[lote.id] || [];
+    const indicadores = calcularIndicadoresLote(lote, pesagensLote, consumosLote, saidasLote, entradasLote);
     const evolucao = calcularEvolucaoLote(lote, pesagensLote);
-    const evolucaoConsumo = calcularEvolucaoConsumo(lote, pesagensLote, consumosLote, saidasLote);
+    const evolucaoConsumo = calcularEvolucaoConsumo(lote, pesagensLote, consumosLote, saidasLote, entradasLote);
     return (
       <LoteDetalhe
         cliente={cliente}
         lote={lote}
         indicadores={indicadores}
         saidas={saidasLote}
+        entradas={entradasLote}
         evolucao={evolucao}
         evolucaoConsumo={evolucaoConsumo}
         cargasVagao={cargasVagao}
@@ -439,6 +464,12 @@ export default function ConfinamentoTab({
           (() => setTela({ modo: "nova-saida", loteId: lote.id }))
         }
         onExcluirSaida={onExcluirSaida}
+        onNovaEntrada={
+          onAdicionarEntrada &&
+          indicadores.status === "Ativo" &&
+          (() => setTela({ modo: "nova-entrada", loteId: lote.id }))
+        }
+        onExcluirEntrada={onExcluirEntrada}
         onNovoConsumo={onAdicionarConsumo && (() => setTela({ modo: "novo-consumo", loteId: lote.id }))}
         onEditarConsumo={onAtualizarConsumo && ((consumoId) => setTela({ modo: "editar-consumo", loteId: lote.id, consumoId }))}
         onExcluirConsumo={onExcluirConsumo}
@@ -446,10 +477,10 @@ export default function ConfinamentoTab({
     );
   }
 
-  const painel = calcularPainelConfinamento(lotes, pesagensPorLote, consumosPorLote, saidasPorLote);
+  const painel = calcularPainelConfinamento(lotes, pesagensPorLote, consumosPorLote, saidasPorLote, entradasPorLote);
   const comIndicadores = lotes.map((l) => ({
     lote: l,
-    ...calcularIndicadoresLote(l, pesagensPorLote[l.id] || [], consumosPorLote[l.id] || [], saidasPorLote[l.id] || []),
+    ...calcularIndicadoresLote(l, pesagensPorLote[l.id] || [], consumosPorLote[l.id] || [], saidasPorLote[l.id] || [], entradasPorLote[l.id] || []),
   }));
   const ativos = comIndicadores
     .filter((i) => i.status === "Ativo")
@@ -520,7 +551,7 @@ export default function ConfinamentoTab({
                 Importar cargas
               </button>
             )}
-            {(aba === "lotes-ativos" || aba === "lotes-finalizados") && onAdicionar && (
+            {aba === "lotes-ativos" && onAdicionar && (
               <button onClick={() => setTela({ modo: "novo" })} style={styles.editLinkBtn}>
                 + Novo lote
               </button>
@@ -534,9 +565,10 @@ export default function ConfinamentoTab({
         </div>
         <div style={styles.contextLabel}>
           {aba === "painel" && "Resumo da operação"}
-          {(aba === "lotes-ativos" || aba === "lotes-finalizados") && "Gestão dos lotes"}
+          {aba === "lotes-ativos" && "Gestão dos lotes ativos"}
           {(aba === "cocho" || aba === "esperado") && "Consumo e leitura diária"}
           {aba === "graficos" && "Indicadores e evolução"}
+          {aba === "lotes-finalizados" && "Histórico de lotes finalizados"}
           {aba === "mapa" && "Localização dos currais"}
           {aba === "cargas" && "Precisão do abastecimento e matéria seca"}
           {aba === "dieta" && "Formulação de dieta por fase"}
@@ -546,20 +578,20 @@ export default function ConfinamentoTab({
       <div className="desktop-workspace">
         <nav style={{ ...styles.mainNav, gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }} className="main-navigation" aria-label="Áreas do confinamento">
           <NavArea icon={LayoutDashboard} label="Resumo" active={aba === "painel"} onClick={() => setAba("painel")} />
-          <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos" || aba === "lotes-finalizados"} onClick={() => setAba("lotes-ativos")} />
+          <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos"} onClick={() => setAba("lotes-ativos")} />
           <NavArea icon={ClipboardList} label="Rotina" active={aba === "cocho" || aba === "esperado"} onClick={() => setAba(onRegistrarLeituraCocho ? "cocho" : "esperado")} />
-          <NavArea icon={BarChart3} label="Análises" active={aba === "graficos"} onClick={() => setAba("graficos")} />
+          <NavArea icon={BarChart3} label="Análises" active={aba === "graficos" || aba === "lotes-finalizados"} onClick={() => setAba("graficos")} />
           <NavArea icon={Truck} label="Cargas" active={aba === "cargas"} onClick={() => setAba("cargas")} />
           <NavArea icon={Wheat} label="Dieta" active={aba === "dieta"} onClick={() => setAba("dieta")} />
           <NavArea icon={MapIcon} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
         </nav>
 
         <main className="desktop-main-content">
-          {(aba === "lotes-ativos" || aba === "lotes-finalizados") && (
+          {(aba === "graficos" || aba === "lotes-finalizados") && (
             <SubNav
               options={[
-                { value: "lotes-ativos", label: `Ativos (${ativos.length})` },
-                { value: "lotes-finalizados", label: `Finalizados (${finalizados.length})` },
+                { value: "graficos", label: "Gráficos e indicadores" },
+                { value: "lotes-finalizados", label: `Lotes finalizados (${finalizados.length})` },
               ]}
               value={aba}
               onChange={setAba}
@@ -578,7 +610,7 @@ export default function ConfinamentoTab({
           )}
 
       {aba === "graficos" ? (
-        <AbaGraficos lotes={lotes} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} clienteId={cliente?.id} />
+        <AbaGraficos lotes={lotes} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} clienteId={cliente?.id} />
       ) : aba === "cocho" && onRegistrarLeituraCocho ? (
         <AbaLeituraCocho
           lotes={lotes}
@@ -879,14 +911,16 @@ function PainelCard({ label, valor, faixa }) {
 }
 
 function LoteDetalhe({
-  cliente, lote, indicadores, saidas = [], evolucao, evolucaoConsumo,
+  cliente, lote, indicadores, saidas = [], entradas = [], evolucao, evolucaoConsumo,
   cargasVagao = [], ingredientesMs = [],
   onBack, onEditar,
   onNovaPesagem, onExcluirPesagem,
   onNovaSaida, onExcluirSaida,
+  onNovaEntrada, onExcluirEntrada,
   onNovoConsumo, onEditarConsumo, onExcluirConsumo,
 }) {
   const saidasOrdenadas = [...saidas].sort((a, b) => b.data.localeCompare(a.data));
+  const entradasOrdenadas = [...entradas].sort((a, b) => b.data.localeCompare(a.data));
   const fechamento = indicadores.status === "Finalizado" ? calcularFechamentoCusto(lote, indicadores, saidas) : null;
   const consumoIngredientes = calcularConsumoIngredientesLote(lote, cargasVagao, ingredientesMs);
   return (
@@ -977,15 +1011,18 @@ function LoteDetalhe({
         <FechamentoCustoCard cliente={cliente} lote={lote} indicadores={indicadores} saidas={saidas} consumoIngredientes={consumoIngredientes} />
       )}
 
-      {(onNovaSaida || saidasOrdenadas.length > 0) && (
+      {(onNovaSaida || onNovaEntrada || saidasOrdenadas.length > 0) && (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
             <div style={{ ...styles.sectionTitle, margin: 0 }}>Saídas registradas</div>
-            {onNovaSaida && (
-              <button onClick={onNovaSaida} style={styles.editLinkBtn}>
-                + Saída
-              </button>
-            )}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+              {onNovaSaida && (
+                <button onClick={onNovaSaida} style={styles.editLinkBtn}>+ Saída</button>
+              )}
+              {onNovaEntrada && (
+                <button onClick={onNovaEntrada} style={styles.editLinkBtn}>+ Entrada</button>
+              )}
+            </div>
           </div>
           {saidasOrdenadas.length === 0 ? (
             <EmptyHint text="Nenhuma saída lançada ainda — vá registrando conforme for tirando boi do lote." />
@@ -1013,6 +1050,32 @@ function LoteDetalhe({
               </div>
             ))
           )}
+        </>
+      )}
+
+      {entradasOrdenadas.length > 0 && (
+        <>
+          <div style={{ ...styles.sectionTitle, margin: "20px 4px 8px" }}>Entradas adicionais</div>
+          {entradasOrdenadas.map((e) => (
+            <div key={e.id} style={styles.rowCard}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: 13.5 }}>{formatDataBR(e.data)}</div>
+                <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
+                  +{e.num_cabecas} cab.{e.observacoes ? ` · ${e.observacoes}` : ""}
+                </div>
+              </div>
+              {onExcluirEntrada && (
+                <button
+                  onClick={() => {
+                    if (confirm("Excluir esta entrada? O total de animais do lote será reduzido.")) onExcluirEntrada(e.id);
+                  }}
+                  style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex" }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+          ))}
         </>
       )}
 
@@ -1713,6 +1776,48 @@ function FormPesagem({ onCancel, onSave }) {
   );
 }
 
+// Acrescenta animais a um lote que ainda está em formação.
+function FormEntrada({ dataEntradaLote, onCancel, onSave }) {
+  const hoje = new Date().toISOString().slice(0, 10);
+  const [data, setData] = useState(hoje);
+  const [numCabecas, setNumCabecas] = useState("");
+  const [observacoes, setObservacoes] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const quantidade = Number(numCabecas);
+  const valido = data && data >= dataEntradaLote && data <= hoje && Number.isInteger(quantidade) && quantidade > 0;
+
+  async function handleSave() {
+    if (!valido) return;
+    setSalvando(true);
+    try {
+      await onSave({
+        data,
+        num_cabecas: quantidade,
+        observacoes: observacoes.trim() || null,
+      });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title="Adicionar animais ao lote" onBack={onCancel} />
+      <div style={styles.card}>
+        <InputField label="Data da entrada *" type="date" value={data} onChange={setData} min={dataEntradaLote} max={hoje} />
+        <InputField label="Quantidade de animais *" type="number" value={numCabecas} onChange={setNumCabecas} placeholder="Ex: 25" min="1" step="1" />
+        <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: complemento para formação do lote" />
+        <div style={{ fontSize: 12, color: "#7C7C76", padding: "6px 0 2px" }}>
+          A quantidade será somada ao total do lote a partir desta data.
+        </div>
+      </div>
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : "Registrar entrada"}
+      </PrimaryButton>
+    </div>
+  );
+}
+
 // Registra a saída de parte das cabeças do lote (vai tirando boi aos poucos
 // até esvaziar). Quando o número de cabeças bater com o que resta, o lote
 // é finalizado sozinho — não precisa editar o lote pra fechar.
@@ -1795,7 +1900,7 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
   );
 }
 
-function FormConsumo({ lote, cliente, consumo, consumos = [], saidas = [], onCancel, onSave }) {
+function FormConsumo({ lote, cliente, consumo, consumos = [], saidas = [], entradas = [], onCancel, onSave }) {
   const editando = Boolean(consumo);
   const dataInicial = consumo?.data || new Date().toISOString().slice(0, 10);
   const ultimoConsumo = [...consumos]
@@ -1814,7 +1919,7 @@ function FormConsumo({ lote, cliente, consumo, consumos = [], saidas = [], onCan
   const [tipoCusto, setTipoCusto] = useState("mn");
   const [salvando, setSalvando] = useState(false);
   const valido = data && consumoTotalLote !== "";
-  const cabecasNaData = calcularCabecasNaData(lote, saidas, data);
+  const cabecasNaData = calcularCabecasNaData(lote, saidas, data, entradas);
   const consumoMSPreview =
     consumoTotalLote !== "" && msDieta !== "" && cabecasNaData > 0
       ? (Number(consumoTotalLote) * (Number(msDieta) / 100)) / cabecasNaData
@@ -1953,7 +2058,7 @@ function preencherComUltimoConsumo(lotesAtivos, consumos, dataRef) {
 // Lançamento do consumo do dia para todos os lotes ativos de uma vez —
 // uma data só, um cartão por lote (só quem tiver o consumo preenchido é
 // salvo).
-function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel, onSalvarLote, onConcluido, consumos = [] }) {
+function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, entradasPorLote = {}, cliente, onCancel, onSalvarLote, onConcluido, consumos = [] }) {
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
   const [valores, setValores] = useState(() => preencherComUltimoConsumo(lotesAtivos, consumos, new Date().toISOString().slice(0, 10)));
   const [faseGlobal, setFaseGlobal] = useState(null);
@@ -2153,7 +2258,7 @@ function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, cliente, onCancel
       {lotesAtivos.length === 0 && <EmptyHint text="Nenhum lote ativo para lançar consumo." />}
       {lotesOrdenados.map((lote) => {
         const valorLote = valores[lote.id] || {};
-        const cabecasNaData = calcularCabecasNaData(lote, saidasPorLote[lote.id] || [], data);
+        const cabecasNaData = calcularCabecasNaData(lote, saidasPorLote[lote.id] || [], data, entradasPorLote[lote.id] || []);
         const preview =
           valorLote.consumo && valorLote.ms && cabecasNaData > 0
             ? (Number(valorLote.consumo) * (Number(valorLote.ms) / 100)) / cabecasNaData
@@ -4365,7 +4470,7 @@ function ImportarLeituraCochoPlanilha({ lotes, leiturasCocho, consumosPorLote, o
 // Gráfico de consumo por lote: consumo de MS em relação ao peso vivo (%).
 // Só entra na lista quem já tem pelo menos 2 lançamentos de consumo com o
 // dado necessário (MS da dieta preenchida).
-function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = {}, clienteId }) {
+function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = {}, entradasPorLote = {}, clienteId }) {
   const [exportando, setExportando] = useState(false);
   const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(clienteId);
   const comDados = lotes
@@ -4376,7 +4481,8 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = 
         lote,
         pesagensPorLote[lote.id] || [],
         consumosPorLote[lote.id] || [],
-        saidasPorLote[lote.id] || []
+        saidasPorLote[lote.id] || [],
+        entradasPorLote[lote.id] || []
       ).filter((p) => p.percentualPV != null),
     }))
     .filter((x) => x.pontosPV.length > 0)

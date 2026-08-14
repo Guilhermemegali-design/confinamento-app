@@ -98,6 +98,24 @@ adicionada em sessão anterior para atender a Belmont).
 
 ## O que foi feito nesta sessão (ordem cronológica)
 
+**Atualização recente — entradas adicionais em lotes ainda em formação**:
+lotes ativos agora
+   exibem o botão `+ Entrada` logo abaixo de `+ Saída`. O formulário registra
+   data, quantidade e observação na nova tabela `entradas_lote`; um trigger
+   soma a quantidade em `lotes_confinamento.num_cabecas` e a exclusão pelo
+   consultor desfaz a soma. O histórico aparece no detalhe do lote. Os
+   cálculos por cabeça passaram a reconstruir o efetivo de cada data,
+   descontando entradas que ainda não haviam acontecido, para não alterar
+   retroativamente consumo, custo e gráficos. RLS: consultor gerencia tudo;
+   cliente vinculado lê; editor/administrador pode inserir; exclusão continua
+   exclusiva do consultor. Migração:
+   `supabase/migrations/20260813133015_adicionar_entradas_lote.sql`.
+
+**Organização dos lotes finalizados**: a área `Lotes` agora mostra somente
+os lotes ativos. O histórico de finalizados foi movido para uma subaba dentro
+de `Análises`, ao lado de `Gráficos e indicadores`, evitando confusão entre a
+operação atual e os resultados encerrados.
+
 1. Logo real + ícone do PWA (foto do gado).
 2. Corrigido link do portal (URL fixa de produção, não mais dinâmica).
 3. Card "GMD esperado médio" no Painel.
