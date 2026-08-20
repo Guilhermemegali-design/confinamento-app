@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import dynamic from "next/dynamic";
 import {
   Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
@@ -3998,6 +3998,7 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
   const [periodoFim, setPeriodoFim] = useState("");
   const [salvando, setSalvando] = useState(null);
   const [cargaExpandida, setCargaExpandida] = useState(null);
+  const [tipoDietaExpandido, setTipoDietaExpandido] = useState(null);
   const [sincronizando, setSincronizando] = useState(false);
   const [mensagemSincronizacao, setMensagemSincronizacao] = useState("");
   const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
@@ -4055,11 +4056,14 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
   // Terminação/Sequestro): mesmas cargas do período, agrupadas pela
   // receita em vez de por ingrediente — complementa a tabela por
   // ingrediente e a lista por carga, sem substituir nenhuma das duas.
+  // Erro por grupo é o mesmo cálculo do resumo geral (soma do erro
+  // absoluto por ingrediente / previsto total) — não a diferença líquida
+  // previsto-real da carga, que mascara erros que se cancelam entre
+  // ingredientes (ex: milho a mais, silagem a menos no mesmo carregamento).
   const porTipoDieta = new Map();
   for (const carga of cargasDia) {
     const tipo = classificarTipoDietaPorReceita(carga.receita);
     const itensCarga = Array.isArray(carga.itens) ? carga.itens : [];
-    const previstoCarga = itensCarga.reduce((s, i) => s + Number(i.peso_previsto || 0), 0);
     const realCarga = itensCarga.reduce((s, i) => s + Number(i.peso_real || 0), 0);
     const custoCarga = itensCarga.reduce((s, item) => {
       const custo = custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente));
@@ -4069,15 +4073,34 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
       Number.isFinite(custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)))
     );
     const chaveTipo = tipo || "outro";
-    const grupo = porTipoDieta.get(chaveTipo) || { tipo, cargas: 0, previsto: 0, real: 0, custo: 0, custoCompleto: true };
+    const grupo = porTipoDieta.get(chaveTipo) || {
+      tipo,
+      cargas: 0,
+      previsto: 0,
+      real: 0,
+      custo: 0,
+      custoCompleto: true,
+      ingredientes: new Map(),
+    };
     grupo.cargas += 1;
-    grupo.previsto += previstoCarga;
     grupo.real += realCarga;
     grupo.custo += custoCarga;
     if (!cargaComCustoCompleto) grupo.custoCompleto = false;
+    for (const item of itensCarga) {
+      const chave = item.ingrediente_chave || chaveIngrediente(item.ingrediente);
+      const atualItem = grupo.ingredientes.get(chave) || { chave, nome: item.ingrediente, previsto: 0, real: 0 };
+      atualItem.previsto += Number(item.peso_previsto || 0);
+      atualItem.real += Number(item.peso_real || 0);
+      grupo.ingredientes.set(chave, atualItem);
+    }
     porTipoDieta.set(chaveTipo, grupo);
   }
-  const gruposPorTipoDieta = [...porTipoDieta.values()].sort((a, b) => b.real - a.real);
+  const gruposPorTipoDieta = [...porTipoDieta.values()].map((grupo) => {
+    const ingredientesGrupo = [...grupo.ingredientes.values()].sort((a, b) => b.real - a.real);
+    const previsto = ingredientesGrupo.reduce((s, i) => s + i.previsto, 0);
+    const erroAbsolutoGrupo = ingredientesGrupo.reduce((s, i) => s + Math.abs(i.real - i.previsto), 0);
+    return { ...grupo, previsto, erroAbsoluto: erroAbsolutoGrupo, ingredientes: ingredientesGrupo };
+  }).sort((a, b) => b.real - a.real);
 
   async function salvarConfiguracao(item, campo, valor) {
     if (!onSalvarMs) return;
@@ -4274,6 +4297,9 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
           <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>
             Erro acumulado por tipo de dieta {modo === "periodo" ? "no período" : "no dia"}
           </div>
+          <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>
+            Erro = soma do erro absoluto por ingrediente (mesmo cálculo do resumo geral acima), não a diferença líquida entre previsto e realizado — por isso pode ficar alto mesmo quando o total previsto bate com o total realizado.
+          </div>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620, fontSize: 12.5 }}>
             <thead>
               <tr style={{ color: "#5C5C58", textAlign: "right" }}>
@@ -4288,27 +4314,78 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
             </thead>
             <tbody>
               {gruposPorTipoDieta.map((grupo) => {
-                const diferenca = grupo.real - grupo.previsto;
-                const percentual = grupo.previsto > 0 ? diferenca / grupo.previsto * 100 : 0;
+                const chaveTipo = grupo.tipo || "outro";
+                const percentual = grupo.previsto > 0 ? grupo.erroAbsoluto / grupo.previsto * 100 : 0;
                 const sinal = corErroCarga(percentual);
+                const expandido = tipoDietaExpandido === chaveTipo;
                 return (
-                  <tr key={grupo.tipo || "outro"} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                  <Fragment key={chaveTipo}>
+                  <tr
+                    onClick={() => setTipoDietaExpandido(expandido ? null : chaveTipo)}
+                    style={{ borderTop: "1px solid #E8E5DE", textAlign: "right", cursor: "pointer" }}
+                  >
                     <td style={{ padding: 10, textAlign: "left", fontWeight: 600 }}>
-                      {grupo.tipo ? labelTipoDieta(grupo.tipo) : "Não identificado"}
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <ChevronDown size={14} style={{ transform: expandido ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s", color: "#8A8A82" }} />
+                        {grupo.tipo ? labelTipoDieta(grupo.tipo) : "Não identificado"}
+                      </span>
                     </td>
                     <td style={{ padding: 10 }}>{grupo.cargas}</td>
                     <td style={{ padding: 10 }}>{grupo.previsto.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
                     <td style={{ padding: 10 }}>{grupo.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
-                    <td style={{ padding: 10 }}>{diferenca > 0 ? "+" : ""}{diferenca.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                    <td style={{ padding: 10 }}>{grupo.erroAbsoluto.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
                     <td style={{ padding: 10 }}>
                       <span style={{ color: sinal.cor, background: sinal.fundo, padding: "4px 7px", borderRadius: 999, fontWeight: 700 }}>
-                        {percentual > 0 ? "+" : ""}{percentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                        {percentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
                       </span>
                     </td>
                     <td style={{ padding: 10, fontWeight: 600 }}>
                       {grupo.custoCompleto ? formatBRL(grupo.custo) : "—"}
                     </td>
                   </tr>
+                  {expandido && (
+                    <tr>
+                      <td colSpan={7} style={{ padding: 0, background: "#FAFAF7" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ color: "#8A8A82", textAlign: "right" }}>
+                              <th style={{ padding: "6px 10px 6px 34px", textAlign: "left", fontWeight: 500 }}>Ingrediente</th>
+                              <th style={{ padding: "6px 10px", fontWeight: 500 }}>Previsto</th>
+                              <th style={{ padding: "6px 10px", fontWeight: 500 }}>Realizado</th>
+                              <th style={{ padding: "6px 10px", fontWeight: 500 }}>Erro kg</th>
+                              <th style={{ padding: "6px 10px", fontWeight: 500 }}>Erro %</th>
+                              <th style={{ padding: "6px 10px", fontWeight: 500 }}>Custo</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {grupo.ingredientes.map((item) => {
+                              const diferencaItem = item.real - item.previsto;
+                              const percentualItem = item.previsto > 0 ? diferencaItem / item.previsto * 100 : 0;
+                              const sinalItem = corErroCarga(percentualItem);
+                              const custo = custoPorIngrediente.get(item.chave);
+                              return (
+                                <tr key={item.chave} style={{ borderTop: "1px solid #EFEDE6", textAlign: "right" }}>
+                                  <td style={{ padding: "6px 10px 6px 34px", textAlign: "left" }}>{item.nome}</td>
+                                  <td style={{ padding: "6px 10px" }}>{item.previsto.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                                  <td style={{ padding: "6px 10px" }}>{item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                                  <td style={{ padding: "6px 10px" }}>{diferencaItem > 0 ? "+" : ""}{diferencaItem.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                                  <td style={{ padding: "6px 10px" }}>
+                                    <span style={{ color: sinalItem.cor, background: sinalItem.fundo, padding: "3px 6px", borderRadius: 999, fontWeight: 700 }}>
+                                      {percentualItem > 0 ? "+" : ""}{percentualItem.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: "6px 10px", fontWeight: 600 }}>
+                                    {Number.isFinite(custo) ? formatBRL(item.real * custo) : "—"}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
