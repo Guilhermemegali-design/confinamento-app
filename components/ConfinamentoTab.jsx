@@ -2438,6 +2438,22 @@ function normalizarFasePlanilha(valor) {
   return null;
 }
 
+// Classificação de receita pra agrupar cargas por tipo de dieta na aba
+// Cargas (erro acumulado por fase). Não reaproveita normalizarFasePlanilha
+// porque essa é usada pra preencher dieta_fase do consumo, e a coluna no
+// banco não aceita "sequestro" (check constraint só tem as 4 fases de
+// sempre) — aqui é só agrupamento visual, sem gravar nada.
+function classificarTipoDietaPorReceita(receita) {
+  const norm = normalizarCabecalho(receita).replace(/\s+/g, "");
+  if (!norm) return null;
+  if (norm.startsWith("adapt")) return "adaptacao";
+  if (norm.startsWith("recri")) return "recria";
+  if (norm.startsWith("cresc")) return "crescimento";
+  if (norm.startsWith("termin")) return "terminacao";
+  if (norm.startsWith("sequ")) return "sequestro";
+  return null;
+}
+
 // Datas podem vir como objeto Date (quando a célula do Excel está formatada
 // como data), texto dd/mm/aaaa, aaaa-mm-dd, ou o serial numérico do Excel
 // (dias desde 30/12/1899) quando a planilha guarda a data como texto puro.
@@ -4035,6 +4051,34 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
   const custoDietaKgMs = totalMs > 0 ? custoTotal / totalMs : null;
   const faltamCustos = ingredientes.filter((i) => !Number.isFinite(custoPorIngrediente.get(i.chave))).length;
 
+  // Erro acumulado por tipo de dieta (Adaptação/Recria/Crescimento/
+  // Terminação/Sequestro): mesmas cargas do período, agrupadas pela
+  // receita em vez de por ingrediente — complementa a tabela por
+  // ingrediente e a lista por carga, sem substituir nenhuma das duas.
+  const porTipoDieta = new Map();
+  for (const carga of cargasDia) {
+    const tipo = classificarTipoDietaPorReceita(carga.receita);
+    const itensCarga = Array.isArray(carga.itens) ? carga.itens : [];
+    const previstoCarga = itensCarga.reduce((s, i) => s + Number(i.peso_previsto || 0), 0);
+    const realCarga = itensCarga.reduce((s, i) => s + Number(i.peso_real || 0), 0);
+    const custoCarga = itensCarga.reduce((s, item) => {
+      const custo = custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente));
+      return s + (Number.isFinite(custo) ? Number(item.peso_real || 0) * custo : 0);
+    }, 0);
+    const cargaComCustoCompleto = itensCarga.every((item) =>
+      Number.isFinite(custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)))
+    );
+    const chaveTipo = tipo || "outro";
+    const grupo = porTipoDieta.get(chaveTipo) || { tipo, cargas: 0, previsto: 0, real: 0, custo: 0, custoCompleto: true };
+    grupo.cargas += 1;
+    grupo.previsto += previstoCarga;
+    grupo.real += realCarga;
+    grupo.custo += custoCarga;
+    if (!cargaComCustoCompleto) grupo.custoCompleto = false;
+    porTipoDieta.set(chaveTipo, grupo);
+  }
+  const gruposPorTipoDieta = [...porTipoDieta.values()].sort((a, b) => b.real - a.real);
+
   async function salvarConfiguracao(item, campo, valor) {
     if (!onSalvarMs) return;
     const numero = normalizarNumeroPlanilha(valor);
@@ -4224,6 +4268,53 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
           </tbody>
         </table>
       </div>
+
+      {gruposPorTipoDieta.length > 0 && (
+        <div style={{ ...styles.card, marginTop: 12, overflowX: "auto", padding: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>
+            Erro acumulado por tipo de dieta {modo === "periodo" ? "no período" : "no dia"}
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620, fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ color: "#5C5C58", textAlign: "right" }}>
+                <th style={{ padding: 10, textAlign: "left" }}>Fase</th>
+                <th style={{ padding: 10 }}>Cargas</th>
+                <th style={{ padding: 10 }}>Previsto</th>
+                <th style={{ padding: 10 }}>Realizado</th>
+                <th style={{ padding: 10 }}>Erro kg</th>
+                <th style={{ padding: 10 }}>Erro %</th>
+                <th style={{ padding: 10 }}>Custo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gruposPorTipoDieta.map((grupo) => {
+                const diferenca = grupo.real - grupo.previsto;
+                const percentual = grupo.previsto > 0 ? diferenca / grupo.previsto * 100 : 0;
+                const sinal = corErroCarga(percentual);
+                return (
+                  <tr key={grupo.tipo || "outro"} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                    <td style={{ padding: 10, textAlign: "left", fontWeight: 600 }}>
+                      {grupo.tipo ? labelTipoDieta(grupo.tipo) : "Não identificado"}
+                    </td>
+                    <td style={{ padding: 10 }}>{grupo.cargas}</td>
+                    <td style={{ padding: 10 }}>{grupo.previsto.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                    <td style={{ padding: 10 }}>{grupo.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                    <td style={{ padding: 10 }}>{diferenca > 0 ? "+" : ""}{diferenca.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                    <td style={{ padding: 10 }}>
+                      <span style={{ color: sinal.cor, background: sinal.fundo, padding: "4px 7px", borderRadius: 999, fontWeight: 700 }}>
+                        {percentual > 0 ? "+" : ""}{percentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                      </span>
+                    </td>
+                    <td style={{ padding: 10, fontWeight: 600 }}>
+                      {grupo.custoCompleto ? formatBRL(grupo.custo) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div style={{ ...styles.card, marginTop: 12 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8 }}>Resultado por carga</div>
