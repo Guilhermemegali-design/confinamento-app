@@ -393,7 +393,11 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
     }));
     const { data, error } = await supabase
       .from("cargas_vagao")
-      .upsert(paraInserir, { onConflict: "cliente_id,carga_codigo" })
+      // O "Id Carga" da Hook não é globalmente único — o contador da máquina
+      // reseta periodicamente e reaproveita números em datas bem diferentes.
+      // A chave de dedup precisa incluir a data, senão uma carga nova
+      // sobrescreve silenciosamente uma carga antiga com o mesmo código.
+      .upsert(paraInserir, { onConflict: "cliente_id,data,carga_codigo" })
       .select();
     if (error) throw error;
     const importadasPorId = new Map((data || []).map((carga) => [carga.id, carga]));
