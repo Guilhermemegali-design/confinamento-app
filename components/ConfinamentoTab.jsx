@@ -2590,10 +2590,24 @@ function processarPlanilhaSimples(workbook, lotes, existentes) {
   });
 }
 
+// Uma importação típica (formato longo) lê a mesma aba CARGAS/DESCARGAS/
+// RECEITAS várias vezes (detecção de formato + receitas + descargas +
+// fases) — em arquivos grandes (exportação de semanas inteiras, milhares
+// de linhas) isso significa reprocessar sheet_to_json repetidas vezes e
+// pode travar a tela por um bom tempo. Cacheia por workbook+aba pra cada
+// aba só ser convertida uma vez por importação.
+const cacheLinhasDaAba = new WeakMap();
 function linhasDaAba(workbook, nome) {
+  let porAba = cacheLinhasDaAba.get(workbook);
+  if (!porAba) {
+    porAba = new Map();
+    cacheLinhasDaAba.set(workbook, porAba);
+  }
+  if (porAba.has(nome)) return porAba.get(nome);
   const nomeReal = workbook.SheetNames.find((n) => normalizarCabecalho(n).replace(/\s+/g, "") === nome);
-  if (!nomeReal) return null;
-  return leitorExcelCarregado.utils.sheet_to_json(workbook.Sheets[nomeReal], { header: 1, defval: null });
+  const linhas = nomeReal ? leitorExcelCarregado.utils.sheet_to_json(workbook.Sheets[nomeReal], { header: 1, defval: null }) : null;
+  porAba.set(nome, linhas);
+  return linhas;
 }
 
 // Algumas exportações do vagão chamam a mesma aba em espanhol (RECETAS) e
