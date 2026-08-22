@@ -746,6 +746,14 @@ export default function ConfinamentoTab({
             } = item;
             const faixaMSUltimo = faixaConsumoMS(consumoMSPercentualPV);
             const faixaMSMedio = faixaConsumoMS(consumoMSPercentualPVMedio);
+            const saidasLoteAtivo = saidasPorLote[lote.id] || [];
+            const composicaoSaidasAtivo = saidasLoteAtivo.length > 1
+              ? saidasLoteAtivo.reduce((acc, s) => {
+                  const tipo = s.tipo || "venda";
+                  acc[tipo] = (acc[tipo] || 0) + Number(s.num_cabecas || 0);
+                  return acc;
+                }, {})
+              : null;
             return (
               <div key={lote.id} style={styles.listItem} className="desktop-lote-card">
                 {ordenacao === "manual" && (
@@ -776,6 +784,28 @@ export default function ConfinamentoTab({
                     <div style={styles.listItemSub}>
                       {cabecasSaidas > 0 ? `${cabecasRestantes} de ${lote.num_cabecas} cab.` : `${lote.num_cabecas} cab.`} · entrada {formatDataBR(lote.data_entrada)} · {diasConfinamento}d
                     </div>
+                    {composicaoSaidasAtivo && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#5C5C58", background: "#F1EFE8", padding: "2px 7px", borderRadius: 999 }}>
+                          {saidasLoteAtivo.length} saídas parciais
+                        </span>
+                        {composicaoSaidasAtivo.venda > 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#247A52", background: "#E8F3EC", padding: "2px 7px", borderRadius: 999 }}>
+                            {composicaoSaidasAtivo.venda} venda
+                          </span>
+                        )}
+                        {composicaoSaidasAtivo.doenca_trauma > 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#9A6036", background: "#FFF5ED", padding: "2px 7px", borderRadius: 999 }}>
+                            {composicaoSaidasAtivo.doenca_trauma} doença/trauma
+                          </span>
+                        )}
+                        {composicaoSaidasAtivo.morte > 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
+                            {composicaoSaidasAtivo.morte} morte
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {consumoMS != null && (
                       <div style={{ fontSize: 11.5, color: "#1F4D45", fontWeight: 600, marginTop: 3 }}>
                         MS {consumoMS.toFixed(2)} kg/cab/dia
