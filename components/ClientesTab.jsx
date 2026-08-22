@@ -5,6 +5,7 @@ import { Trash2, Search, Settings2, Users, Beef, Layers3, TrendingUp, CalendarDa
 import { styles } from "@/lib/styles";
 import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryButton } from "./UI";
 import ConfinamentoTab from "./ConfinamentoTab";
+import { calcularGmdFinalizado } from "@/lib/confinamento";
 
 export default function ClientesTab({
   clientes, lotes, pesagens, consumos, saidas = [], entradas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
@@ -362,6 +363,50 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
     };
   }).filter((item) => item.cabecas > 0 || item.entradas > 0).sort((a, b) => b.cabecas - a.cabecas);
 
+  // Mortalidade e GMD (realizado x esperado) — "total que passou pelo lote"
+  // é reconstruído como cabeças atuais + soma de todas as saídas já
+  // lançadas (venda ou morte), já que num_cabecas só guarda o que resta.
+  const lotesPorCliente = new Map();
+  for (const lote of lotes) {
+    if (!lotesPorCliente.has(lote.cliente_id)) lotesPorCliente.set(lote.cliente_id, []);
+    lotesPorCliente.get(lote.cliente_id).push(lote);
+  }
+  const desempenhoZootecnico = clientes.map((cliente) => {
+    const lotesCliente = lotesPorCliente.get(cliente.id) || [];
+    if (lotesCliente.length === 0) return null;
+    const loteIdsCliente = new Set(lotesCliente.map((l) => l.id));
+    const saidasCliente = saidas.filter((s) => loteIdsCliente.has(s.lote_id));
+    const mortes = saidasCliente.filter((s) => s.tipo === "morte").reduce((soma, s) => soma + Number(s.num_cabecas || 0), 0);
+    const totalHistorico = lotesCliente.reduce((soma, l) => soma + Number(l.num_cabecas || 0), 0)
+      + saidasCliente.reduce((soma, s) => soma + Number(s.num_cabecas || 0), 0);
+    const taxaMortalidade = totalHistorico > 0 ? (mortes / totalHistorico) * 100 : null;
+
+    const finalizados = lotesCliente.filter((l) => l.data_saida && l.peso_saida_vivo != null);
+    const gmdsReais = finalizados.map((l) => calcularGmdFinalizado(l)).filter((v) => v != null);
+    const gmdReal = gmdsReais.length ? gmdsReais.reduce((soma, v) => soma + v, 0) / gmdsReais.length : null;
+
+    const comEsperado = lotesCliente.filter((l) => l.gmd_esperado != null);
+    const somaEsperadoXCab = comEsperado.reduce((soma, l) => soma + Number(l.gmd_esperado) * Number(l.num_cabecas || 0), 0);
+    const somaCabEsperado = comEsperado.reduce((soma, l) => soma + Number(l.num_cabecas || 0), 0);
+    const gmdEsperado = somaCabEsperado > 0 ? somaEsperadoXCab / somaCabEsperado : null;
+
+    return { cliente, mortes, totalHistorico, taxaMortalidade, gmdReal, gmdEsperado, lotesFinalizados: finalizados.length };
+  }).filter((item) => item && (item.taxaMortalidade != null || item.gmdReal != null || item.gmdEsperado != null));
+
+  const totalMortesGeral = desempenhoZootecnico.reduce((soma, item) => soma + item.mortes, 0);
+  const totalHistoricoGeral = desempenhoZootecnico.reduce((soma, item) => soma + item.totalHistorico, 0);
+  const taxaMortalidadeGeral = totalHistoricoGeral > 0 ? (totalMortesGeral / totalHistoricoGeral) * 100 : null;
+
+  const todosGmdsReais = lotes.filter((l) => l.data_saida && l.peso_saida_vivo != null)
+    .map((l) => calcularGmdFinalizado(l)).filter((v) => v != null);
+  const gmdMedioRealGeral = todosGmdsReais.length
+    ? todosGmdsReais.reduce((soma, v) => soma + v, 0) / todosGmdsReais.length
+    : null;
+  const lotesComEsperadoGeral = lotes.filter((l) => l.gmd_esperado != null);
+  const somaEsperadoXCabGeral = lotesComEsperadoGeral.reduce((soma, l) => soma + Number(l.gmd_esperado) * Number(l.num_cabecas || 0), 0);
+  const somaCabEsperadoGeral = lotesComEsperadoGeral.reduce((soma, l) => soma + Number(l.num_cabecas || 0), 0);
+  const gmdMedioEsperadoGeral = somaCabEsperadoGeral > 0 ? somaEsperadoXCabGeral / somaCabEsperadoGeral : null;
+
   const comparativoAnual = anosComDados.map((anoItem) => {
     const entradas = lotes.filter((l) => String(l.data_entrada).startsWith(`${anoItem}-`)).reduce((s, l) => s + Number(l.num_cabecas || 0), 0);
     const clientesAno = new Set(lotes.filter((l) => String(l.data_entrada).startsWith(`${anoItem}-`)).map((l) => l.cliente_id)).size;
@@ -428,6 +473,48 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
         </table>
       </div>
 
+      {desempenhoZootecnico.length > 0 && (
+        <>
+          <div className="gestao-section-header"><div><span>ZOOTECNIA</span><h3>Desempenho dos lotes</h3></div></div>
+          <div className="gestao-kpis" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+            <KpiGestao
+              icone={<TrendingUp size={18} />}
+              rotulo="GMD esperado médio"
+              valor={gmdMedioEsperadoGeral != null ? `${gmdMedioEsperadoGeral.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg/dia` : "—"}
+              detalhe="ponderado por cabeças, todos os lotes"
+            />
+            <KpiGestao
+              icone={<Beef size={18} />}
+              rotulo="GMD realizado médio"
+              valor={gmdMedioRealGeral != null ? `${gmdMedioRealGeral.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg/dia` : "—"}
+              detalhe="lotes já finalizados"
+              destaque
+            />
+            <KpiGestao
+              icone={<ArrowUpRight size={18} />}
+              rotulo="Taxa de mortalidade"
+              valor={taxaMortalidadeGeral != null ? `${taxaMortalidadeGeral.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%` : "—"}
+              detalhe={`${totalMortesGeral.toLocaleString("pt-BR")} de ${totalHistoricoGeral.toLocaleString("pt-BR")} animais`}
+            />
+          </div>
+          <div className="gestao-panel">
+            <div className="gestao-panel-title"><div><span>POR CLIENTE</span><h3>GMD esperado x realizado e mortalidade</h3></div></div>
+            {desempenhoZootecnico
+              .sort((a, b) => (b.gmdReal || 0) - (a.gmdReal || 0))
+              .map(({ cliente, gmdReal, gmdEsperado, taxaMortalidade, lotesFinalizados }) => (
+                <GmdClienteRow
+                  key={cliente.id}
+                  nome={cliente.nome}
+                  gmdReal={gmdReal}
+                  gmdEsperado={gmdEsperado}
+                  taxaMortalidade={taxaMortalidade}
+                  lotesFinalizados={lotesFinalizados}
+                />
+              ))}
+          </div>
+        </>
+      )}
+
       <div className="gestao-bottom-grid">
         <div className="gestao-panel">
           <div className="gestao-panel-title"><div><span>CARTEIRA DE CLIENTES</span><h3>Clientes em acompanhamento</h3></div></div>
@@ -448,6 +535,48 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
 
 function KpiGestao({ icone, rotulo, valor, detalhe, destaque = false }) {
   return <div className={`gestao-kpi${destaque ? " destaque" : ""}`}><div className="gestao-kpi-icon">{icone}</div><span>{rotulo}</span><strong>{valor}</strong><small>{detalhe}</small></div>;
+}
+
+// Compara GMD esperado x realizado (barra dupla) e mostra a mortalidade do
+// cliente com um selo colorido — verde até 2%, âmbar até 5%, vermelho acima
+// (limiares arbitrários, só para leitura visual rápida no painel).
+function corMortalidade(taxa) {
+  if (taxa == null) return { cor: "#8A8A84", fundo: "#F1EFE8" };
+  if (taxa <= 2) return { cor: "#247A52", fundo: "#E8F3EC" };
+  if (taxa <= 5) return { cor: "#9A6036", fundo: "#FFF5ED" };
+  return { cor: "#B3382C", fundo: "#FBEAE7" };
+}
+
+function GmdClienteRow({ nome, gmdReal, gmdEsperado, taxaMortalidade, lotesFinalizados }) {
+  const maxBarra = Math.max(gmdReal || 0, gmdEsperado || 0, 0.1);
+  const selo = corMortalidade(taxaMortalidade);
+  const atingiuMeta = gmdReal != null && gmdEsperado != null ? gmdReal >= gmdEsperado : null;
+  return (
+    <div className="gestao-gmd-row">
+      <div className="gestao-gmd-nome">
+        <strong>{nome}</strong>
+        <span>{lotesFinalizados} lote(s) finalizado(s)</span>
+      </div>
+      <div className="gestao-gmd-bars">
+        <div className="gestao-gmd-bar-track">
+          <div className="gestao-gmd-bar esperado" style={{ width: gmdEsperado != null ? `${Math.min(100, (gmdEsperado / maxBarra) * 100)}%` : "0%" }} />
+        </div>
+        <div className="gestao-gmd-bar-track">
+          <div
+            className={`gestao-gmd-bar realizado${atingiuMeta === false ? " abaixo" : ""}`}
+            style={{ width: gmdReal != null ? `${Math.min(100, (gmdReal / maxBarra) * 100)}%` : "0%" }}
+          />
+        </div>
+      </div>
+      <div className="gestao-gmd-valores">
+        <span title="GMD esperado"><i className="esperado" />{gmdEsperado != null ? `${gmdEsperado.toFixed(2)} kg/dia` : "—"}</span>
+        <span title="GMD realizado"><i className="realizado" />{gmdReal != null ? `${gmdReal.toFixed(2)} kg/dia` : "—"}</span>
+      </div>
+      <div className="gestao-gmd-mortalidade" style={{ color: selo.cor, background: selo.fundo }}>
+        {taxaMortalidade != null ? `${taxaMortalidade.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% mortalidade` : "sem mortes"}
+      </div>
+    </div>
+  );
 }
 
 function CardGrafico({ titulo, subtitulo, children }) {

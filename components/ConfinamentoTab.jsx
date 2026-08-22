@@ -75,6 +75,15 @@ const FASES_DIETA = [
 ];
 const FASE_LABEL = Object.fromEntries(FASES_DIETA.map((f) => [f.value, f.label]));
 
+const CATEGORIAS_LOTE = [
+  { value: "", label: "Não informada" },
+  { value: "vacas", label: "Vacas" },
+  { value: "novilhas", label: "Novilhas" },
+  { value: "boi_magro", label: "Boi magro" },
+  { value: "bezerro", label: "Bezerro" },
+];
+const CATEGORIA_LOTE_LABEL = Object.fromEntries(CATEGORIAS_LOTE.filter((c) => c.value).map((c) => [c.value, c.label]));
+
 const OPCOES_ORDENACAO = [
   { value: "manual", label: "Ordem manual" },
   { value: "entrada_desc", label: "Mais recentes" },
@@ -276,6 +285,22 @@ export default function ConfinamentoTab({
     );
   }
 
+  if (tela.modo === "nova-morte") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    const { cabecasRestantes } = calcularResumoSaidas(lote, saidasPorLote[lote.id] || []);
+    return (
+      <FormMorte
+        cabecasRestantes={cabecasRestantes}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAdicionarSaida(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
   if (tela.modo === "nova-entrada") {
     const lote = lotes.find((l) => l.id === tela.loteId);
     if (!lote) return <EmptyHint text="Lote não encontrado." />;
@@ -464,6 +489,12 @@ export default function ConfinamentoTab({
           (() => setTela({ modo: "nova-saida", loteId: lote.id }))
         }
         onExcluirSaida={onExcluirSaida}
+        onNovaMorte={
+          onAdicionarSaida &&
+          indicadores.status === "Ativo" &&
+          indicadores.cabecasRestantes > 0 &&
+          (() => setTela({ modo: "nova-morte", loteId: lote.id }))
+        }
         onNovaEntrada={
           onAdicionarEntrada &&
           indicadores.status === "Ativo" &&
@@ -711,7 +742,7 @@ export default function ConfinamentoTab({
                 >
                   <div style={styles.avatar}>{lote.nome.charAt(0)}</div>
                   <div style={{ flex: 1, textAlign: "left" }}>
-                    <div style={styles.listItemTitle}>{lote.nome}</div>
+                    <div style={styles.listItemTitle}>{lote.nome}{lote.categoria ? ` · ${CATEGORIA_LOTE_LABEL[lote.categoria]}` : ""}</div>
                     <div style={styles.listItemSub}>
                       {cabecasSaidas > 0 ? `${cabecasRestantes} de ${lote.num_cabecas} cab.` : `${lote.num_cabecas} cab.`} · entrada {formatDataBR(lote.data_entrada)} · {diasConfinamento}d
                     </div>
@@ -783,7 +814,7 @@ export default function ConfinamentoTab({
             <button key={lote.id} style={styles.listItem} className="desktop-lote-card" onClick={() => setTela({ modo: "lote", id: lote.id })}>
               <div style={{ ...styles.avatar, background: "#F1EFE8", color: "#5C5C58" }}>{lote.nome.charAt(0)}</div>
               <div style={{ flex: 1, textAlign: "left" }}>
-                <div style={styles.listItemTitle}>{lote.nome}</div>
+                <div style={styles.listItemTitle}>{lote.nome}{lote.categoria ? ` · ${CATEGORIA_LOTE_LABEL[lote.categoria]}` : ""}</div>
                 <div style={styles.listItemSub}>
                   {lote.num_cabecas} cab. · saída {formatDataBR(lote.data_saida)} · {diasConfinamento}d
                 </div>
@@ -929,6 +960,7 @@ function LoteDetalhe({
   onBack, onEditar,
   onNovaPesagem, onExcluirPesagem,
   onNovaSaida, onExcluirSaida,
+  onNovaMorte,
   onNovaEntrada, onExcluirEntrada,
   onNovoConsumo, onEditarConsumo, onExcluirConsumo,
 }) {
@@ -949,6 +981,7 @@ function LoteDetalhe({
 
       <div style={styles.card}>
         <Field label="Status" value={indicadores.status} highlight />
+        {lote.categoria && <Field label="Categoria" value={CATEGORIA_LOTE_LABEL[lote.categoria]} />}
         <Field
           label="Nº de cabeças"
           value={indicadores.cabecasSaidas > 0 ? `${indicadores.cabecasRestantes} restantes de ${lote.num_cabecas}` : lote.num_cabecas}
@@ -1024,13 +1057,16 @@ function LoteDetalhe({
         <FechamentoCustoCard cliente={cliente} lote={lote} indicadores={indicadores} saidas={saidas} consumoIngredientes={consumoIngredientes} />
       )}
 
-      {(onNovaSaida || onNovaEntrada || saidasOrdenadas.length > 0) && (
+      {(onNovaSaida || onNovaMorte || onNovaEntrada || saidasOrdenadas.length > 0) && (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
             <div style={{ ...styles.sectionTitle, margin: 0 }}>Saídas registradas</div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 6 }}>
               {onNovaSaida && (
                 <button onClick={onNovaSaida} style={styles.editLinkBtn}>+ Saída</button>
+              )}
+              {onNovaMorte && (
+                <button onClick={onNovaMorte} style={{ ...styles.editLinkBtn, background: "#8A3B2F" }}>+ Morte</button>
               )}
               {onNovaEntrada && (
                 <button onClick={onNovaEntrada} style={styles.editLinkBtn}>+ Entrada</button>
@@ -1043,7 +1079,14 @@ function LoteDetalhe({
             saidasOrdenadas.map((s) => (
               <div key={s.id} style={styles.rowCard}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13.5 }}>{formatDataBR(s.data)}</div>
+                  <div style={{ fontWeight: 600, fontSize: 13.5 }}>
+                    {formatDataBR(s.data)}
+                    {s.tipo === "morte" && (
+                      <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
+                        MORTE
+                      </span>
+                    )}
+                  </div>
                   <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
                     {s.num_cabecas} cab.{s.peso_saida_vivo != null ? ` · ${s.peso_saida_vivo} kg vivo/cab.` : ""}
                     {s.rendimento_carcaca != null ? ` · ${s.rendimento_carcaca}% carcaça` : ""}
@@ -1053,7 +1096,7 @@ function LoteDetalhe({
                 {onExcluirSaida && (
                   <button
                     onClick={() => {
-                      if (confirm("Excluir esta saída?")) onExcluirSaida(s.id);
+                      if (confirm(s.tipo === "morte" ? "Excluir este registro de morte?" : "Excluir esta saída?")) onExcluirSaida(s.id);
                     }}
                     style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex" }}
                   >
@@ -1627,6 +1670,7 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
 function FormLote({ lote, onCancel, onSave, onDelete }) {
   const editando = Boolean(lote);
   const [nome, setNome] = useState(lote?.nome || "");
+  const [categoria, setCategoria] = useState(lote?.categoria || "");
   const [dataEntrada, setDataEntrada] = useState(lote?.data_entrada || new Date().toISOString().slice(0, 10));
   const [numCabecas, setNumCabecas] = useState(lote?.num_cabecas != null ? String(lote.num_cabecas) : "");
   const [pesoEntrada, setPesoEntrada] = useState(lote?.peso_entrada != null ? String(lote.peso_entrada) : "");
@@ -1653,6 +1697,7 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
     try {
       await onSave({
         nome: nome.trim(),
+        categoria: categoria || null,
         data_entrada: dataEntrada,
         num_cabecas: Number(numCabecas),
         peso_entrada: Number(pesoEntrada),
@@ -1681,6 +1726,7 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
       <BackHeader title={editando ? "Editar lote" : "Novo lote"} onBack={onCancel} />
       <div style={styles.card}>
         <InputField label="Nome do lote *" value={nome} onChange={setNome} placeholder="Ex: Bois 1" />
+        <SelectField label="Categoria dos animais" value={categoria} onChange={setCategoria} options={CATEGORIAS_LOTE} />
         <InputField label="Data de entrada *" type="date" value={dataEntrada} onChange={setDataEntrada} />
         <InputField label="Nº de cabeças *" type="number" value={numCabecas} onChange={setNumCabecas} placeholder="Ex: 130" />
         <InputField label="Peso de entrada (kg) *" type="number" value={pesoEntrada} onChange={setPesoEntrada} placeholder="Ex: 410" />
@@ -1927,6 +1973,62 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
       </div>
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
         {salvando ? "Salvando..." : "Salvar saída"}
+      </PrimaryButton>
+    </div>
+  );
+}
+
+// Registra morte de animais do lote — mesma mecânica de saidas_lote (o
+// trigger do banco desconta as cabeças e pode finalizar o lote sozinho se
+// zerar), mas sem os campos econômicos da venda: um óbito não gera receita,
+// então calcularFechamentoCusto (lib/confinamento.js) exclui tipo "morte"
+// das arrobas vendidas/receita/custo operacional pra não distorcer o
+// fechamento financeiro do lote.
+function FormMorte({ cabecasRestantes, onCancel, onSave }) {
+  const [data, setData] = useState(new Date().toISOString().slice(0, 10));
+  const [numCabecas, setNumCabecas] = useState("");
+  const [observacoes, setObservacoes] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= cabecasRestantes;
+  const valido = data && numCabecasValido;
+
+  async function handleSave() {
+    setSalvando(true);
+    try {
+      await onSave({
+        data,
+        num_cabecas: Number(numCabecas),
+        tipo: "morte",
+        observacoes: observacoes || null,
+      });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title="Registrar morte" onBack={onCancel} />
+      <div style={styles.card}>
+        <InputField label="Data *" type="date" value={data} onChange={setData} />
+        <InputField
+          label={`Nº de cabeças * (restam ${cabecasRestantes})`}
+          type="number"
+          value={numCabecas}
+          onChange={setNumCabecas}
+          placeholder={`Máx. ${cabecasRestantes}`}
+        />
+        {numCabecas !== "" && !numCabecasValido && (
+          <div style={{ fontSize: 11.5, color: "#B8763E", padding: "0 0 8px" }}>
+            Só restam {cabecasRestantes} cabeça(s) nesse lote.
+          </div>
+        )}
+      </div>
+      <div style={styles.card}>
+        <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: causa da morte" />
+      </div>
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : "Registrar morte"}
       </PrimaryButton>
     </div>
   );
