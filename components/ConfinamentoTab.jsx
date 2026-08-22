@@ -839,7 +839,18 @@ export default function ConfinamentoTab({
           <div className="desktop-lotes-grid">
           {finalizados.map((item) => {
             const { lote, diasConfinamento, gmdVivoEntradaSaida, consumoMS, consumoMSMedio, consumoMSPercentualPVMedio } = item;
-            const fechamento = calcularFechamentoCusto(lote, item, saidasPorLote[lote.id] || []);
+            const saidasLote = saidasPorLote[lote.id] || [];
+            const fechamento = calcularFechamentoCusto(lote, item, saidasLote);
+            // Lote fechado com mais de uma saída lançada (não foi tudo de
+            // uma vez) — mostra a composição (venda/morte/doença ou trauma)
+            // pra facilitar ver de relance o que aconteceu com o lote.
+            const composicaoSaidas = saidasLote.length > 1
+              ? saidasLote.reduce((acc, s) => {
+                  const tipo = s.tipo || "venda";
+                  acc[tipo] = (acc[tipo] || 0) + Number(s.num_cabecas || 0);
+                  return acc;
+                }, {})
+              : null;
             return (
             <button key={lote.id} style={styles.listItem} className="desktop-lote-card" onClick={() => setTela({ modo: "lote", id: lote.id })}>
               <div style={{ ...styles.avatar, background: "#F1EFE8", color: "#5C5C58" }}>{lote.nome.charAt(0)}</div>
@@ -848,6 +859,28 @@ export default function ConfinamentoTab({
                 <div style={styles.listItemSub}>
                   {lote.num_cabecas} cab. · saída {formatDataBR(lote.data_saida)} · {diasConfinamento}d
                 </div>
+                {composicaoSaidas && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#5C5C58", background: "#F1EFE8", padding: "2px 7px", borderRadius: 999 }}>
+                      {saidasLote.length} saídas parciais
+                    </span>
+                    {composicaoSaidas.venda > 0 && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#247A52", background: "#E8F3EC", padding: "2px 7px", borderRadius: 999 }}>
+                        {composicaoSaidas.venda} venda
+                      </span>
+                    )}
+                    {composicaoSaidas.doenca_trauma > 0 && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#9A6036", background: "#FFF5ED", padding: "2px 7px", borderRadius: 999 }}>
+                        {composicaoSaidas.doenca_trauma} doença/trauma
+                      </span>
+                    )}
+                    {composicaoSaidas.morte > 0 && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
+                        {composicaoSaidas.morte} morte
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontWeight: 700, fontSize: 14, color: "#22231F" }}>
