@@ -864,6 +864,49 @@ export default function ConfinamentoTab({
         </>
       ) : aba === "lotes-finalizados" ? (
         <>
+          {(() => {
+            // Saídas parciais lançadas em lotes que ainda estão ativos (o
+            // lote em si não fechou, mas parte dos animais já saiu) — sem
+            // isso, esses animais só apareciam abrindo o lote ativo um por
+            // um; aqui ficam visíveis junto com os finalizados.
+            const saidasParciaisAtivos = ativos
+              .flatMap((item) => (saidasPorLote[item.lote.id] || []).map((s) => ({ ...s, loteNome: item.lote.nome, loteId: item.lote.id })))
+              .sort((a, b) => b.data.localeCompare(a.data));
+            if (saidasParciaisAtivos.length === 0) return null;
+            return (
+              <>
+                <SectionTitle>Saídas parciais (lotes ainda ativos)</SectionTitle>
+                {saidasParciaisAtivos.map((s) => (
+                  <button
+                    key={s.id}
+                    style={{ ...styles.rowCard, width: "100%", cursor: "pointer" }}
+                    onClick={() => setTela({ modo: "lote", id: s.loteId })}
+                  >
+                    <div style={{ flex: 1, textAlign: "left" }}>
+                      <div style={{ fontWeight: 600, fontSize: 13.5 }}>
+                        {s.loteNome}
+                        {s.tipo === "morte" && (
+                          <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
+                            MORTE
+                          </span>
+                        )}
+                        {s.tipo === "doenca_trauma" && (
+                          <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#9A6036", background: "#FFF5ED", padding: "2px 7px", borderRadius: 999 }}>
+                            DOENÇA/TRAUMA
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
+                        {formatDataBR(s.data)} · {s.num_cabecas} cab.{s.peso_saida_vivo != null ? ` · ${s.peso_saida_vivo} kg vivo/cab.` : ""}
+                        {s.observacoes ? ` · ${s.observacoes}` : ""}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </>
+            );
+          })()}
+
           <SectionTitle>Lotes finalizados</SectionTitle>
           {finalizados.length === 0 && <EmptyHint text="Nenhum lote finalizado ainda." />}
           <div className="desktop-lotes-grid">
