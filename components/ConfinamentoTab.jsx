@@ -592,6 +592,11 @@ export default function ConfinamentoTab({
                 + Nova dieta
               </button>
             )}
+            {aba === "painel" && (
+              <button onClick={() => exportarResumoPainelPDF(cliente, painel)} style={styles.secondaryActionBtn}>
+                Exportar PDF
+              </button>
+            )}
           </div>
         </div>
         <div style={styles.contextLabel}>
@@ -1665,6 +1670,102 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
 
   const nomeSeguro = String(lote.nome || "lote").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
   doc.save(`resultado-${nomeSeguro || "lote"}.pdf`);
+}
+
+// Exporta o resumo da aba "Painel" de um cliente (mesmos n\u00fameros dos
+// PainelCard da tela) \u2014 mesmo padr\u00e3o visual de exportarResultadoLotePDF.
+export async function exportarResumoPainelPDF(cliente, painel) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const largura = doc.internal.pageSize.getWidth();
+  const altura = doc.internal.pageSize.getHeight();
+  const margem = 40;
+  const verde = [31, 77, 69];
+  const laranja = [196, 122, 61];
+  const azul = [54, 103, 139];
+  const cinza = [92, 92, 88];
+  const cinzaClaro = [246, 245, 241];
+
+  doc.setFillColor(...verde);
+  doc.roundedRect(0, 0, largura, 100, 0, 0, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text("RASTRO CONFINAMENTO", margem, 31);
+  doc.setFontSize(22);
+  doc.text("Resumo da opera\u00e7\u00e3o", margem, 62);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(205, 226, 220);
+  doc.text(`${cliente?.nome || "Cliente"}  |  Gerado em ${new Date().toLocaleDateString("pt-BR")}`, margem, 82);
+
+  let y = 124;
+
+  function secao(titulo, linhas, cor) {
+    const altoNecessario = 27 + linhas.length * 24;
+    if (y + altoNecessario > altura - 60) {
+      doc.addPage();
+      y = margem;
+    }
+    doc.setFillColor(...cinzaClaro);
+    doc.roundedRect(margem, y, largura - margem * 2, 27 + linhas.length * 24, 8, 8, "F");
+    doc.setFillColor(...cor);
+    doc.roundedRect(margem, y, 5, 27 + linhas.length * 24, 3, 3, "F");
+    doc.setTextColor(...cor);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text(titulo, margem + 16, y + 19);
+    let linhaY = y + 39;
+    linhas.forEach(([label, valor]) => {
+      doc.setDrawColor(226, 225, 219);
+      doc.line(margem + 16, linhaY + 7, largura - margem - 14, linhaY + 7);
+      doc.setTextColor(...cinza);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.text(label, margem + 16, linhaY);
+      doc.setTextColor(45, 62, 57);
+      doc.setFont("helvetica", "bold");
+      doc.text(String(valor), largura - margem - 16, linhaY, { align: "right" });
+      linhaY += 24;
+    });
+    y += 39 + linhas.length * 24;
+  }
+
+  secao("Lotes", [
+    ["Total de lotes", painel.totalLotes],
+    ["Lotes ativos", painel.lotesAtivos],
+    ["Lotes finalizados", painel.lotesFinalizados],
+    ["Cabe\u00e7as ativas", painel.cabecasAtivas],
+  ], verde);
+
+  secao("Desempenho zoot\u00e9cnico", [
+    ["GMD m\u00e9dio (finalizados)", painel.gmdMedioFinalizados != null ? `${painel.gmdMedioFinalizados.toFixed(2)} kg/dia` : "-"],
+    ["GMD esperado m\u00e9dio", painel.gmdEsperadoMedio != null ? `${painel.gmdEsperadoMedio.toFixed(2)} kg/dia` : "-"],
+    ["Peso m\u00e9dio geral", painel.pesoMedioGeral != null ? `${painel.pesoMedioGeral.toFixed(1)} kg` : "-"],
+  ], azul);
+
+  secao("Consumo de mat\u00e9ria seca", [
+    ["Consumo m\u00e9dio de MS (ativos)", painel.consumoMSMedioAtivos != null ? `${painel.consumoMSMedioAtivos.toFixed(2)} kg/cab/dia` : "-"],
+    ["MS sobre PV \u2014 \u00faltimo lan\u00e7amento", painel.consumoMSPercentualPVMedioAtivos != null ? `${painel.consumoMSPercentualPVMedioAtivos.toFixed(2)}% do PV` : "-"],
+    ["MS m\u00e9dia hist\u00f3rica sobre PV", painel.consumoMSPercentualPVHistoricoAtivos != null ? `${painel.consumoMSPercentualPVHistoricoAtivos.toFixed(2)}% do PV` : "-"],
+  ], laranja);
+
+  secao("Custos", [
+    ["Custo acumulado (ativos)", painel.custoAcumuladoAtivosMedio != null ? `${formatBRL(painel.custoAcumuladoAtivosMedio)}/animal` : "-"],
+    ["Custo m\u00e9dio di\u00e1rio (ativos)", painel.custoMedioDiarioAtivosMedio != null ? `${formatBRL(painel.custoMedioDiarioAtivosMedio)}/animal` : "-"],
+    ["Custo total (finalizados)", painel.custoTotalFinalizadosMedio != null ? `${formatBRL(painel.custoTotalFinalizadosMedio)}/animal` : "-"],
+    ["Custo m\u00e9dio di\u00e1rio (finalizados)", painel.custoMedioDiarioFinalizadosMedio != null ? `${formatBRL(painel.custoMedioDiarioFinalizadosMedio)}/animal` : "-"],
+  ], [179, 79, 66]);
+
+  doc.setDrawColor(220, 219, 213);
+  doc.line(margem, altura - 40, largura - margem, altura - 40);
+  doc.setTextColor(130, 130, 125);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")} - Rastro Confinamento`, largura - margem, altura - 24, { align: "right" });
+
+  const nomeSeguro = String(cliente?.nome || "cliente").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+  doc.save(`resumo-${nomeSeguro || "cliente"}.pdf`);
 }
 
 function FormLote({ lote, onCancel, onSave, onDelete }) {

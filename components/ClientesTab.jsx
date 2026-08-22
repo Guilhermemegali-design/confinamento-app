@@ -425,12 +425,43 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
           <h2>Gestão da consultoria</h2>
           <p>Volume atendido, evolução do confinamento e movimentação dos clientes.</p>
         </div>
-        <label className="gestao-year-filter">
-          <CalendarDays size={16} />
-          <select value={ano} onChange={(e) => setAno(Number(e.target.value))}>
-            {anosComDados.map((item) => <option key={item} value={item}>{item}</option>)}
-          </select>
-        </label>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
+          <label className="gestao-year-filter">
+            <CalendarDays size={16} />
+            <select value={ano} onChange={(e) => setAno(Number(e.target.value))}>
+              {anosComDados.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <button
+            className="gestao-export-btn"
+            onClick={() => exportarPainelGestaoPDF({
+              ano,
+              kpis: [
+                ["Animais agora", animaisAgora.toLocaleString("pt-BR")],
+                ["Clientes ativos", clientesAgora.toLocaleString("pt-BR")],
+                ["Média mensal", `${mediaAnual.toLocaleString("pt-BR")} cabeças/dia`],
+                [`Entradas em ${ano}`, entradasAno.toLocaleString("pt-BR")],
+                [`Saídas em ${ano}`, saidasAno.toLocaleString("pt-BR")],
+                ["Consumo no ano", `${consumoAno.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} t`],
+              ],
+              meses,
+              desempenhoZootecnico: {
+                gmdMedioEsperadoGeral,
+                gmdMedioRealGeral,
+                taxaMortalidadeGeral,
+                porCliente: desempenhoZootecnico.map((item) => ({
+                  nome: item.cliente.nome,
+                  gmdEsperado: item.gmdEsperado,
+                  gmdReal: item.gmdReal,
+                  taxaMortalidade: item.taxaMortalidade,
+                })),
+              },
+              porCliente: porCliente.map((item) => ({ nome: item.cliente.nome, cabecas: item.cabecas, lotes: item.lotes })),
+            })}
+          >
+            Exportar PDF
+          </button>
+        </div>
       </div>
 
       <div className="gestao-kpis">
@@ -535,6 +566,103 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
 
 function KpiGestao({ icone, rotulo, valor, detalhe, destaque = false }) {
   return <div className={`gestao-kpi${destaque ? " destaque" : ""}`}><div className="gestao-kpi-icon">{icone}</div><span>{rotulo}</span><strong>{valor}</strong><small>{detalhe}</small></div>;
+}
+
+// Exporta o painel de gestão (visão de todas as fazendas) em PDF — mesmo
+// padrão visual usado em exportarResultadoLotePDF/exportarResumoPainelPDF
+// (components/ConfinamentoTab.jsx), reimplementado aqui pra não criar uma
+// dependência cruzada entre os dois arquivos por causa de um helper visual.
+async function exportarPainelGestaoPDF({ ano, kpis, meses, desempenhoZootecnico, porCliente }) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const largura = doc.internal.pageSize.getWidth();
+  const altura = doc.internal.pageSize.getHeight();
+  const margem = 40;
+  const verde = [23, 63, 56];
+  const cinza = [92, 92, 88];
+  const cinzaClaro = [246, 245, 241];
+  let y;
+
+  doc.setFillColor(...verde);
+  doc.roundedRect(0, 0, largura, 100, 0, 0, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text("RASTRO CONFINAMENTO", margem, 31);
+  doc.setFontSize(22);
+  doc.text("Gestão da consultoria", margem, 62);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(205, 226, 220);
+  doc.text(`Ano de referência: ${ano}  |  Gerado em ${new Date().toLocaleDateString("pt-BR")}`, margem, 82);
+
+  y = 124;
+
+  function secao(titulo, linhas, cor) {
+    const altoNecessario = 27 + linhas.length * 24;
+    if (y + altoNecessario > altura - 60) {
+      doc.addPage();
+      y = margem;
+    }
+    doc.setFillColor(...cinzaClaro);
+    doc.roundedRect(margem, y, largura - margem * 2, 27 + linhas.length * 24, 8, 8, "F");
+    doc.setFillColor(...cor);
+    doc.roundedRect(margem, y, 5, 27 + linhas.length * 24, 3, 3, "F");
+    doc.setTextColor(...cor);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text(titulo, margem + 16, y + 19);
+    let linhaY = y + 39;
+    linhas.forEach(([label, valor]) => {
+      doc.setDrawColor(226, 225, 219);
+      doc.line(margem + 16, linhaY + 7, largura - margem - 14, linhaY + 7);
+      doc.setTextColor(...cinza);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.text(label, margem + 16, linhaY);
+      doc.setTextColor(45, 62, 57);
+      doc.setFont("helvetica", "bold");
+      doc.text(String(valor), largura - margem - 16, linhaY, { align: "right" });
+      linhaY += 24;
+    });
+    y += 39 + linhas.length * 24;
+  }
+
+  secao("Visão geral", kpis, verde);
+
+  secao("Desempenho zootécnico (todas as fazendas)", [
+    ["GMD esperado médio", desempenhoZootecnico.gmdMedioEsperadoGeral != null ? `${desempenhoZootecnico.gmdMedioEsperadoGeral.toFixed(2)} kg/dia` : "-"],
+    ["GMD realizado médio", desempenhoZootecnico.gmdMedioRealGeral != null ? `${desempenhoZootecnico.gmdMedioRealGeral.toFixed(2)} kg/dia` : "-"],
+    ["Taxa de mortalidade", desempenhoZootecnico.taxaMortalidadeGeral != null ? `${desempenhoZootecnico.taxaMortalidadeGeral.toFixed(2)}%` : "-"],
+  ], [54, 103, 139]);
+
+  if (desempenhoZootecnico.porCliente.length > 0) {
+    secao("Zootecnia por cliente (esperado / realizado / mortalidade)", desempenhoZootecnico.porCliente.map((item) => [
+      item.nome,
+      `${item.gmdEsperado != null ? item.gmdEsperado.toFixed(2) : "-"} / ${item.gmdReal != null ? item.gmdReal.toFixed(2) : "-"} kg/dia / ${item.taxaMortalidade != null ? item.taxaMortalidade.toFixed(1) : "-"}%`,
+    ]), [196, 122, 61]);
+  }
+
+  if (meses.length > 0) {
+    secao(`Movimentação mensal de ${ano}`, meses.map((m) => [
+      m.nome, `${m.media.toLocaleString("pt-BR")} méd. · +${m.entradas.toLocaleString("pt-BR")} / −${m.saidas.toLocaleString("pt-BR")}`,
+    ]), verde);
+  }
+
+  if (porCliente.length > 0) {
+    secao("Carteira de clientes", porCliente.map((item) => [
+      item.nome, `${item.cabecas.toLocaleString("pt-BR")} animais · ${item.lotes} lotes ativos`,
+    ]), [179, 79, 66]);
+  }
+
+  doc.setDrawColor(220, 219, 213);
+  doc.line(margem, altura - 40, largura - margem, altura - 40);
+  doc.setTextColor(130, 130, 125);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")} - Rastro Confinamento`, largura - margem, altura - 24, { align: "right" });
+
+  doc.save(`painel-gestao-${ano}.pdf`);
 }
 
 // Compara GMD esperado x realizado (barra dupla) e mostra a mortalidade do
