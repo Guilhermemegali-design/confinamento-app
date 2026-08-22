@@ -10,7 +10,7 @@ import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import {
   calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo,
-  calcularResumoSaidas, calcularCabecasNaData, calcularFechamentoCusto,
+  calcularResumoSaidas, calcularCabecasNaData, calcularFechamentoCusto, calcularGmdSaidaParcial,
   NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, obterConsumoReferenciaAntesDe,
   ajustePercentualDaNota, calcularHistoricoEsperadoRealizado, montarTabelaConsumoEsperado,
 } from "@/lib/confinamento";
@@ -754,6 +754,12 @@ export default function ConfinamentoTab({
                   return acc;
                 }, {})
               : null;
+            const gmdsSaidasAtivo = composicaoSaidasAtivo
+              ? saidasLoteAtivo.map((s) => calcularGmdSaidaParcial(lote, s)).filter((v) => v != null)
+              : [];
+            const gmdMedioSaidasAtivo = gmdsSaidasAtivo.length
+              ? gmdsSaidasAtivo.reduce((s, v) => s + v, 0) / gmdsSaidasAtivo.length
+              : null;
             return (
               <div key={lote.id} style={styles.listItem} className="desktop-lote-card">
                 {ordenacao === "manual" && (
@@ -802,6 +808,11 @@ export default function ConfinamentoTab({
                         {composicaoSaidasAtivo.morte > 0 && (
                           <span style={{ fontSize: 10, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
                             {composicaoSaidasAtivo.morte} morte
+                          </span>
+                        )}
+                        {gmdMedioSaidasAtivo != null && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#1F4D45", background: "#E7F1EE", padding: "2px 7px", borderRadius: 999 }}>
+                            GMD médio {gmdMedioSaidasAtivo.toFixed(2)}
                           </span>
                         )}
                       </div>
@@ -870,7 +881,12 @@ export default function ConfinamentoTab({
             // isso, esses animais só apareciam abrindo o lote ativo um por
             // um; aqui ficam visíveis junto com os finalizados.
             const saidasParciaisAtivos = ativos
-              .flatMap((item) => (saidasPorLote[item.lote.id] || []).map((s) => ({ ...s, loteNome: item.lote.nome, loteId: item.lote.id })))
+              .flatMap((item) => (saidasPorLote[item.lote.id] || []).map((s) => ({
+                ...s,
+                loteNome: item.lote.nome,
+                loteId: item.lote.id,
+                gmd: calcularGmdSaidaParcial(item.lote, s),
+              })))
               .sort((a, b) => b.data.localeCompare(a.data));
             if (saidasParciaisAtivos.length === 0) return null;
             return (
@@ -901,6 +917,12 @@ export default function ConfinamentoTab({
                         {s.observacoes ? ` · ${s.observacoes}` : ""}
                       </div>
                     </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#1F4D45" }}>
+                        {s.gmd != null ? `GMD ${s.gmd.toFixed(2)}` : "—"}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#9A9A94" }}>kg/dia</div>
+                    </div>
                   </button>
                 ))}
               </>
@@ -923,6 +945,12 @@ export default function ConfinamentoTab({
                   acc[tipo] = (acc[tipo] || 0) + Number(s.num_cabecas || 0);
                   return acc;
                 }, {})
+              : null;
+            const gmdsSaidasLote = composicaoSaidas
+              ? saidasLote.map((s) => calcularGmdSaidaParcial(lote, s)).filter((v) => v != null)
+              : [];
+            const gmdMedioSaidasLote = gmdsSaidasLote.length
+              ? gmdsSaidasLote.reduce((s, v) => s + v, 0) / gmdsSaidasLote.length
               : null;
             return (
             <button key={lote.id} style={styles.listItem} className="desktop-lote-card" onClick={() => setTela({ modo: "lote", id: lote.id })}>
@@ -950,6 +978,11 @@ export default function ConfinamentoTab({
                     {composicaoSaidas.morte > 0 && (
                       <span style={{ fontSize: 10, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
                         {composicaoSaidas.morte} morte
+                      </span>
+                    )}
+                    {gmdMedioSaidasLote != null && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#1F4D45", background: "#E7F1EE", padding: "2px 7px", borderRadius: 999 }}>
+                        GMD médio {gmdMedioSaidasLote.toFixed(2)}
                       </span>
                     )}
                   </div>
