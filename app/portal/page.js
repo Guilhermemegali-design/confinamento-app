@@ -273,6 +273,30 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
     return data;
   }
 
+  async function atualizarSaida(saidaId, dados) {
+    const saidaAtual = saidas.find((s) => s.id === saidaId);
+    const { data, error } = await supabase
+      .from("saidas_lote")
+      .update(dados)
+      .eq("id", saidaId)
+      .select()
+      .single();
+    if (error) throw error;
+    const atualizadas = saidas.map((s) => (s.id === saidaId ? data : s));
+    setSaidas(atualizadas);
+    const lote = saidaAtual && lotes.find((l) => l.id === saidaAtual.lote_id);
+    if (lote) {
+      const saidasDoLote = atualizadas.filter((s) => s.lote_id === lote.id);
+      const { finalizadoPorSaidas, dataSaidaCalculada, pesoSaidaVivoCalculado } = calcularResumoSaidas(lote, saidasDoLote);
+      const dataSaidaAlvo = finalizadoPorSaidas ? dataSaidaCalculada : null;
+      const pesoSaidaAlvo = finalizadoPorSaidas ? pesoSaidaVivoCalculado : null;
+      if ((lote.data_saida || null) !== dataSaidaAlvo || Number(lote.peso_saida_vivo || 0) !== Number(pesoSaidaAlvo || 0)) {
+        await atualizarLote(lote.id, { data_saida: dataSaidaAlvo, peso_saida_vivo: pesoSaidaAlvo });
+      }
+    }
+    return data;
+  }
+
   // Se essa saída esvaziar o lote inteiro, preenche data_saida/peso_saida_vivo
   // automaticamente (mesma lógica do lado do consultor) — assim o lote já
   // aparece em "Lotes finalizados" sem precisar pedir pro consultor editar.
@@ -598,6 +622,7 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
             onAtualizar={somenteLeitura ? undefined : atualizarLote}
             onAdicionarPesagem={somenteLeitura ? undefined : adicionarPesagem}
             onAdicionarSaida={somenteLeitura ? undefined : adicionarSaida}
+            onAtualizarSaida={somenteLeitura ? undefined : atualizarSaida}
             onAdicionarEntrada={somenteLeitura ? undefined : adicionarEntrada}
             onAdicionarConsumo={somenteLeitura ? undefined : adicionarConsumo}
             onAtualizarConsumo={somenteLeitura ? undefined : atualizarConsumo}

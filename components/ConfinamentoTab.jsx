@@ -184,7 +184,7 @@ export default function ConfinamentoTab({
   cliente, lotes, pesagens = [], consumos = [], saidas = [], entradas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], currais = [], curralOcupacoes = [],
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
-  onAdicionarSaida, onExcluirSaida,
+  onAdicionarSaida, onAtualizarSaida, onExcluirSaida,
   onAdicionarEntrada, onExcluirEntrada,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
@@ -316,6 +316,47 @@ export default function ConfinamentoTab({
           await onAdicionarSaida(lote.id, dados);
           setTela({ modo: "lote", id: lote.id });
         }}
+      />
+    );
+  }
+
+  if (tela.modo === "editar-saida") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    const saidaExistente = (saidasPorLote[tela.loteId] || []).find((s) => s.id === tela.saidaId);
+    if (!lote || !saidaExistente) return <EmptyHint text="Saída não encontrada." />;
+    // cabecasRestantes exclui a própria saída sendo editada (o form
+    // devolve essas cabeças de volta ao teto máximo internamente).
+    const outrasSaidas = (saidasPorLote[lote.id] || []).filter((s) => s.id !== saidaExistente.id);
+    const { cabecasRestantes } = calcularResumoSaidas(lote, outrasSaidas);
+    const onSave = async (dados) => {
+      await onAtualizarSaida(saidaExistente.id, dados);
+      setTela({ modo: "lote", id: lote.id });
+    };
+    const onExcluir = onExcluirSaida && (() => {
+      if (confirm(saidaExistente.tipo === "morte" ? "Excluir este registro de morte?" : "Excluir esta saída?")) {
+        onExcluirSaida(saidaExistente.id);
+        setTela({ modo: "lote", id: lote.id });
+      }
+    });
+    if (saidaExistente.tipo === "morte") {
+      return (
+        <FormMorte
+          cabecasRestantes={cabecasRestantes}
+          saidaExistente={saidaExistente}
+          onCancel={() => setTela({ modo: "lote", id: lote.id })}
+          onSave={onSave}
+          onExcluir={onExcluir}
+        />
+      );
+    }
+    return (
+      <FormSaida
+        cabecasRestantes={cabecasRestantes}
+        tipo={saidaExistente.tipo === "doenca_trauma" ? "doenca_trauma" : "venda"}
+        saidaExistente={saidaExistente}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={onSave}
+        onExcluir={onExcluir}
       />
     );
   }
@@ -508,6 +549,7 @@ export default function ConfinamentoTab({
           (() => setTela({ modo: "nova-saida", loteId: lote.id }))
         }
         onExcluirSaida={onExcluirSaida}
+        onEditarSaida={onAtualizarSaida && ((saidaId) => setTela({ modo: "editar-saida", loteId: lote.id, saidaId }))}
         onNovaMorte={
           onAdicionarSaida &&
           indicadores.status === "Ativo" &&
@@ -1128,7 +1170,7 @@ function LoteDetalhe({
   cargasVagao = [], ingredientesMs = [],
   onBack, onEditar,
   onNovaPesagem, onExcluirPesagem,
-  onNovaSaida, onExcluirSaida,
+  onNovaSaida, onExcluirSaida, onEditarSaida,
   onNovaMorte,
   onNovaDoencaTrauma,
   onNovaEntrada, onExcluirEntrada,
@@ -1271,6 +1313,15 @@ function LoteDetalhe({
                     {s.observacoes ? ` · ${s.observacoes}` : ""}
                   </div>
                 </div>
+                {onEditarSaida && (
+                  <button
+                    onClick={() => onEditarSaida(s.id)}
+                    style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
+                    title="Editar"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                )}
                 {onExcluirSaida && (
                   <button
                     onClick={() => {
@@ -2173,16 +2224,23 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave }) {
 // Registra a saída de parte das cabeças do lote (vai tirando boi aos poucos
 // até esvaziar). Quando o número de cabeças bater com o que resta, o lote
 // é finalizado sozinho — não precisa editar o lote pra fechar.
-function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo = "Registrar saída", textoBotao = "Salvar saída" }) {
-  const [data, setData] = useState(new Date().toISOString().slice(0, 10));
-  const [numCabecas, setNumCabecas] = useState(cabecasRestantes != null ? String(cabecasRestantes) : "");
-  const [pesoSaidaVivo, setPesoSaidaVivo] = useState("");
-  const [rendimentoCarcaca, setRendimentoCarcaca] = useState("");
-  const [precoVendaArroba, setPrecoVendaArroba] = useState("");
-  const [custoOperacional, setCustoOperacional] = useState("");
-  const [observacoes, setObservacoes] = useState("");
+function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo = "Registrar saída", textoBotao = "Salvar saída", saidaExistente = null, onExcluir }) {
+  const editando = Boolean(saidaExistente);
+  // Editando, o teto de cabeças precisa devolver as que essa própria saída
+  // já tinha tirado do lote — senão o campo trava no valor atual sem deixar
+  // aumentar, mesmo que ainda "caiba" no lote.
+  const tetoCabecas = editando ? cabecasRestantes + Number(saidaExistente.num_cabecas || 0) : cabecasRestantes;
+  const [data, setData] = useState(saidaExistente?.data || new Date().toISOString().slice(0, 10));
+  const [numCabecas, setNumCabecas] = useState(
+    saidaExistente?.num_cabecas != null ? String(saidaExistente.num_cabecas) : (cabecasRestantes != null ? String(cabecasRestantes) : "")
+  );
+  const [pesoSaidaVivo, setPesoSaidaVivo] = useState(saidaExistente?.peso_saida_vivo != null ? String(saidaExistente.peso_saida_vivo) : "");
+  const [rendimentoCarcaca, setRendimentoCarcaca] = useState(saidaExistente?.rendimento_carcaca != null ? String(saidaExistente.rendimento_carcaca) : "");
+  const [precoVendaArroba, setPrecoVendaArroba] = useState(saidaExistente?.preco_venda_arroba != null ? String(saidaExistente.preco_venda_arroba) : "");
+  const [custoOperacional, setCustoOperacional] = useState(saidaExistente?.custo_operacional != null ? String(saidaExistente.custo_operacional) : "");
+  const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
-  const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= cabecasRestantes;
+  const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= tetoCabecas;
   const valido = data && numCabecasValido;
 
   async function handleSave() {
@@ -2205,19 +2263,19 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
 
   return (
     <div>
-      <BackHeader title={titulo} onBack={onCancel} />
+      <BackHeader title={editando ? "Editar saída" : titulo} onBack={onCancel} />
       <div style={styles.card}>
         <InputField label="Data *" type="date" value={data} onChange={setData} />
         <InputField
-          label={`Nº de cabeças que saíram * (restam ${cabecasRestantes})`}
+          label={`Nº de cabeças que saíram * (máx. ${tetoCabecas})`}
           type="number"
           value={numCabecas}
           onChange={setNumCabecas}
-          placeholder={`Máx. ${cabecasRestantes}`}
+          placeholder={`Máx. ${tetoCabecas}`}
         />
         {numCabecas !== "" && !numCabecasValido && (
           <div style={{ fontSize: 11.5, color: "#B8763E", padding: "0 0 8px" }}>
-            Só restam {cabecasRestantes} cabeça(s) nesse lote.
+            Só cabem {tetoCabecas} cabeça(s) nesse lote.
           </div>
         )}
         <InputField label="Peso de saída vivo (kg/cab.)" type="number" value={pesoSaidaVivo} onChange={setPesoSaidaVivo} placeholder="Ex: 540" />
@@ -2252,8 +2310,13 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
         />
       </div>
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
-        {salvando ? "Salvando..." : textoBotao}
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : textoBotao}
       </PrimaryButton>
+      {editando && onExcluir && (
+        <button onClick={onExcluir} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir saída
+        </button>
+      )}
     </div>
   );
 }
@@ -2264,12 +2327,14 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
 // então calcularFechamentoCusto (lib/confinamento.js) exclui tipo "morte"
 // das arrobas vendidas/receita/custo operacional pra não distorcer o
 // fechamento financeiro do lote.
-function FormMorte({ cabecasRestantes, onCancel, onSave }) {
-  const [data, setData] = useState(new Date().toISOString().slice(0, 10));
-  const [numCabecas, setNumCabecas] = useState("");
-  const [observacoes, setObservacoes] = useState("");
+function FormMorte({ cabecasRestantes, onCancel, onSave, saidaExistente = null, onExcluir }) {
+  const editando = Boolean(saidaExistente);
+  const tetoCabecas = editando ? cabecasRestantes + Number(saidaExistente.num_cabecas || 0) : cabecasRestantes;
+  const [data, setData] = useState(saidaExistente?.data || new Date().toISOString().slice(0, 10));
+  const [numCabecas, setNumCabecas] = useState(saidaExistente?.num_cabecas != null ? String(saidaExistente.num_cabecas) : "");
+  const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
-  const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= cabecasRestantes;
+  const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= tetoCabecas;
   const valido = data && numCabecasValido;
 
   async function handleSave() {
@@ -2288,19 +2353,19 @@ function FormMorte({ cabecasRestantes, onCancel, onSave }) {
 
   return (
     <div>
-      <BackHeader title="Registrar morte" onBack={onCancel} />
+      <BackHeader title={editando ? "Editar morte" : "Registrar morte"} onBack={onCancel} />
       <div style={styles.card}>
         <InputField label="Data *" type="date" value={data} onChange={setData} />
         <InputField
-          label={`Nº de cabeças * (restam ${cabecasRestantes})`}
+          label={`Nº de cabeças * (máx. ${tetoCabecas})`}
           type="number"
           value={numCabecas}
           onChange={setNumCabecas}
-          placeholder={`Máx. ${cabecasRestantes}`}
+          placeholder={`Máx. ${tetoCabecas}`}
         />
         {numCabecas !== "" && !numCabecasValido && (
           <div style={{ fontSize: 11.5, color: "#B8763E", padding: "0 0 8px" }}>
-            Só restam {cabecasRestantes} cabeça(s) nesse lote.
+            Só cabem {tetoCabecas} cabeça(s) nesse lote.
           </div>
         )}
       </div>
@@ -2308,8 +2373,13 @@ function FormMorte({ cabecasRestantes, onCancel, onSave }) {
         <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: causa da morte" />
       </div>
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
-        {salvando ? "Salvando..." : "Registrar morte"}
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Registrar morte"}
       </PrimaryButton>
+      {editando && onExcluir && (
+        <button onClick={onExcluir} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir morte
+        </button>
+      )}
     </div>
   );
 }
