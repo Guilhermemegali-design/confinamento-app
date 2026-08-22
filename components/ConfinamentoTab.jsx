@@ -285,6 +285,25 @@ export default function ConfinamentoTab({
     );
   }
 
+  if (tela.modo === "nova-doenca-trauma") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    const { cabecasRestantes } = calcularResumoSaidas(lote, saidasPorLote[lote.id] || []);
+    return (
+      <FormSaida
+        cabecasRestantes={cabecasRestantes}
+        tipo="doenca_trauma"
+        titulo="Registrar saída por doença ou trauma"
+        textoBotao="Salvar saída"
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAdicionarSaida(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
   if (tela.modo === "nova-morte") {
     const lote = lotes.find((l) => l.id === tela.loteId);
     if (!lote) return <EmptyHint text="Lote não encontrado." />;
@@ -494,6 +513,12 @@ export default function ConfinamentoTab({
           indicadores.status === "Ativo" &&
           indicadores.cabecasRestantes > 0 &&
           (() => setTela({ modo: "nova-morte", loteId: lote.id }))
+        }
+        onNovaDoencaTrauma={
+          onAdicionarSaida &&
+          indicadores.status === "Ativo" &&
+          indicadores.cabecasRestantes > 0 &&
+          (() => setTela({ modo: "nova-doenca-trauma", loteId: lote.id }))
         }
         onNovaEntrada={
           onAdicionarEntrada &&
@@ -966,6 +991,7 @@ function LoteDetalhe({
   onNovaPesagem, onExcluirPesagem,
   onNovaSaida, onExcluirSaida,
   onNovaMorte,
+  onNovaDoencaTrauma,
   onNovaEntrada, onExcluirEntrada,
   onNovoConsumo, onEditarConsumo, onExcluirConsumo,
 }) {
@@ -1062,13 +1088,16 @@ function LoteDetalhe({
         <FechamentoCustoCard cliente={cliente} lote={lote} indicadores={indicadores} saidas={saidas} consumoIngredientes={consumoIngredientes} />
       )}
 
-      {(onNovaSaida || onNovaMorte || onNovaEntrada || saidasOrdenadas.length > 0) && (
+      {(onNovaSaida || onNovaMorte || onNovaDoencaTrauma || onNovaEntrada || saidasOrdenadas.length > 0) && (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
             <div style={{ ...styles.sectionTitle, margin: 0 }}>Saídas registradas</div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 6 }}>
               {onNovaSaida && (
                 <button onClick={onNovaSaida} style={styles.editLinkBtn}>+ Saída</button>
+              )}
+              {onNovaDoencaTrauma && (
+                <button onClick={onNovaDoencaTrauma} style={{ ...styles.editLinkBtn, background: "#9A6036" }}>+ Doença/Trauma</button>
               )}
               {onNovaMorte && (
                 <button onClick={onNovaMorte} style={{ ...styles.editLinkBtn, background: "#8A3B2F" }}>+ Morte</button>
@@ -1089,6 +1118,11 @@ function LoteDetalhe({
                     {s.tipo === "morte" && (
                       <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
                         MORTE
+                      </span>
+                    )}
+                    {s.tipo === "doenca_trauma" && (
+                      <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#9A6036", background: "#FFF5ED", padding: "2px 7px", borderRadius: 999 }}>
+                        DOENÇA/TRAUMA
                       </span>
                     )}
                   </div>
@@ -2000,7 +2034,7 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave }) {
 // Registra a saída de parte das cabeças do lote (vai tirando boi aos poucos
 // até esvaziar). Quando o número de cabeças bater com o que resta, o lote
 // é finalizado sozinho — não precisa editar o lote pra fechar.
-function FormSaida({ cabecasRestantes, onCancel, onSave }) {
+function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo = "Registrar saída", textoBotao = "Salvar saída" }) {
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
   const [numCabecas, setNumCabecas] = useState(cabecasRestantes != null ? String(cabecasRestantes) : "");
   const [pesoSaidaVivo, setPesoSaidaVivo] = useState("");
@@ -2018,6 +2052,7 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
       await onSave({
         data,
         num_cabecas: Number(numCabecas),
+        tipo,
         peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
         rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
         preco_venda_arroba: precoVendaArroba !== "" ? Number(precoVendaArroba) : null,
@@ -2031,7 +2066,7 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
 
   return (
     <div>
-      <BackHeader title="Registrar saída" onBack={onCancel} />
+      <BackHeader title={titulo} onBack={onCancel} />
       <div style={styles.card}>
         <InputField label="Data *" type="date" value={data} onChange={setData} />
         <InputField
@@ -2070,10 +2105,15 @@ function FormSaida({ cabecasRestantes, onCancel, onSave }) {
         />
       </div>
       <div style={styles.card}>
-        <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: venda parcial, frigorífico X" />
+        <TextAreaField
+          label="Observações"
+          value={observacoes}
+          onChange={setObservacoes}
+          placeholder={tipo === "doenca_trauma" ? "Ex: doença respiratória, fratura de membro" : "Ex: venda parcial, frigorífico X"}
+        />
       </div>
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
-        {salvando ? "Salvando..." : "Salvar saída"}
+        {salvando ? "Salvando..." : textoBotao}
       </PrimaryButton>
     </div>
   );
