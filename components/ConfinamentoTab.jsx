@@ -84,6 +84,21 @@ const CATEGORIAS_LOTE = [
 ];
 const CATEGORIA_LOTE_LABEL = Object.fromEntries(CATEGORIAS_LOTE.filter((c) => c.value).map((c) => [c.value, c.label]));
 
+const RACAS_LOTE = [
+  { value: "", label: "Não informada" },
+  { value: "nelore", label: "Nelore" },
+  { value: "nelorado", label: "Nelorado" },
+  { value: "guzera", label: "Guzerá" },
+  { value: "guzeratado", label: "Guzeratado" },
+  { value: "cruzado", label: "Cruzado" },
+  { value: "gir", label: "Gir" },
+  { value: "girolando", label: "Girolando" },
+  { value: "f1_angus", label: "F1 Angus" },
+  { value: "senepol", label: "Senepol" },
+  { value: "guzolando", label: "Guzolando" },
+];
+const RACA_LOTE_LABEL = Object.fromEntries(RACAS_LOTE.filter((r) => r.value).map((r) => [r.value, r.label]));
+
 const OPCOES_ORDENACAO = [
   { value: "manual", label: "Ordem manual" },
   { value: "entrada_desc", label: "Mais recentes" },
@@ -828,7 +843,7 @@ export default function ConfinamentoTab({
                 >
                   <div style={styles.avatar}>{lote.nome.charAt(0)}</div>
                   <div style={{ flex: 1, textAlign: "left" }}>
-                    <div style={styles.listItemTitle}>{lote.nome}{lote.categoria ? ` · ${CATEGORIA_LOTE_LABEL[lote.categoria]}` : ""}</div>
+                    <div style={styles.listItemTitle}>{lote.nome}{lote.categoria ? ` · ${CATEGORIA_LOTE_LABEL[lote.categoria]}` : ""}{lote.raca ? ` · ${RACA_LOTE_LABEL[lote.raca]}` : ""}</div>
                     <div style={styles.listItemSub}>
                       {cabecasSaidas > 0 ? `${cabecasRestantes} de ${lote.num_cabecas} cab.` : `${lote.num_cabecas} cab.`} · entrada {formatDataBR(lote.data_entrada)} · {diasConfinamento}d
                     </div>
@@ -998,7 +1013,7 @@ export default function ConfinamentoTab({
             <button key={lote.id} style={styles.listItem} className="desktop-lote-card" onClick={() => setTela({ modo: "lote", id: lote.id })}>
               <div style={{ ...styles.avatar, background: "#F1EFE8", color: "#5C5C58" }}>{lote.nome.charAt(0)}</div>
               <div style={{ flex: 1, textAlign: "left" }}>
-                <div style={styles.listItemTitle}>{lote.nome}{lote.categoria ? ` · ${CATEGORIA_LOTE_LABEL[lote.categoria]}` : ""}</div>
+                <div style={styles.listItemTitle}>{lote.nome}{lote.categoria ? ` · ${CATEGORIA_LOTE_LABEL[lote.categoria]}` : ""}{lote.raca ? ` · ${RACA_LOTE_LABEL[lote.raca]}` : ""}</div>
                 <div style={styles.listItemSub}>
                   {lote.num_cabecas} cab. · saída {formatDataBR(lote.data_saida)} · {diasConfinamento}d
                 </div>
@@ -1194,6 +1209,7 @@ function LoteDetalhe({
       <div style={styles.card}>
         <Field label="Status" value={indicadores.status} highlight />
         {lote.categoria && <Field label="Categoria" value={CATEGORIA_LOTE_LABEL[lote.categoria]} />}
+        {lote.raca && <Field label="Raça" value={RACA_LOTE_LABEL[lote.raca]} />}
         <Field
           label="Nº de cabeças"
           value={indicadores.cabecasSaidas > 0 ? `${indicadores.cabecasRestantes} restantes de ${lote.num_cabecas}` : lote.num_cabecas}
@@ -1996,6 +2012,7 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
   const editando = Boolean(lote);
   const [nome, setNome] = useState(lote?.nome || "");
   const [categoria, setCategoria] = useState(lote?.categoria || "");
+  const [raca, setRaca] = useState(lote?.raca || "");
   const [dataEntrada, setDataEntrada] = useState(lote?.data_entrada || new Date().toISOString().slice(0, 10));
   const [numCabecas, setNumCabecas] = useState(lote?.num_cabecas != null ? String(lote.num_cabecas) : "");
   const [pesoEntrada, setPesoEntrada] = useState(lote?.peso_entrada != null ? String(lote.peso_entrada) : "");
@@ -2023,6 +2040,7 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
       await onSave({
         nome: nome.trim(),
         categoria: categoria || null,
+        raca: raca || null,
         data_entrada: dataEntrada,
         num_cabecas: Number(numCabecas),
         peso_entrada: Number(pesoEntrada),
@@ -2052,6 +2070,7 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
       <div style={styles.card}>
         <InputField label="Nome do lote *" value={nome} onChange={setNome} placeholder="Ex: Bois 1" />
         <SelectField label="Categoria dos animais" value={categoria} onChange={setCategoria} options={CATEGORIAS_LOTE} />
+        <SelectField label="Raça" value={raca} onChange={setRaca} options={RACAS_LOTE} />
         <InputField label="Data de entrada *" type="date" value={dataEntrada} onChange={setDataEntrada} />
         <InputField label="Nº de cabeças *" type="number" value={numCabecas} onChange={setNumCabecas} placeholder="Ex: 130" />
         <InputField label="Peso de entrada (kg) *" type="number" value={pesoEntrada} onChange={setPesoEntrada} placeholder="Ex: 410" />
