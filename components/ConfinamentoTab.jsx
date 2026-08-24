@@ -97,7 +97,7 @@ const RACAS_LOTE = [
   { value: "senepol", label: "Senepol" },
   { value: "guzolando", label: "Guzolando" },
 ];
-const RACA_LOTE_LABEL = Object.fromEntries(RACAS_LOTE.filter((r) => r.value).map((r) => [r.value, r.label]));
+export const RACA_LOTE_LABEL = Object.fromEntries(RACAS_LOTE.filter((r) => r.value).map((r) => [r.value, r.label]));
 
 const OPCOES_ORDENACAO = [
   { value: "manual", label: "Ordem manual" },
@@ -601,6 +601,53 @@ export default function ConfinamentoTab({
   const finalizados = comIndicadores
     .filter((i) => i.status === "Finalizado")
     .sort((a, b) => (b.lote.data_saida || "").localeCompare(a.lote.data_saida || ""));
+
+  // GMD (finalizados) e consumo de MS (ativos) agrupados por raça — mesma
+  // fonte que os PainelCard de GMD/MS acima, só que quebrada por raça em vez
+  // de uma média única da fazenda inteira. Ponderado por cabeças, igual ao
+  // resto do painel.
+  const gmdPorRaca = new Map();
+  for (const item of finalizados) {
+    if (item.gmdVivoEntradaSaida == null) continue;
+    const chave = item.lote.raca || "outra";
+    const cab = Number(item.lote.num_cabecas || 0);
+    const atual = gmdPorRaca.get(chave) || { raca: item.lote.raca, somaXCab: 0, cab: 0 };
+    atual.somaXCab += item.gmdVivoEntradaSaida * cab;
+    atual.cab += cab;
+    gmdPorRaca.set(chave, atual);
+  }
+  const consumoMSPorRaca = new Map();
+  for (const item of ativos) {
+    if (item.consumoMS == null || Number(item.cabecasRestantes || 0) <= 0) continue;
+    const chave = item.lote.raca || "outra";
+    const cab = Number(item.cabecasRestantes || 0);
+    const atual = consumoMSPorRaca.get(chave) || { raca: item.lote.raca, somaXCab: 0, cab: 0 };
+    atual.somaXCab += item.consumoMS * cab;
+    atual.cab += cab;
+    consumoMSPorRaca.set(chave, atual);
+  }
+  const racasComDados = [...new Set([...gmdPorRaca.keys(), ...consumoMSPorRaca.keys()])];
+  const zootecniaPorRaca = racasComDados.map((chave) => {
+    const gmd = gmdPorRaca.get(chave);
+    const consumo = consumoMSPorRaca.get(chave);
+    return {
+      raca: chave,
+      gmdMedio: gmd && gmd.cab > 0 ? gmd.somaXCab / gmd.cab : null,
+      consumoMSMedio: consumo && consumo.cab > 0 ? consumo.somaXCab / consumo.cab : null,
+    };
+  }).sort((a, b) => (b.gmdMedio || 0) - (a.gmdMedio || 0));
+
+  // Quantidade de animais ativos agora, por categoria.
+  const animaisPorCategoria = new Map();
+  for (const item of ativos) {
+    const cab = Number(item.cabecasRestantes || 0);
+    if (cab <= 0) continue;
+    const chave = item.lote.categoria || "outra";
+    animaisPorCategoria.set(chave, (animaisPorCategoria.get(chave) || 0) + cab);
+  }
+  const categoriasComDados = [...animaisPorCategoria.entries()]
+    .map(([categoria, cabecas]) => ({ categoria, cabecas }))
+    .sort((a, b) => b.cabecas - a.cabecas);
 
   // Move um lote ativo para cima/baixo na lista. Na primeira vez que isso é
   // usado, dá uma "ordem" (10, 20, 30...) para todos os lotes ativos com
@@ -1130,6 +1177,56 @@ export default function ConfinamentoTab({
               valor={painel.custoMedioDiarioFinalizadosMedio != null ? `${formatBRL(painel.custoMedioDiarioFinalizadosMedio)}/animal` : "—"}
             />
           </div>
+
+          {zootecniaPorRaca.length > 0 && (
+            <div style={{ ...styles.card, marginTop: 12, overflowX: "auto", padding: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>GMD e consumo de MS por raça</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 420, fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ color: "#5C5C58", textAlign: "right" }}>
+                    <th style={{ padding: 10, textAlign: "left" }}>Raça</th>
+                    <th style={{ padding: 10 }}>GMD médio (finalizados)</th>
+                    <th style={{ padding: 10 }}>Consumo MS médio (ativos)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {zootecniaPorRaca.map((item) => (
+                    <tr key={item.raca || "outra"} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                      <td style={{ padding: 10, textAlign: "left", fontWeight: 600 }}>
+                        {item.raca ? RACA_LOTE_LABEL[item.raca] : "Não informada"}
+                      </td>
+                      <td style={{ padding: 10 }}>{item.gmdMedio != null ? `${item.gmdMedio.toFixed(2)} kg/dia` : "—"}</td>
+                      <td style={{ padding: 10 }}>{item.consumoMSMedio != null ? `${item.consumoMSMedio.toFixed(2)} kg/cab/dia` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {categoriasComDados.length > 0 && (
+            <div style={{ ...styles.card, marginTop: 12, overflowX: "auto", padding: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Animais ativos por categoria</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 320, fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ color: "#5C5C58", textAlign: "right" }}>
+                    <th style={{ padding: 10, textAlign: "left" }}>Categoria</th>
+                    <th style={{ padding: 10 }}>Cabeças</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {categoriasComDados.map((item) => (
+                    <tr key={item.categoria} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                      <td style={{ padding: 10, textAlign: "left", fontWeight: 600 }}>
+                        {item.categoria !== "outra" ? CATEGORIA_LOTE_LABEL[item.categoria] : "Não informada"}
+                      </td>
+                      <td style={{ padding: 10 }}>{item.cabecas.toLocaleString("pt-BR")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
         </main>

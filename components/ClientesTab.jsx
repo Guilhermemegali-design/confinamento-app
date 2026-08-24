@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Trash2, Search, Settings2, Users, Beef, Layers3, TrendingUp, CalendarDays, Utensils, ArrowUpRight } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryButton } from "./UI";
-import ConfinamentoTab from "./ConfinamentoTab";
+import ConfinamentoTab, { RACA_LOTE_LABEL } from "./ConfinamentoTab";
 import { calcularGmdFinalizado } from "@/lib/confinamento";
 
 export default function ClientesTab({
@@ -364,6 +364,47 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
     };
   }).filter((item) => item.cabecas > 0 || item.entradas > 0).sort((a, b) => b.cabecas - a.cabecas);
 
+  // GMD (lotes finalizados) e consumo de MS (último lançamento dos lotes
+  // ativos) agrupados por raça, ponderados por cabeças — mesma aproximação
+  // de cabecasNaData usada no resto do painel (sem entradas incrementais).
+  function ultimoConsumoDoLote(loteId) {
+    return consumos
+      .filter((c) => c.lote_id === loteId)
+      .sort((a, b) => String(b.data || "").localeCompare(String(a.data || "")))[0] || null;
+  }
+  const gmdPorRacaGeral = new Map();
+  for (const lote of lotes) {
+    const gmd = calcularGmdFinalizado(lote);
+    if (gmd == null) continue;
+    const cab = Number(lote.num_cabecas || 0);
+    const chave = lote.raca || "outra";
+    const atual = gmdPorRacaGeral.get(chave) || { raca: lote.raca, somaXCab: 0, cab: 0 };
+    atual.somaXCab += gmd * cab;
+    atual.cab += cab;
+    gmdPorRacaGeral.set(chave, atual);
+  }
+  const consumoMSPorRacaGeral = new Map();
+  for (const { lote, cabecas } of lotesAtivos) {
+    const ultimo = ultimoConsumoDoLote(lote.id);
+    if (!ultimo || ultimo.ms_dieta == null || cabecas <= 0) continue;
+    const consumoMSCabeca = (Number(ultimo.consumo_total_lote) * (Number(ultimo.ms_dieta) / 100)) / cabecas;
+    const chave = lote.raca || "outra";
+    const atual = consumoMSPorRacaGeral.get(chave) || { raca: lote.raca, somaXCab: 0, cab: 0 };
+    atual.somaXCab += consumoMSCabeca * cabecas;
+    atual.cab += cabecas;
+    consumoMSPorRacaGeral.set(chave, atual);
+  }
+  const racasComDadosGeral = [...new Set([...gmdPorRacaGeral.keys(), ...consumoMSPorRacaGeral.keys()])];
+  const zootecniaPorRacaGeral = racasComDadosGeral.map((chave) => {
+    const gmd = gmdPorRacaGeral.get(chave);
+    const consumo = consumoMSPorRacaGeral.get(chave);
+    return {
+      raca: chave,
+      gmdMedio: gmd && gmd.cab > 0 ? gmd.somaXCab / gmd.cab : null,
+      consumoMSMedio: consumo && consumo.cab > 0 ? consumo.somaXCab / consumo.cab : null,
+    };
+  }).sort((a, b) => (b.gmdMedio || 0) - (a.gmdMedio || 0));
+
   // Mortalidade e GMD (realizado x esperado) — "total que passou pelo lote"
   // é reconstruído como cabeças atuais + soma de todas as saídas já
   // lançadas (venda ou morte), já que num_cabecas só guarda o que resta.
@@ -544,6 +585,25 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
                 />
               ))}
           </div>
+          {zootecniaPorRacaGeral.length > 0 && (
+            <div className="gestao-panel">
+              <div className="gestao-panel-title"><div><span>POR RAÇA</span><h3>GMD e consumo de MS</h3></div></div>
+              <div className="gestao-table-wrap">
+                <table className="gestao-table">
+                  <thead><tr><th>Raça</th><th>GMD médio (finalizados)</th><th>Consumo MS médio (ativos)</th></tr></thead>
+                  <tbody>
+                    {zootecniaPorRacaGeral.map((item) => (
+                      <tr key={item.raca || "outra"}>
+                        <td><strong>{item.raca ? RACA_LOTE_LABEL[item.raca] : "Não informada"}</strong></td>
+                        <td>{item.gmdMedio != null ? `${item.gmdMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg/dia` : "—"}</td>
+                        <td>{item.consumoMSMedio != null ? `${item.consumoMSMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg/cab/dia` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       )}
 
