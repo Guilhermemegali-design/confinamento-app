@@ -1187,30 +1187,25 @@ export default function ConfinamentoTab({
           </div>
 
           {zootecniaPorRaca.length > 0 && (
-            <div style={{ ...styles.card, marginTop: 12, maxWidth: 420 }}>
+            <div style={{ ...styles.card, marginTop: 12, maxWidth: 440 }}>
               <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>GMD e consumo de MS por raça</div>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(80px, 1fr) 84px 76px 66px", gap: 6, padding: "0 0 4px" }}>
+                <span />
+                <span style={{ fontSize: 8.5, fontWeight: 700, color: "#9A9A94", textTransform: "uppercase", letterSpacing: .3, textAlign: "right" }} title="GMD médio dos lotes já finalizados dessa raça">GMD</span>
+                <span style={{ fontSize: 8.5, fontWeight: 700, color: "#9A9A94", textTransform: "uppercase", letterSpacing: .3, textAlign: "right" }} title="Consumo médio de matéria seca por cabeça, último lançamento dos lotes ativos">MS kg/cab</span>
+                <span style={{ fontSize: 8.5, fontWeight: 700, color: "#9A9A94", textTransform: "uppercase", letterSpacing: .3, textAlign: "right" }} title="Consumo de MS em relação ao peso vivo estimado, lotes ativos">MS % PV</span>
+              </div>
               {zootecniaPorRaca.map((item, i) => (
                 <div
                   key={item.raca || "sem-raca"}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 0", borderTop: i > 0 ? "1px solid #EFEEE9" : "none" }}
+                  style={{ display: "grid", gridTemplateColumns: "minmax(80px, 1fr) 84px 76px 66px", alignItems: "center", gap: 6, padding: "7px 0", borderTop: i > 0 ? "1px solid #EFEEE9" : "none" }}
                 >
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: "#2D3E39" }}>
                     {item.raca ? RACA_LOTE_LABEL[item.raca] : "Não informada"}
                   </span>
-                  <div style={{ display: "flex", gap: 14 }}>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", minWidth: 56 }}>
-                      <b style={{ fontSize: 12.5, color: "#1F4D45" }}>{item.gmdMedio != null ? item.gmdMedio.toFixed(2) : "—"}</b>
-                      <span style={{ fontSize: 9, color: "#9A9A94" }}>kg/dia</span>
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", minWidth: 66 }}>
-                      <b style={{ fontSize: 12.5, color: "#1F4D45" }}>{item.consumoMSMedio != null ? item.consumoMSMedio.toFixed(2) : "—"}</b>
-                      <span style={{ fontSize: 9, color: "#9A9A94" }}>kg MS/cab</span>
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", minWidth: 56 }}>
-                      <b style={{ fontSize: 12.5, color: "#1F4D45" }}>{item.consumoMSPercentualPVMedio != null ? `${item.consumoMSPercentualPVMedio.toFixed(2)}%` : "—"}</b>
-                      <span style={{ fontSize: 9, color: "#9A9A94" }}>MS/PV</span>
-                    </div>
-                  </div>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1F4D45", textAlign: "right" }}>{item.gmdMedio != null ? `${item.gmdMedio.toFixed(2)} kg/dia` : "—"}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1F4D45", textAlign: "right" }}>{item.consumoMSMedio != null ? item.consumoMSMedio.toFixed(2) : "—"}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1F4D45", textAlign: "right" }}>{item.consumoMSPercentualPVMedio != null ? `${item.consumoMSPercentualPVMedio.toFixed(2)}%` : "—"}</span>
                 </div>
               ))}
             </div>

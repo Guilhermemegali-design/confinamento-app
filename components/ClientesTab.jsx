@@ -599,14 +599,18 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], pesagens = [], ca
           {zootecniaPorRacaGeral.length > 0 && (
             <div className="gestao-panel">
               <div className="gestao-panel-title"><div><span>POR RAÇA</span><h3>GMD e consumo de MS</h3></div></div>
+              <div className="gestao-raca-head">
+                <span>Raça</span>
+                <span title="GMD médio dos lotes já finalizados dessa raça">GMD (finalizados)</span>
+                <span title="Consumo médio de matéria seca por cabeça, último lançamento dos lotes ativos">MS kg/cab/dia</span>
+                <span title="Consumo de MS em relação ao peso vivo estimado, lotes ativos">MS % do PV</span>
+              </div>
               {zootecniaPorRacaGeral.map((item) => (
                 <div key={item.raca || "sem-raca"} className="gestao-raca-row">
                   <span className="gestao-raca-nome">{item.raca ? RACA_LOTE_LABEL[item.raca] : "Não informada"}</span>
-                  <div className="gestao-raca-stats">
-                    <div><b>{item.gmdMedio != null ? item.gmdMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) : "—"}</b><span>kg/dia</span></div>
-                    <div><b>{item.consumoMSMedio != null ? item.consumoMSMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) : "—"}</b><span>kg MS/cab</span></div>
-                    <div><b>{item.consumoMSPercentualPVMedio != null ? `${item.consumoMSPercentualPVMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%` : "—"}</b><span>MS/PV</span></div>
-                  </div>
+                  <span className="gestao-raca-valor">{item.gmdMedio != null ? `${item.gmdMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg/dia` : "—"}</span>
+                  <span className="gestao-raca-valor">{item.consumoMSMedio != null ? item.consumoMSMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) : "—"}</span>
+                  <span className="gestao-raca-valor">{item.consumoMSPercentualPVMedio != null ? `${item.consumoMSPercentualPVMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%` : "—"}</span>
                 </div>
               ))}
             </div>
