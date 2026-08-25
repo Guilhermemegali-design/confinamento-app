@@ -621,9 +621,13 @@ export default function ConfinamentoTab({
     if (item.consumoMS == null || Number(item.cabecasRestantes || 0) <= 0) continue;
     const chave = item.lote.raca || "outra";
     const cab = Number(item.cabecasRestantes || 0);
-    const atual = consumoMSPorRaca.get(chave) || { raca: item.lote.raca, somaXCab: 0, cab: 0 };
+    const atual = consumoMSPorRaca.get(chave) || { raca: item.lote.raca, somaXCab: 0, cab: 0, somaPercentualXCab: 0, cabPercentual: 0 };
     atual.somaXCab += item.consumoMS * cab;
     atual.cab += cab;
+    if (item.consumoMSPercentualPV != null) {
+      atual.somaPercentualXCab += item.consumoMSPercentualPV * cab;
+      atual.cabPercentual += cab;
+    }
     consumoMSPorRaca.set(chave, atual);
   }
   const racasComDados = [...new Set([...gmdPorRaca.keys(), ...consumoMSPorRaca.keys()])];
@@ -631,9 +635,13 @@ export default function ConfinamentoTab({
     const gmd = gmdPorRaca.get(chave);
     const consumo = consumoMSPorRaca.get(chave);
     return {
-      raca: chave,
+      // A raça real (pode ser null = "não informada") vem do registro
+      // agregado, não da chave do Map — usar a chave ("outra") direto fazia
+      // RACA_LOTE_LABEL["outra"] voltar undefined e a linha aparecer em branco.
+      raca: (gmd || consumo)?.raca ?? null,
       gmdMedio: gmd && gmd.cab > 0 ? gmd.somaXCab / gmd.cab : null,
       consumoMSMedio: consumo && consumo.cab > 0 ? consumo.somaXCab / consumo.cab : null,
+      consumoMSPercentualPVMedio: consumo && consumo.cabPercentual > 0 ? consumo.somaPercentualXCab / consumo.cabPercentual : null,
     };
   }).sort((a, b) => (b.gmdMedio || 0) - (a.gmdMedio || 0));
 
@@ -1179,28 +1187,32 @@ export default function ConfinamentoTab({
           </div>
 
           {zootecniaPorRaca.length > 0 && (
-            <div style={{ ...styles.card, marginTop: 12, overflowX: "auto", padding: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>GMD e consumo de MS por raça</div>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 420, fontSize: 12.5 }}>
-                <thead>
-                  <tr style={{ color: "#5C5C58", textAlign: "right" }}>
-                    <th style={{ padding: 10, textAlign: "left" }}>Raça</th>
-                    <th style={{ padding: 10 }}>GMD médio (finalizados)</th>
-                    <th style={{ padding: 10 }}>Consumo MS médio (ativos)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {zootecniaPorRaca.map((item) => (
-                    <tr key={item.raca || "outra"} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
-                      <td style={{ padding: 10, textAlign: "left", fontWeight: 600 }}>
-                        {item.raca ? RACA_LOTE_LABEL[item.raca] : "Não informada"}
-                      </td>
-                      <td style={{ padding: 10 }}>{item.gmdMedio != null ? `${item.gmdMedio.toFixed(2)} kg/dia` : "—"}</td>
-                      <td style={{ padding: 10 }}>{item.consumoMSMedio != null ? `${item.consumoMSMedio.toFixed(2)} kg/cab/dia` : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div style={{ ...styles.card, marginTop: 12, maxWidth: 420 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>GMD e consumo de MS por raça</div>
+              {zootecniaPorRaca.map((item, i) => (
+                <div
+                  key={item.raca || "sem-raca"}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 0", borderTop: i > 0 ? "1px solid #EFEEE9" : "none" }}
+                >
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "#2D3E39" }}>
+                    {item.raca ? RACA_LOTE_LABEL[item.raca] : "Não informada"}
+                  </span>
+                  <div style={{ display: "flex", gap: 14 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", minWidth: 56 }}>
+                      <b style={{ fontSize: 12.5, color: "#1F4D45" }}>{item.gmdMedio != null ? item.gmdMedio.toFixed(2) : "—"}</b>
+                      <span style={{ fontSize: 9, color: "#9A9A94" }}>kg/dia</span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", minWidth: 66 }}>
+                      <b style={{ fontSize: 12.5, color: "#1F4D45" }}>{item.consumoMSMedio != null ? item.consumoMSMedio.toFixed(2) : "—"}</b>
+                      <span style={{ fontSize: 9, color: "#9A9A94" }}>kg MS/cab</span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", minWidth: 56 }}>
+                      <b style={{ fontSize: 12.5, color: "#1F4D45" }}>{item.consumoMSPercentualPVMedio != null ? `${item.consumoMSPercentualPVMedio.toFixed(2)}%` : "—"}</b>
+                      <span style={{ fontSize: 9, color: "#9A9A94" }}>MS/PV</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 

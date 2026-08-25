@@ -5,7 +5,7 @@ import { Trash2, Search, Settings2, Users, Beef, Layers3, TrendingUp, CalendarDa
 import { styles } from "@/lib/styles";
 import { ListHeader, BackHeader, SectionTitle, EmptyHint, InputField, PrimaryButton } from "./UI";
 import ConfinamentoTab, { RACA_LOTE_LABEL } from "./ConfinamentoTab";
-import { calcularGmdFinalizado } from "@/lib/confinamento";
+import { calcularGmdFinalizado, estimarPesoNaData } from "@/lib/confinamento";
 
 export default function ClientesTab({
   clientes, lotes, pesagens, consumos, saidas = [], entradas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], clientesUsuarios = [], currais = [], curralOcupacoes = [], view, setView,
@@ -239,7 +239,7 @@ export default function ClientesTab({
       </div>
 
       {abaGeral === "painel" ? (
-        <PainelGeral clientes={clientes} lotes={lotes} saidas={saidas} consumos={consumos} cargasVagao={cargasVagao} setView={setView} />
+        <PainelGeral clientes={clientes} lotes={lotes} saidas={saidas} consumos={consumos} pesagens={pesagens} cargasVagao={cargasVagao} setView={setView} />
       ) : (
         <>
           <ListHeader title="Clientes" actionLabel="Novo cliente" onAction={() => setView({ screen: "novo-cliente" })} />
@@ -286,7 +286,7 @@ export default function ClientesTab({
 
 const MESES_CURTOS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
-function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [], setView }) {
+function PainelGeral({ clientes, lotes, saidas, consumos = [], pesagens = [], cargasVagao = [], setView }) {
   const hoje = new Date();
   const anosComDados = [...new Set([
     hoje.getFullYear(),
@@ -388,10 +388,17 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
     const ultimo = ultimoConsumoDoLote(lote.id);
     if (!ultimo || ultimo.ms_dieta == null || cabecas <= 0) continue;
     const consumoMSCabeca = (Number(ultimo.consumo_total_lote) * (Number(ultimo.ms_dieta) / 100)) / cabecas;
+    const pesagensDoLote = pesagens.filter((p) => p.lote_id === lote.id);
+    const pesoEstimado = estimarPesoNaData(lote, pesagensDoLote, ultimo.data);
+    const percentualPV = pesoEstimado > 0 ? (consumoMSCabeca / pesoEstimado) * 100 : null;
     const chave = lote.raca || "outra";
-    const atual = consumoMSPorRacaGeral.get(chave) || { raca: lote.raca, somaXCab: 0, cab: 0 };
+    const atual = consumoMSPorRacaGeral.get(chave) || { raca: lote.raca, somaXCab: 0, cab: 0, somaPercentualXCab: 0, cabPercentual: 0 };
     atual.somaXCab += consumoMSCabeca * cabecas;
     atual.cab += cabecas;
+    if (percentualPV != null) {
+      atual.somaPercentualXCab += percentualPV * cabecas;
+      atual.cabPercentual += cabecas;
+    }
     consumoMSPorRacaGeral.set(chave, atual);
   }
   const racasComDadosGeral = [...new Set([...gmdPorRacaGeral.keys(), ...consumoMSPorRacaGeral.keys()])];
@@ -399,9 +406,13 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
     const gmd = gmdPorRacaGeral.get(chave);
     const consumo = consumoMSPorRacaGeral.get(chave);
     return {
-      raca: chave,
+      // A raça real (pode ser null = "não informada") vem do registro
+      // agregado, não da chave do Map — usar a chave ("outra") aqui fazia
+      // RACA_LOTE_LABEL["outra"] voltar undefined e a linha aparecer em branco.
+      raca: (gmd || consumo)?.raca ?? null,
       gmdMedio: gmd && gmd.cab > 0 ? gmd.somaXCab / gmd.cab : null,
       consumoMSMedio: consumo && consumo.cab > 0 ? consumo.somaXCab / consumo.cab : null,
+      consumoMSPercentualPVMedio: consumo && consumo.cabPercentual > 0 ? consumo.somaPercentualXCab / consumo.cabPercentual : null,
     };
   }).sort((a, b) => (b.gmdMedio || 0) - (a.gmdMedio || 0));
 
@@ -588,20 +599,16 @@ function PainelGeral({ clientes, lotes, saidas, consumos = [], cargasVagao = [],
           {zootecniaPorRacaGeral.length > 0 && (
             <div className="gestao-panel">
               <div className="gestao-panel-title"><div><span>POR RAÇA</span><h3>GMD e consumo de MS</h3></div></div>
-              <div className="gestao-table-wrap">
-                <table className="gestao-table">
-                  <thead><tr><th>Raça</th><th>GMD médio (finalizados)</th><th>Consumo MS médio (ativos)</th></tr></thead>
-                  <tbody>
-                    {zootecniaPorRacaGeral.map((item) => (
-                      <tr key={item.raca || "outra"}>
-                        <td><strong>{item.raca ? RACA_LOTE_LABEL[item.raca] : "Não informada"}</strong></td>
-                        <td>{item.gmdMedio != null ? `${item.gmdMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg/dia` : "—"}</td>
-                        <td>{item.consumoMSMedio != null ? `${item.consumoMSMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg/cab/dia` : "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {zootecniaPorRacaGeral.map((item) => (
+                <div key={item.raca || "sem-raca"} className="gestao-raca-row">
+                  <span className="gestao-raca-nome">{item.raca ? RACA_LOTE_LABEL[item.raca] : "Não informada"}</span>
+                  <div className="gestao-raca-stats">
+                    <div><b>{item.gmdMedio != null ? item.gmdMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) : "—"}</b><span>kg/dia</span></div>
+                    <div><b>{item.consumoMSMedio != null ? item.consumoMSMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) : "—"}</b><span>kg MS/cab</span></div>
+                    <div><b>{item.consumoMSPercentualPVMedio != null ? `${item.consumoMSPercentualPVMedio.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%` : "—"}</b><span>MS/PV</span></div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </>
