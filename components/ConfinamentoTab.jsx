@@ -96,6 +96,7 @@ const RACAS_LOTE = [
   { value: "f1_angus", label: "F1 Angus" },
   { value: "senepol", label: "Senepol" },
   { value: "guzolando", label: "Guzolando" },
+  { value: "holandes", label: "Holandês" },
 ];
 export const RACA_LOTE_LABEL = Object.fromEntries(RACAS_LOTE.filter((r) => r.value).map((r) => [r.value, r.label]));
 
