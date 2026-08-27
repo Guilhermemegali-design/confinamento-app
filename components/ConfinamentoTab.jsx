@@ -2117,6 +2117,19 @@ function ResultadoLinha({ label, value, forte = false, cor }) {
   return <div className="resultado-linha"><span>{label}</span><strong style={{ color: cor || undefined, fontSize: forte ? 13.5 : undefined }}>{value}</strong></div>;
 }
 
+// Carrega um PNG estático do /public como data URL — jsPDF (addImage) não
+// aceita uma URL comum no navegador, só base64 ou elemento já decodificado.
+async function carregarImagemComoDataUrl(url) {
+  const resposta = await fetch(url);
+  const blob = await resposta.blob();
+  return new Promise((resolve, reject) => {
+    const leitor = new FileReader();
+    leitor.onload = () => resolve(leitor.result);
+    leitor.onerror = reject;
+    leitor.readAsDataURL(blob);
+  });
+}
+
 export async function exportarResultadoLotePDF(cliente, lote, indicadores, saidas, consumoIngredientes = []) {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4" });
@@ -2138,6 +2151,23 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
 
   doc.setFillColor(...verde);
   doc.roundedRect(0, 0, largura, 116, 0, 0, "F");
+
+  // Logo do consultor num selo branco no canto superior direito do
+  // cabeçalho — o PNG é preto sobre fundo opaco (sem alpha), por isso
+  // precisa desse fundo branco pra não desaparecer no verde.
+  try {
+    const logoDataUrl = await carregarImagemComoDataUrl("/gmegali-logo.png");
+    const logoLado = 72;
+    const logoX = largura - margem - logoLado;
+    const logoY = (116 - logoLado) / 2;
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(logoX, logoY, logoLado, logoLado, 8, 8, "F");
+    const inset = 6;
+    doc.addImage(logoDataUrl, "PNG", logoX + inset, logoY + inset, logoLado - inset * 2, logoLado - inset * 2);
+  } catch {
+    // Sem internet/logo indisponível: segue sem o selo, não trava o PDF.
+  }
+
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
