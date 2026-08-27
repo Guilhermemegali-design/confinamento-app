@@ -2028,6 +2028,11 @@ function FechamentoCustoCard({ cliente, lote, indicadores, saidas, consumoIngred
   if (semDados) return null;
 
   const resultadoPositivo = f.resultadoPorCabeca == null || f.resultadoPorCabeca >= 0;
+  const gmdEsperado = lote.gmd_esperado != null ? Number(lote.gmd_esperado) : null;
+  const gmdDiferencaPercentual =
+    gmdEsperado != null && gmdEsperado > 0 && indicadores.gmdVivoEntradaSaida != null
+      ? ((indicadores.gmdVivoEntradaSaida - gmdEsperado) / gmdEsperado) * 100
+      : null;
 
   return (
     <section className="resultado-lote">
@@ -2052,7 +2057,16 @@ function FechamentoCustoCard({ cliente, lote, indicadores, saidas, consumoIngred
       <div className="resultado-blocos">
         <ResultadoBloco titulo="Desempenho do lote" cor="#3B7C70">
           <ResultadoLinha label="Período confinado" value={`${indicadores.diasConfinamento || 0} dias`} />
-          <ResultadoLinha label="GMD vivo" value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(3)} kg/cab/dia` : "—"} />
+          <ResultadoLinha label="GMD vivo (realizado)" value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(3)} kg/cab/dia` : "—"} />
+          {gmdEsperado != null && <ResultadoLinha label="GMD esperado" value={`${gmdEsperado.toFixed(2)} kg/cab/dia`} />}
+          {gmdDiferencaPercentual != null && (
+            <ResultadoLinha
+              label="Realizado x esperado"
+              value={`${gmdDiferencaPercentual >= 0 ? "+" : ""}${gmdDiferencaPercentual.toFixed(1)}%`}
+              forte
+              cor={gmdDiferencaPercentual >= 0 ? "#2E8060" : "#B34F42"}
+            />
+          )}
           <ResultadoLinha label="GMC de carcaça" value={f.gmc != null ? `${f.gmc.toFixed(3)} kg/cab/dia` : "—"} />
           <ResultadoLinha label="Arrobas produzidas com rendimento" value={f.arrobasProduzidas != null ? `${f.arrobasProduzidas.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} @` : "—"} />
         </ResultadoBloco>
@@ -2116,6 +2130,11 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
   const cinza = [92, 92, 88];
   const cinzaClaro = [246, 245, 241];
   const resultadoPositivo = f.resultadoPorCabeca == null || f.resultadoPorCabeca >= 0;
+  const gmdEsperado = lote.gmd_esperado != null ? Number(lote.gmd_esperado) : null;
+  const gmdDiferencaPercentual =
+    gmdEsperado != null && gmdEsperado > 0 && indicadores.gmdVivoEntradaSaida != null
+      ? ((indicadores.gmdVivoEntradaSaida - gmdEsperado) / gmdEsperado) * 100
+      : null;
 
   doc.setFillColor(...verde);
   doc.roundedRect(0, 0, largura, 116, 0, 0, "F");
@@ -2187,7 +2206,11 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
 
   secao("Desempenho zootécnico", [
     ["Dias de confinamento", `${indicadores.diasConfinamento || 0} dias`],
-    ["GMD vivo", indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(3)} kg/cab/dia` : "-"],
+    ["GMD vivo (realizado)", indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(3)} kg/cab/dia` : "-"],
+    ...(gmdEsperado != null ? [["GMD esperado", `${gmdEsperado.toFixed(2)} kg/cab/dia`]] : []),
+    ...(gmdDiferencaPercentual != null
+      ? [["Realizado x esperado", `${gmdDiferencaPercentual >= 0 ? "+" : ""}${gmdDiferencaPercentual.toFixed(1)}%`, gmdDiferencaPercentual >= 0 ? verde : [179, 79, 66]]]
+      : []),
     ["GMC de carcaça", f.gmc != null ? `${f.gmc.toFixed(3)} kg/cab/dia` : "-"],
     ["Consumo médio de MS por cabeça", indicadores.consumoMSMedio != null ? `${indicadores.consumoMSMedio.toFixed(2)} kg/cab/dia` : "-"],
     ["Consumo médio de MS / peso vivo", indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}% do PV` : "-"],
@@ -4239,7 +4262,13 @@ function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = [])
   );
   const porIngrediente = new Map();
   for (const carga of cargas) {
-    const itens = Array.isArray(carga.itens) ? carga.itens : [];
+    // A máquina Hook às vezes grava peso_real negativo num ingrediente
+    // quando o vagão precisou de uma correção de carga no meio do
+    // carregamento — mesmo filtro de calcularComposicaoCarga. Sem isso,
+    // um único item negativo derruba o pesoTotalCarga (denominador),
+    // inflando a proporção de todos os outros ingredientes da carga e
+    // ainda subtraindo do acumulado do próprio ingrediente afetado.
+    const itens = (Array.isArray(carga.itens) ? carga.itens : []).filter((item) => Number(item.peso_real || 0) > 0);
     const pesoTotalCarga = itens.reduce((soma, item) => soma + Number(item.peso_real || 0), 0);
     if (!(pesoTotalCarga > 0)) continue;
     const pesoNoLote = (Array.isArray(carga.descargas) ? carga.descargas : [])
