@@ -214,6 +214,8 @@ export default function ConfinamentoTab({
   const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(cliente?.id);
   const [movendo, setMovendo] = useState(false);
 
+  const lotesMap = Object.fromEntries(lotes.map((l) => [l.id, l.nome]));
+
   const pesagensPorLote = {};
   for (const p of pesagens) {
     (pesagensPorLote[p.lote_id] ||= []).push(p);
@@ -330,6 +332,46 @@ export default function ConfinamentoTab({
         onCancel={() => setTela({ modo: "lote", id: lote.id })}
         onSave={async (dados) => {
           await onAdicionarSaida(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "nova-transferencia") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    const { cabecasRestantes } = calcularResumoSaidas(lote, saidasPorLote[lote.id] || []);
+    const lotesDestino = lotes.filter((l) => l.id !== lote.id && !l.data_saida);
+    const indicadoresOrigem = calcularIndicadoresLote(
+      lote, pesagensPorLote[lote.id] || [], consumosPorLote[lote.id] || [], saidasPorLote[lote.id] || [], entradasPorLote[lote.id] || []
+    );
+    const fechamentoOrigem = calcularFechamentoCusto(lote, indicadoresOrigem, saidasPorLote[lote.id] || []);
+    return (
+      <FormTransferencia
+        cabecasRestantes={cabecasRestantes}
+        lotesDestino={lotesDestino}
+        custoSugerido={fechamentoOrigem.custoProducaoPorAnimal ?? indicadoresOrigem.custoAcumuladoAnimal}
+        pesoSugerido={indicadoresOrigem.pesoEsperadoHoje}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async ({ loteDestinoId, data, num_cabecas, peso_vivo, custo_acumulado_herdado, observacoes }) => {
+          const loteDestino = lotes.find((l) => l.id === loteDestinoId);
+          await onAdicionarSaida(lote.id, {
+            tipo: "transferencia",
+            data,
+            num_cabecas,
+            peso_saida_vivo: peso_vivo,
+            lote_destino_id: loteDestinoId,
+            observacoes: observacoes || (loteDestino ? `Transferido para ${loteDestino.nome}` : null),
+          });
+          await onAdicionarEntrada(loteDestinoId, {
+            data,
+            num_cabecas,
+            peso_entrada: peso_vivo,
+            lote_origem_id: lote.id,
+            custo_acumulado_herdado,
+            observacoes: observacoes || `Transferido de ${lote.nome}`,
+          });
           setTela({ modo: "lote", id: lote.id });
         }}
       />
@@ -547,6 +589,7 @@ export default function ConfinamentoTab({
       <LoteDetalhe
         cliente={cliente}
         lote={lote}
+        lotesMap={lotesMap}
         indicadores={indicadores}
         saidas={saidasLote}
         entradas={entradasLote}
@@ -577,6 +620,14 @@ export default function ConfinamentoTab({
           indicadores.status === "Ativo" &&
           indicadores.cabecasRestantes > 0 &&
           (() => setTela({ modo: "nova-doenca-trauma", loteId: lote.id }))
+        }
+        onNovaTransferencia={
+          onAdicionarSaida &&
+          onAdicionarEntrada &&
+          indicadores.status === "Ativo" &&
+          indicadores.cabecasRestantes > 0 &&
+          lotes.some((l) => l.id !== lote.id && !l.data_saida) &&
+          (() => setTela({ modo: "nova-transferencia", loteId: lote.id }))
         }
         onNovaEntrada={
           onAdicionarEntrada &&
@@ -1286,13 +1337,14 @@ function PainelCard({ label, valor, faixa }) {
 }
 
 function LoteDetalhe({
-  cliente, lote, indicadores, saidas = [], entradas = [], evolucao, evolucaoConsumo,
+  cliente, lote, lotesMap = {}, indicadores, saidas = [], entradas = [], evolucao, evolucaoConsumo,
   cargasVagao = [], ingredientesMs = [],
   onBack, onEditar,
   onNovaPesagem, onExcluirPesagem,
   onNovaSaida, onExcluirSaida, onEditarSaida,
   onNovaMorte,
   onNovaDoencaTrauma,
+  onNovaTransferencia,
   onNovaEntrada, onExcluirEntrada,
   onNovoConsumo, onEditarConsumo, onExcluirConsumo,
 }) {
@@ -1390,13 +1442,16 @@ function LoteDetalhe({
         <FechamentoCustoCard cliente={cliente} lote={lote} indicadores={indicadores} saidas={saidas} consumoIngredientes={consumoIngredientes} />
       )}
 
-      {(onNovaSaida || onNovaMorte || onNovaDoencaTrauma || onNovaEntrada || saidasOrdenadas.length > 0) && (
+      {(onNovaSaida || onNovaMorte || onNovaDoencaTrauma || onNovaTransferencia || onNovaEntrada || saidasOrdenadas.length > 0) && (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
             <div style={{ ...styles.sectionTitle, margin: 0 }}>Saídas registradas</div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 6 }}>
               {onNovaSaida && (
                 <button onClick={onNovaSaida} style={styles.editLinkBtn}>+ Saída</button>
+              )}
+              {onNovaTransferencia && (
+                <button onClick={onNovaTransferencia} style={{ ...styles.editLinkBtn, background: "#3E6B8A" }}>Trocar de lote</button>
               )}
               {onNovaDoencaTrauma && (
                 <button onClick={onNovaDoencaTrauma} style={{ ...styles.editLinkBtn, background: "#9A6036" }}>+ Doença/Trauma</button>
@@ -1427,14 +1482,20 @@ function LoteDetalhe({
                         DOENÇA/TRAUMA
                       </span>
                     )}
+                    {s.tipo === "transferencia" && (
+                      <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#3E6B8A", background: "#E9F1F7", padding: "2px 7px", borderRadius: 999 }}>
+                        TROCA DE LOTE
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
                     {s.num_cabecas} cab.{s.peso_saida_vivo != null ? ` · ${s.peso_saida_vivo} kg vivo/cab.` : ""}
                     {s.rendimento_carcaca != null ? ` · ${s.rendimento_carcaca}% carcaça` : ""}
+                    {s.tipo === "transferencia" && s.lote_destino_id ? ` · → ${lotesMap[s.lote_destino_id] || "lote excluído"}` : ""}
                     {s.observacoes ? ` · ${s.observacoes}` : ""}
                   </div>
                 </div>
-                {onEditarSaida && (
+                {onEditarSaida && s.tipo !== "transferencia" && (
                   <button
                     onClick={() => onEditarSaida(s.id)}
                     style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
@@ -1446,7 +1507,16 @@ function LoteDetalhe({
                 {onExcluirSaida && (
                   <button
                     onClick={() => {
-                      if (confirm(s.tipo === "morte" ? "Excluir este registro de morte?" : "Excluir esta saída?")) onExcluirSaida(s.id);
+                      if (
+                        confirm(
+                          s.tipo === "morte"
+                            ? "Excluir este registro de morte?"
+                            : s.tipo === "transferencia"
+                              ? "Excluir esta troca de lote? A entrada correspondente no lote de destino não é removida automaticamente — exclua-a lá também, se for o caso."
+                              : "Excluir esta saída?"
+                        )
+                      )
+                        onExcluirSaida(s.id);
                     }}
                     style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex" }}
                   >
@@ -1465,11 +1535,20 @@ function LoteDetalhe({
           {entradasOrdenadas.map((e) => (
             <div key={e.id} style={styles.rowCard}>
               <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: 13.5 }}>{formatDataBR(e.data)}</div>
+                <div style={{ fontWeight: 600, fontSize: 13.5 }}>
+                  {formatDataBR(e.data)}
+                  {e.lote_origem_id && (
+                    <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#3E6B8A", background: "#E9F1F7", padding: "2px 7px", borderRadius: 999 }}>
+                      TROCA DE LOTE
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
                   +{e.num_cabecas} cab.{e.peso_entrada != null ? ` · ${e.peso_entrada} kg/cab.` : ""}
                   {e.rendimento_entrada != null ? ` · ${e.rendimento_entrada}% rendimento` : ""}
                   {e.preco_arroba_entrada != null ? ` · ${formatBRL(e.preco_arroba_entrada)}/@` : ""}
+                  {e.custo_acumulado_herdado != null ? ` · custo herdado ${formatBRL(e.custo_acumulado_herdado)}/cab.` : ""}
+                  {e.lote_origem_id ? ` · ← ${lotesMap[e.lote_origem_id] || "lote excluído"}` : ""}
                   {e.observacoes ? ` · ${e.observacoes}` : ""}
                 </div>
               </div>
@@ -2504,6 +2583,104 @@ function FormMorte({ cabecasRestantes, onCancel, onSave, saidaExistente = null, 
           <Trash2 size={14} /> Excluir morte
         </button>
       )}
+    </div>
+  );
+}
+
+// Move parte das cabeças de um lote pra outro (ex: sobrou de uma venda
+// parcial e vai juntar com outro grupo). Grava como uma saída tipo
+// "transferencia" no lote de origem (sem preço de venda — não é receita) e
+// uma entrada adicional no lote de destino, levando peso e custo médio já
+// investidos nesses animais junto com a quantidade de cabeças — ver
+// calcularCustoAcumulado em lib/confinamento.js, que soma esse custo
+// herdado ao custo acumulado do lote de destino.
+function FormTransferencia({ cabecasRestantes, lotesDestino, custoSugerido, pesoSugerido, onCancel, onSave }) {
+  const [loteDestinoId, setLoteDestinoId] = useState(lotesDestino[0]?.id || "");
+  const [data, setData] = useState(new Date().toISOString().slice(0, 10));
+  const [numCabecas, setNumCabecas] = useState(cabecasRestantes != null ? String(cabecasRestantes) : "");
+  const [pesoVivo, setPesoVivo] = useState(pesoSugerido != null ? String(Math.round(pesoSugerido * 10) / 10) : "");
+  const [custoAcumulado, setCustoAcumulado] = useState(custoSugerido != null ? String(Math.round(custoSugerido * 100) / 100) : "");
+  const [observacoes, setObservacoes] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= cabecasRestantes;
+  const valido = data && numCabecasValido && loteDestinoId;
+
+  async function handleSave() {
+    if (!valido) return;
+    setSalvando(true);
+    try {
+      await onSave({
+        loteDestinoId,
+        data,
+        num_cabecas: Number(numCabecas),
+        peso_vivo: pesoVivo !== "" ? Number(pesoVivo) : null,
+        custo_acumulado_herdado: custoAcumulado !== "" ? Number(custoAcumulado) : null,
+        observacoes: observacoes.trim() || null,
+      });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  if (lotesDestino.length === 0) {
+    return (
+      <div>
+        <BackHeader title="Trocar animais de lote" onBack={onCancel} />
+        <EmptyHint text="Não há outro lote ativo deste cliente pra receber os animais. Cadastre o lote de destino primeiro." />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <BackHeader title="Trocar animais de lote" onBack={onCancel} />
+      <div style={styles.card}>
+        <SelectField
+          label="Lote de destino *"
+          value={loteDestinoId}
+          onChange={setLoteDestinoId}
+          options={lotesDestino.map((l) => ({ value: l.id, label: l.nome }))}
+        />
+        <InputField label="Data da troca *" type="date" value={data} onChange={setData} />
+        <InputField
+          label={`Nº de cabeças * (máx. ${cabecasRestantes})`}
+          type="number"
+          value={numCabecas}
+          onChange={setNumCabecas}
+          placeholder={`Máx. ${cabecasRestantes}`}
+        />
+        {numCabecas !== "" && !numCabecasValido && (
+          <div style={{ fontSize: 11.5, color: "#B8763E", padding: "0 0 8px" }}>
+            Só cabem {cabecasRestantes} cabeça(s) nesse lote.
+          </div>
+        )}
+        <InputField
+          label="Peso vivo médio no momento da troca (kg/cab.)"
+          type="number"
+          value={pesoVivo}
+          onChange={setPesoVivo}
+          placeholder="Ex: 420"
+        />
+        <InputField
+          label="Custo médio já investido por cabeça (R$)"
+          type="number"
+          value={custoAcumulado}
+          onChange={setCustoAcumulado}
+          placeholder="Ex: 1850"
+        />
+        <div style={{ fontSize: 11.5, color: "#7C7C76", padding: "0 0 6px" }}>
+          {custoSugerido != null
+            ? "Sugestão calculada a partir da compra rateada + alimentação acumulada deste lote até hoje — pode ajustar se preferir."
+            : "Some o valor de compra rateado por cabeça com o custo de alimentação acumulado até agora, se souber."}
+          {" "}Esse valor soma ao custo acumulado do lote de destino, em vez de recomeçar do zero.
+        </div>
+      </div>
+      <div style={styles.card}>
+        <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: sobra da venda parcial de 12/08" />
+      </div>
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : "Trocar animais de lote"}
+      </PrimaryButton>
     </div>
   );
 }
