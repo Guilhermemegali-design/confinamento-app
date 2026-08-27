@@ -13,7 +13,7 @@ export default function ClientesTab({
   onAddLote, onUpdateLote, onDeleteLote,
   onAddPesagem, onDeletePesagem,
   onAddSaida, onUpdateSaida, onDeleteSaida,
-  onAddEntrada, onDeleteEntrada,
+  onAddEntrada, onUpdateEntrada, onDeleteEntrada,
   onAddConsumo, onUpdateConsumo, onDeleteConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
@@ -63,6 +63,7 @@ export default function ClientesTab({
         onAtualizarSaida={onUpdateSaida}
         onExcluirSaida={onDeleteSaida}
         onAdicionarEntrada={onAddEntrada}
+        onAtualizarEntrada={onUpdateEntrada}
         onExcluirEntrada={onDeleteEntrada}
         onAdicionarConsumo={onAddConsumo}
         onAtualizarConsumo={onUpdateConsumo}

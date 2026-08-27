@@ -141,6 +141,10 @@ export default function Home() {
             await dados.adicionarEntrada(loteId, e);
             mostrarToast("Entrada registrada");
           }}
+          onUpdateEntrada={async (id, e) => {
+            await dados.atualizarEntrada(id, e);
+            mostrarToast("Entrada atualizada");
+          }}
           onDeleteEntrada={async (id) => {
             await dados.excluirEntrada(id);
             mostrarToast("Entrada excluída");

@@ -201,7 +201,7 @@ export default function ConfinamentoTab({
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
   onAdicionarSaida, onAtualizarSaida, onExcluirSaida,
-  onAdicionarEntrada, onExcluirEntrada,
+  onAdicionarEntrada, onAtualizarEntrada, onExcluirEntrada,
   onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
   onRegistrarLeituraCocho, onImportarLeiturasCocho,
   onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
@@ -356,7 +356,7 @@ export default function ConfinamentoTab({
         onCancel={() => setTela({ modo: "lote", id: lote.id })}
         onSave={async ({ loteDestinoId, data, num_cabecas, peso_vivo, custo_acumulado_herdado, observacoes }) => {
           const loteDestino = lotes.find((l) => l.id === loteDestinoId);
-          await onAdicionarSaida(lote.id, {
+          const saidaCriada = await onAdicionarSaida(lote.id, {
             tipo: "transferencia",
             data,
             num_cabecas,
@@ -369,9 +369,64 @@ export default function ConfinamentoTab({
             num_cabecas,
             peso_entrada: peso_vivo,
             lote_origem_id: lote.id,
+            saida_origem_id: saidaCriada?.id || null,
             custo_acumulado_herdado,
             observacoes: observacoes || `Transferido de ${lote.nome}`,
           });
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "editar-transferencia") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    const saidaExistente = (saidasPorLote[tela.loteId] || []).find((s) => s.id === tela.saidaId);
+    if (!lote || !saidaExistente) return <EmptyHint text="Troca de lote não encontrada." />;
+    const entradaVinculada = Object.values(entradasPorLote)
+      .flat()
+      .find((e) => e.saida_origem_id === saidaExistente.id);
+    const outrasSaidas = (saidasPorLote[lote.id] || []).filter((s) => s.id !== saidaExistente.id);
+    const { cabecasRestantes } = calcularResumoSaidas(lote, outrasSaidas);
+    // Garante que o lote de destino atual apareça na lista mesmo se, nesse
+    // meio tempo, ele tiver sido finalizado — senão o select ficaria sem
+    // opção correspondente ao valor já selecionado.
+    const lotesDestino = lotes.filter(
+      (l) => l.id !== lote.id && (!l.data_saida || l.id === entradaVinculada?.lote_id)
+    );
+    const onExcluir = onExcluirSaida && (() => {
+      if (confirm("Excluir esta troca de lote? Os animais somem do lote de destino também.")) {
+        onExcluirSaida(saidaExistente.id);
+        if (entradaVinculada && onExcluirEntrada) onExcluirEntrada(entradaVinculada.id);
+        setTela({ modo: "lote", id: lote.id });
+      }
+    });
+    return (
+      <FormTransferencia
+        cabecasRestantes={cabecasRestantes}
+        lotesDestino={lotesDestino}
+        transferenciaExistente={{ saida: saidaExistente, entrada: entradaVinculada }}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onExcluir={onExcluir}
+        onSave={async ({ loteDestinoId, data, num_cabecas, peso_vivo, custo_acumulado_herdado, observacoes }) => {
+          const loteDestino = lotes.find((l) => l.id === loteDestinoId);
+          await onAtualizarSaida(saidaExistente.id, {
+            data,
+            num_cabecas,
+            peso_saida_vivo: peso_vivo,
+            lote_destino_id: loteDestinoId,
+            observacoes: observacoes || (loteDestino ? `Transferido para ${loteDestino.nome}` : null),
+          });
+          if (entradaVinculada && onAtualizarEntrada) {
+            await onAtualizarEntrada(entradaVinculada.id, {
+              lote_id: loteDestinoId,
+              data,
+              num_cabecas,
+              peso_entrada: peso_vivo,
+              custo_acumulado_herdado,
+              observacoes: observacoes || `Transferido de ${lote.nome}`,
+            });
+          }
           setTela({ modo: "lote", id: lote.id });
         }}
       />
@@ -430,6 +485,32 @@ export default function ConfinamentoTab({
           await onAdicionarEntrada(lote.id, dados);
           setTela({ modo: "lote", id: lote.id });
         }}
+      />
+    );
+  }
+
+  if (tela.modo === "editar-entrada") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    const entradaExistente = (entradasPorLote[tela.loteId] || []).find((e) => e.id === tela.entradaId);
+    if (!lote || !entradaExistente) return <EmptyHint text="Entrada não encontrada." />;
+    return (
+      <FormEntrada
+        dataEntradaLote={lote.data_entrada}
+        entradaExistente={entradaExistente}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAtualizarEntrada(entradaExistente.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+        onExcluir={
+          onExcluirEntrada &&
+          (() => {
+            if (confirm("Excluir esta entrada? O total de animais do lote será reduzido.")) {
+              onExcluirEntrada(entradaExistente.id);
+              setTela({ modo: "lote", id: lote.id });
+            }
+          })
+        }
       />
     );
   }
@@ -607,8 +688,18 @@ export default function ConfinamentoTab({
           indicadores.cabecasRestantes > 0 &&
           (() => setTela({ modo: "nova-saida", loteId: lote.id }))
         }
-        onExcluirSaida={onExcluirSaida}
+        onExcluirSaida={
+          onExcluirSaida &&
+          (async (saidaId) => {
+            const saida = saidasLote.find((s) => s.id === saidaId);
+            const entradaVinculada =
+              saida?.tipo === "transferencia" ? Object.values(entradasPorLote).flat().find((e) => e.saida_origem_id === saidaId) : null;
+            await onExcluirSaida(saidaId);
+            if (entradaVinculada && onExcluirEntrada) await onExcluirEntrada(entradaVinculada.id);
+          })
+        }
         onEditarSaida={onAtualizarSaida && ((saidaId) => setTela({ modo: "editar-saida", loteId: lote.id, saidaId }))}
+        onEditarTransferencia={onAtualizarSaida && ((saidaId) => setTela({ modo: "editar-transferencia", loteId: lote.id, saidaId }))}
         onNovaMorte={
           onAdicionarSaida &&
           indicadores.status === "Ativo" &&
@@ -634,7 +725,22 @@ export default function ConfinamentoTab({
           indicadores.status === "Ativo" &&
           (() => setTela({ modo: "nova-entrada", loteId: lote.id }))
         }
-        onExcluirEntrada={onExcluirEntrada}
+        onEditarEntrada={onAtualizarEntrada && ((entradaId) => setTela({ modo: "editar-entrada", loteId: lote.id, entradaId }))}
+        onEditarTransferenciaDaEntrada={
+          onAtualizarSaida && ((loteOrigemId, saidaId) => setTela({ modo: "editar-transferencia", loteId: loteOrigemId, saidaId }))
+        }
+        onExcluirEntrada={
+          onExcluirEntrada &&
+          (async (entradaId) => {
+            const entrada = entradasLote.find((e) => e.id === entradaId);
+            await onExcluirEntrada(entradaId);
+            // Entrada nascida de uma troca de lote: a exclusão precisa
+            // desfazer a saída correspondente no lote de origem também,
+            // senão o lote de origem fica achando que ainda transferiu
+            // esses animais que na prática voltaram pro limbo.
+            if (entrada?.saida_origem_id && onExcluirSaida) await onExcluirSaida(entrada.saida_origem_id);
+          })
+        }
         onNovoConsumo={onAdicionarConsumo && (() => setTela({ modo: "novo-consumo", loteId: lote.id }))}
         onEditarConsumo={onAtualizarConsumo && ((consumoId) => setTela({ modo: "editar-consumo", loteId: lote.id, consumoId }))}
         onExcluirConsumo={onExcluirConsumo}
@@ -1344,8 +1450,8 @@ function LoteDetalhe({
   onNovaSaida, onExcluirSaida, onEditarSaida,
   onNovaMorte,
   onNovaDoencaTrauma,
-  onNovaTransferencia,
-  onNovaEntrada, onExcluirEntrada,
+  onNovaTransferencia, onEditarTransferencia, onEditarTransferenciaDaEntrada,
+  onNovaEntrada, onEditarEntrada, onExcluirEntrada,
   onNovoConsumo, onEditarConsumo, onExcluirConsumo,
 }) {
   const saidasOrdenadas = [...saidas].sort((a, b) => b.data.localeCompare(a.data));
@@ -1495,15 +1601,25 @@ function LoteDetalhe({
                     {s.observacoes ? ` · ${s.observacoes}` : ""}
                   </div>
                 </div>
-                {onEditarSaida && s.tipo !== "transferencia" && (
-                  <button
-                    onClick={() => onEditarSaida(s.id)}
-                    style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
-                    title="Editar"
-                  >
-                    <Pencil size={14} />
-                  </button>
-                )}
+                {s.tipo === "transferencia"
+                  ? onEditarTransferencia && (
+                      <button
+                        onClick={() => onEditarTransferencia(s.id)}
+                        style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
+                        title="Editar"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )
+                  : onEditarSaida && (
+                      <button
+                        onClick={() => onEditarSaida(s.id)}
+                        style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
+                        title="Editar"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )}
                 {onExcluirSaida && (
                   <button
                     onClick={() => {
@@ -1512,7 +1628,7 @@ function LoteDetalhe({
                           s.tipo === "morte"
                             ? "Excluir este registro de morte?"
                             : s.tipo === "transferencia"
-                              ? "Excluir esta troca de lote? A entrada correspondente no lote de destino não é removida automaticamente — exclua-a lá também, se for o caso."
+                              ? "Excluir esta troca de lote? A entrada correspondente no lote de destino também será removida."
                               : "Excluir esta saída?"
                         )
                       )
@@ -1552,10 +1668,36 @@ function LoteDetalhe({
                   {e.observacoes ? ` · ${e.observacoes}` : ""}
                 </div>
               </div>
+              {e.lote_origem_id && e.saida_origem_id
+                ? onEditarTransferenciaDaEntrada && (
+                    <button
+                      onClick={() => onEditarTransferenciaDaEntrada(e.lote_origem_id, e.saida_origem_id)}
+                      style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
+                      title="Editar"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  )
+                : onEditarEntrada && (
+                    <button
+                      onClick={() => onEditarEntrada(e.id)}
+                      style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
+                      title="Editar"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  )}
               {onExcluirEntrada && (
                 <button
                   onClick={() => {
-                    if (confirm("Excluir esta entrada? O total de animais do lote será reduzido.")) onExcluirEntrada(e.id);
+                    if (
+                      confirm(
+                        e.lote_origem_id
+                          ? "Excluir esta troca de lote? A saída correspondente no lote de origem também será removida."
+                          : "Excluir esta entrada? O total de animais do lote será reduzido."
+                      )
+                    )
+                      onExcluirEntrada(e.id);
                   }}
                   style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex" }}
                 >
@@ -2367,16 +2509,23 @@ function FormPesagem({ onCancel, onSave }) {
 }
 
 // Acrescenta animais a um lote que ainda está em formação.
-function FormEntrada({ dataEntradaLote, onCancel, onSave }) {
+function FormEntrada({ dataEntradaLote, onCancel, onSave, entradaExistente = null, onExcluir }) {
+  const editando = Boolean(entradaExistente);
   const hoje = new Date().toISOString().slice(0, 10);
-  const [data, setData] = useState(hoje);
-  const [numCabecas, setNumCabecas] = useState("");
-  const [pesoEntrada, setPesoEntrada] = useState("");
-  const [gmdEsperado, setGmdEsperado] = useState("");
-  const [pesoEsperadoAbate, setPesoEsperadoAbate] = useState("");
-  const [precoArrobaEntrada, setPrecoArrobaEntrada] = useState("");
-  const [rendimentoEntrada, setRendimentoEntrada] = useState("");
-  const [observacoes, setObservacoes] = useState("");
+  const [data, setData] = useState(entradaExistente?.data || hoje);
+  const [numCabecas, setNumCabecas] = useState(entradaExistente?.num_cabecas != null ? String(entradaExistente.num_cabecas) : "");
+  const [pesoEntrada, setPesoEntrada] = useState(entradaExistente?.peso_entrada != null ? String(entradaExistente.peso_entrada) : "");
+  const [gmdEsperado, setGmdEsperado] = useState(entradaExistente?.gmd_esperado != null ? String(entradaExistente.gmd_esperado) : "");
+  const [pesoEsperadoAbate, setPesoEsperadoAbate] = useState(
+    entradaExistente?.peso_esperado_abate != null ? String(entradaExistente.peso_esperado_abate) : ""
+  );
+  const [precoArrobaEntrada, setPrecoArrobaEntrada] = useState(
+    entradaExistente?.preco_arroba_entrada != null ? String(entradaExistente.preco_arroba_entrada) : ""
+  );
+  const [rendimentoEntrada, setRendimentoEntrada] = useState(
+    entradaExistente?.rendimento_entrada != null ? String(entradaExistente.rendimento_entrada) : ""
+  );
+  const [observacoes, setObservacoes] = useState(entradaExistente?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
   const quantidade = Number(numCabecas);
   const peso = Number(pesoEntrada);
@@ -2403,7 +2552,7 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave }) {
 
   return (
     <div>
-      <BackHeader title="Adicionar animais ao lote" onBack={onCancel} />
+      <BackHeader title={editando ? "Editar entrada" : "Adicionar animais ao lote"} onBack={onCancel} />
       <div style={styles.card}>
         <InputField label="Data da entrada *" type="date" value={data} onChange={setData} min={dataEntradaLote} max={hoje} />
         <InputField label="Nº de cabeças *" type="number" value={numCabecas} onChange={setNumCabecas} placeholder="Ex: 25" min="1" step="1" />
@@ -2418,8 +2567,13 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave }) {
         </div>
       </div>
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
-        {salvando ? "Salvando..." : "Registrar entrada"}
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Registrar entrada"}
       </PrimaryButton>
+      {editando && onExcluir && (
+        <button onClick={onExcluir} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir entrada
+        </button>
+      )}
     </div>
   );
 }
@@ -2594,13 +2748,28 @@ function FormMorte({ cabecasRestantes, onCancel, onSave, saidaExistente = null, 
 // investidos nesses animais junto com a quantidade de cabeças — ver
 // calcularCustoAcumulado em lib/confinamento.js, que soma esse custo
 // herdado ao custo acumulado do lote de destino.
-function FormTransferencia({ cabecasRestantes, lotesDestino, custoSugerido, pesoSugerido, onCancel, onSave }) {
-  const [loteDestinoId, setLoteDestinoId] = useState(lotesDestino[0]?.id || "");
-  const [data, setData] = useState(new Date().toISOString().slice(0, 10));
-  const [numCabecas, setNumCabecas] = useState(cabecasRestantes != null ? String(cabecasRestantes) : "");
-  const [pesoVivo, setPesoVivo] = useState(pesoSugerido != null ? String(Math.round(pesoSugerido * 10) / 10) : "");
-  const [custoAcumulado, setCustoAcumulado] = useState(custoSugerido != null ? String(Math.round(custoSugerido * 100) / 100) : "");
-  const [observacoes, setObservacoes] = useState("");
+function FormTransferencia({
+  cabecasRestantes, lotesDestino, custoSugerido, pesoSugerido, onCancel, onSave,
+  transferenciaExistente = null, onExcluir,
+}) {
+  const editando = Boolean(transferenciaExistente);
+  const { saida: saidaExistente, entrada: entradaExistente } = transferenciaExistente || {};
+  const [loteDestinoId, setLoteDestinoId] = useState(entradaExistente?.lote_id || lotesDestino[0]?.id || "");
+  const [data, setData] = useState(saidaExistente?.data || new Date().toISOString().slice(0, 10));
+  const [numCabecas, setNumCabecas] = useState(
+    saidaExistente?.num_cabecas != null ? String(saidaExistente.num_cabecas) : (cabecasRestantes != null ? String(cabecasRestantes) : "")
+  );
+  const [pesoVivo, setPesoVivo] = useState(
+    saidaExistente?.peso_saida_vivo != null
+      ? String(saidaExistente.peso_saida_vivo)
+      : pesoSugerido != null ? String(Math.round(pesoSugerido * 10) / 10) : ""
+  );
+  const [custoAcumulado, setCustoAcumulado] = useState(
+    entradaExistente?.custo_acumulado_herdado != null
+      ? String(entradaExistente.custo_acumulado_herdado)
+      : custoSugerido != null ? String(Math.round(custoSugerido * 100) / 100) : ""
+  );
+  const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
   const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= cabecasRestantes;
   const valido = data && numCabecasValido && loteDestinoId;
@@ -2625,7 +2794,7 @@ function FormTransferencia({ cabecasRestantes, lotesDestino, custoSugerido, peso
   if (lotesDestino.length === 0) {
     return (
       <div>
-        <BackHeader title="Trocar animais de lote" onBack={onCancel} />
+        <BackHeader title={editando ? "Editar troca de lote" : "Trocar animais de lote"} onBack={onCancel} />
         <EmptyHint text="Não há outro lote ativo deste cliente pra receber os animais. Cadastre o lote de destino primeiro." />
       </div>
     );
@@ -2633,7 +2802,7 @@ function FormTransferencia({ cabecasRestantes, lotesDestino, custoSugerido, peso
 
   return (
     <div>
-      <BackHeader title="Trocar animais de lote" onBack={onCancel} />
+      <BackHeader title={editando ? "Editar troca de lote" : "Trocar animais de lote"} onBack={onCancel} />
       <div style={styles.card}>
         <SelectField
           label="Lote de destino *"
@@ -2679,8 +2848,13 @@ function FormTransferencia({ cabecasRestantes, lotesDestino, custoSugerido, peso
         <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: sobra da venda parcial de 12/08" />
       </div>
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
-        {salvando ? "Salvando..." : "Trocar animais de lote"}
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Trocar animais de lote"}
       </PrimaryButton>
+      {editando && onExcluir && (
+        <button onClick={onExcluir} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir troca de lote
+        </button>
+      )}
     </div>
   );
 }
