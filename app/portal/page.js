@@ -10,6 +10,24 @@ import MarcaDesenvolvedor from "@/components/MarcaDesenvolvedor";
 import { BackHeader, InputField, PrimaryButton } from "@/components/UI";
 import { calcularResumoSaidas } from "@/lib/confinamento";
 
+// O PostgREST limita cada resposta a 1.000 linhas. Sem paginação, clientes
+// com muito histórico deixam de receber parte dos lançamentos mais recentes.
+async function buscarTodasLinhasPortal(tabela, coluna, valor) {
+  const tamanhoPagina = 1000;
+  const todas = [];
+  for (let inicio = 0; ; inicio += tamanhoPagina) {
+    let consulta = supabase.from(tabela).select("*");
+    consulta = Array.isArray(valor)
+      ? consulta.in(coluna, valor)
+      : consulta.eq(coluna, valor);
+    const { data, error } = await consulta.range(inicio, inicio + tamanhoPagina - 1);
+    if (error) throw error;
+    todas.push(...(data || []));
+    if (!data || data.length < tamanhoPagina) break;
+  }
+  return todas;
+}
+
 export default function PortalCliente() {
   const [sessao, setSessao] = useState(undefined);
   const [cliente, setCliente] = useState(undefined);
@@ -55,10 +73,13 @@ function TelaLoginCliente() {
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState("");
   const [carregando, setCarregando] = useState(false);
+  const [reenviando, setReenviando] = useState(false);
+  const [reenviado, setReenviado] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setErro("");
+    setReenviado(false);
     setCarregando(true);
     try {
       if (modo === "login") {
@@ -84,6 +105,26 @@ function TelaLoginCliente() {
     }
   }
 
+  async function handleReenviarConfirmacao() {
+    setReenviando(true);
+    setReenviado(false);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: { emailRedirectTo: "https://confinamento-nine.vercel.app/portal" },
+      });
+      if (error) throw error;
+      setReenviado(true);
+    } catch (err) {
+      setErro(traduzErro(err.message));
+    } finally {
+      setReenviando(false);
+    }
+  }
+
+  const precisaConfirmarEmail = erro.includes("confirmar seu e-mail");
+
   return (
     <div style={styles.loginScreen}>
       <div style={styles.loginCard}>
@@ -100,10 +141,16 @@ function TelaLoginCliente() {
             <input type="password" required minLength={6} value={senha} onChange={(e) => setSenha(e.target.value)} style={styles.input} placeholder="••••••••" />
           </label>
           {erro && <div style={styles.errorBox}>{erro}</div>}
+          {reenviado && <div style={styles.errorBox}>E-mail reenviado! Confira sua caixa de entrada e o spam.</div>}
           <button type="submit" disabled={carregando} style={styles.primaryBtn}>
             {carregando ? "Aguarde..." : modo === "login" ? "Entrar" : "Criar conta"}
           </button>
         </form>
+        {precisaConfirmarEmail && (
+          <button type="button" onClick={handleReenviarConfirmacao} disabled={reenviando} style={styles.linkBtn}>
+            {reenviando ? "Reenviando..." : "Reenviar e-mail de confirmação"}
+          </button>
+        )}
         <button onClick={() => setModo(modo === "login" ? "cadastro" : "login")} style={styles.linkBtn}>
           {modo === "login" ? "Recebeu um código do seu consultor? Criar conta" : "Já tem conta? Entrar"}
         </button>
@@ -193,20 +240,22 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
   const [relatorios, setRelatorios] = useState([]);
 
   const carregar = useCallback(async () => {
-    const { data: l } = await supabase.from("lotes_confinamento").select("*").eq("cliente_id", cliente.id);
-    setLotes(l || []);
-    const loteIds = (l || []).map((x) => x.id);
+    const l = await buscarTodasLinhasPortal("lotes_confinamento", "cliente_id", cliente.id);
+    setLotes(l);
+    const loteIds = l.map((x) => x.id);
     if (loteIds.length > 0) {
-      const { data: p } = await supabase.from("pesagens_lote").select("*").in("lote_id", loteIds);
-      setPesagens(p || []);
-      const { data: c } = await supabase.from("consumos_lote").select("*").in("lote_id", loteIds);
-      setConsumos(c || []);
-      const { data: s } = await supabase.from("saidas_lote").select("*").in("lote_id", loteIds);
-      setSaidas(s || []);
-      const { data: e } = await supabase.from("entradas_lote").select("*").in("lote_id", loteIds);
-      setEntradas(e || []);
-      const { data: lc } = await supabase.from("leituras_cocho").select("*").in("lote_id", loteIds);
-      setLeiturasCocho(lc || []);
+      const [p, c, s, e, lc] = await Promise.all([
+        buscarTodasLinhasPortal("pesagens_lote", "lote_id", loteIds),
+        buscarTodasLinhasPortal("consumos_lote", "lote_id", loteIds),
+        buscarTodasLinhasPortal("saidas_lote", "lote_id", loteIds),
+        buscarTodasLinhasPortal("entradas_lote", "lote_id", loteIds),
+        buscarTodasLinhasPortal("leituras_cocho", "lote_id", loteIds),
+      ]);
+      setPesagens(p);
+      setConsumos(c);
+      setSaidas(s);
+      setEntradas(e);
+      setLeiturasCocho(lc);
     } else {
       setPesagens([]);
       setConsumos([]);
@@ -214,24 +263,24 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
       setEntradas([]);
       setLeiturasCocho([]);
     }
-    const { data: cu } = await supabase.from("currais").select("*").eq("cliente_id", cliente.id);
-    setCurrais(cu || []);
-    const { data: cv } = await supabase.from("cargas_vagao").select("*").eq("cliente_id", cliente.id);
-    setCargasVagao(cv || []);
-    const { data: im } = await supabase.from("ingredientes_ms").select("*").eq("cliente_id", cliente.id);
-    setIngredientesMs(im || []);
-    const { data: dt } = await supabase.from("dietas").select("*").eq("cliente_id", cliente.id);
-    setDietas(dt || []);
-    const curralIds = (cu || []).map((x) => x.id);
+    const [cu, cv, im, dt] = await Promise.all([
+      buscarTodasLinhasPortal("currais", "cliente_id", cliente.id),
+      buscarTodasLinhasPortal("cargas_vagao", "cliente_id", cliente.id),
+      buscarTodasLinhasPortal("ingredientes_ms", "cliente_id", cliente.id),
+      buscarTodasLinhasPortal("dietas", "cliente_id", cliente.id),
+    ]);
+    setCurrais(cu);
+    setCargasVagao(cv);
+    setIngredientesMs(im);
+    setDietas(dt);
+    const curralIds = cu.map((x) => x.id);
     if (curralIds.length > 0) {
-      const { data: co } = await supabase.from("curral_ocupacoes").select("*").in("curral_id", curralIds);
-      setCurralOcupacoes(co || []);
+      setCurralOcupacoes(await buscarTodasLinhasPortal("curral_ocupacoes", "curral_id", curralIds));
     } else {
       setCurralOcupacoes([]);
     }
     if (papel === "administrador") {
-      const { data: rels } = await supabase.from("relatorios").select("*").eq("cliente_id", cliente.id);
-      setRelatorios(rels || []);
+      setRelatorios(await buscarTodasLinhasPortal("relatorios", "cliente_id", cliente.id));
     }
   }, [cliente.id, papel]);
 
@@ -731,5 +780,8 @@ function TrocarSenha({ onVoltar }) {
 function traduzErro(msg) {
   if (msg.includes("Invalid login credentials")) return "E-mail ou senha incorretos.";
   if (msg.includes("already registered")) return "Este e-mail já está cadastrado.";
+  if (msg.includes("Email not confirmed")) {
+    return "Você ainda não confirmou seu e-mail. Veja o link que enviamos (confira também o spam) ou toque em \"Reenviar e-mail de confirmação\" abaixo.";
+  }
   return msg;
 }
