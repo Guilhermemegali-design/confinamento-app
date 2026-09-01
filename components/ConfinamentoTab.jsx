@@ -3531,13 +3531,16 @@ function adicionarAoGrupo(grupos, lote, data, valor, fase, ms) {
 
 function montarResultadoImportacao(grupos, existentes, detalhes = {}) {
   const novos = [];
+  const todos = [];
   let jaExistentes = 0;
   for (const [chave, grupo] of grupos) {
+    todos.push(grupo);
     if (existentes.has(chave)) jaExistentes++;
     else novos.push(grupo);
   }
   novos.sort((a, b) => a.data.localeCompare(b.data) || a.loteNome.localeCompare(b.loteNome, "pt-BR", { numeric: true }));
-  return { novos, jaExistentes, ...detalhes };
+  todos.sort((a, b) => a.data.localeCompare(b.data) || a.loteNome.localeCompare(b.loteNome, "pt-BR", { numeric: true }));
+  return { novos, todos, jaExistentes, ...detalhes };
 }
 
 function processarPlanilhaSimples(workbook, lotes, existentes) {
@@ -3741,10 +3744,10 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
   }
 
   async function confirmar() {
-    if (!resultado || resultado.novos.length === 0) return;
+    if (!resultado || resultado.todos.length === 0) return;
     setImportando(true);
     try {
-      const linhas = resultado.novos.map((n) => {
+      const linhas = resultado.todos.map((n) => {
         const lote = lotes.find((l) => l.id === n.loteId);
         // MS: usa o da própria planilha se veio preenchido; senão cai pro MS
         // cadastrado no cliente pra essa fase (mesma regra do lançamento manual).
@@ -3799,7 +3802,7 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
                 <div>{resultado.totalLinhasSomadas} linha(s) somadas por serem do mesmo lote/data</div>
               )}
               {resultado.jaExistentes > 0 && (
-                <div>{resultado.jaExistentes} já existiam no app (não serão duplicados)</div>
+                <div>{resultado.jaExistentes} já existiam no app e terão o total do dia atualizado</div>
               )}
               {resultado.linhasIgnoradas > 0 && (
                 <div>{resultado.linhasIgnoradas} registro(s) sem data/lote/quantidade válidos, ignorado(s)</div>
@@ -3812,12 +3815,10 @@ function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImporta
             </div>
           </div>
 
-          <PrimaryButton disabled={resultado.novos.length === 0 || importando} onClick={confirmar}>
+          <PrimaryButton disabled={resultado.todos.length === 0 || importando} onClick={confirmar}>
             {importando
               ? "Importando..."
-              : resultado.novos.length > 0
-              ? `Importar ${resultado.novos.length} lançamento${resultado.novos.length > 1 ? "s" : ""}`
-              : "Nenhum lançamento novo para importar"}
+              : `Importar ${resultado.todos.length} lançamento${resultado.todos.length > 1 ? "s" : ""}`}
           </PrimaryButton>
         </>
       )}
@@ -4620,12 +4621,12 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
   }
 
   async function confirmar() {
-    if (!resultado || (!resultado.novos.length && !resultado.descargas.novos.length)) return;
+    if (!resultado || (!resultado.novos.length && !resultado.descargas.todos.length)) return;
     setImportando(true);
     try {
       const importadas = resultado.novos.length ? await onImportar(resultado.novos) : [];
       const cargasImportadas = Array.isArray(importadas) ? importadas : resultado.novos;
-      const linhasConsumo = resultado.descargas.novos.map((descarga) => ({
+      const linhasConsumo = resultado.descargas.todos.map((descarga) => ({
         lote_id: descarga.loteId,
         data: descarga.data,
         consumo_total_lote: descarga.consumoTotalLote,
@@ -4695,7 +4696,7 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
             <strong style={{ color: "#252522" }}>{resultado.novos.length} carga(s) nova(s)</strong>
             {resultado.jaExistentes > 0 && <div>{resultado.jaExistentes} já existiam e não serão duplicadas</div>}
             <div><strong style={{ color: "#252522" }}>{resultado.descargas.novos.length} consumo(s) diário(s) novo(s)</strong> calculado(s) pelas descargas</div>
-            {resultado.descargas.jaExistentes > 0 && <div>{resultado.descargas.jaExistentes} consumo(s) já existiam e não serão duplicados</div>}
+            {resultado.descargas.jaExistentes > 0 && <div>{resultado.descargas.jaExistentes} consumo(s) já existiam e terão o total diário atualizado, sem duplicação</div>}
             {resultado.descargas.naoReconhecidos.length > 0 && (
               <div style={{ color: "#B8763E" }}>Lotes não encontrados: {resultado.descargas.naoReconhecidos.join(", ")}</div>
             )}
@@ -4717,7 +4718,7 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
               </>
             )}
           </div>
-          <PrimaryButton disabled={(!resultado.novos.length && !resultado.descargas.novos.length) || importando} onClick={confirmar}>
+          <PrimaryButton disabled={(!resultado.novos.length && !resultado.descargas.todos.length) || importando} onClick={confirmar}>
             {importando ? "Importando cargas e descargas..." : "Importar cargas e descargas"}
           </PrimaryButton>
         </>
@@ -4727,7 +4728,7 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
         <div style={{ ...styles.card, marginTop: 10, textAlign: "center" }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#1F4D45", padding: "14px 0" }}>
             {concluido.cargas} carga(s) importada(s) com sucesso.
-            <div style={{ marginTop: 4 }}>{concluido.descargas} consumo(s) diário(s) criado(s) pelas descargas.</div>
+            <div style={{ marginTop: 4 }}>{concluido.descargas} consumo(s) diário(s) importado(s) pelas descargas.</div>
             {concluido.sincronizados > 0 && <div style={{ marginTop: 4 }}>{concluido.sincronizados} consumo(s) atualizado(s) com MS e custo.</div>}
           </div>
           <PrimaryButton onClick={onConcluido}>Ver análise das cargas</PrimaryButton>

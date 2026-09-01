@@ -419,16 +419,20 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
   }
 
   // Mesma importação disponível no painel do consultor: recebe os consumos
-  // já consolidados por lote/data e ignora dias que já existem.
+  // já consolidados por lote/data e atualiza o total ao reenviar o dia.
   async function importarConsumosEmLote(linhas) {
     if (linhas.length === 0) return [];
     const paraInserir = linhas.map((l) => ({ ...l, consultor_id: cliente.consultor_id }));
     const { data, error } = await supabase
       .from("consumos_lote")
-      .upsert(paraInserir, { onConflict: "lote_id,data", ignoreDuplicates: true })
+      .upsert(paraInserir, { onConflict: "lote_id,data" })
       .select();
     if (error) throw error;
-    setConsumos((cs) => [...cs, ...(data || [])]);
+    setConsumos((cs) => {
+      const atualizados = new Map((data || []).map((c) => [`${c.lote_id}|${c.data}`, c]));
+      const mantidos = cs.filter((c) => !atualizados.has(`${c.lote_id}|${c.data}`));
+      return [...mantidos, ...(data || [])];
+    });
     return data || [];
   }
 
