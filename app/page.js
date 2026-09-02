@@ -8,6 +8,7 @@ import TelaLogin from "@/components/TelaLogin";
 import ClientesTab from "@/components/ClientesTab";
 import Toast from "@/components/Toast";
 import MarcaDesenvolvedor from "@/components/MarcaDesenvolvedor";
+import BotaoAtualizar from "@/components/BotaoAtualizar";
 import { styles } from "@/lib/styles";
 
 const CONSULTOR_UID = "0db4e2fd-9cef-4e3f-9fb7-f974d4d22e02";
@@ -69,9 +70,12 @@ export default function Home() {
               <div style={styles.brandSub}>Painel do consultor</div>
             </div>
           </div>
-          <button onClick={() => supabase.auth.signOut()} style={styles.iconBtn} title="Sair">
-            <LogOut size={16} />
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <BotaoAtualizar />
+            <button onClick={() => supabase.auth.signOut()} style={styles.iconBtn} title="Sair">
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
       </div>
 

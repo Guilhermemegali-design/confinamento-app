@@ -7,6 +7,7 @@ import { LogOut, Beef, FileText, KeyRound } from "lucide-react";
 import ConfinamentoTab from "@/components/ConfinamentoTab";
 import RelatoriosPortalTab from "@/components/RelatoriosPortalTab";
 import MarcaDesenvolvedor from "@/components/MarcaDesenvolvedor";
+import BotaoAtualizar from "@/components/BotaoAtualizar";
 import { BackHeader, InputField, PrimaryButton } from "@/components/UI";
 import { calcularResumoSaidas } from "@/lib/confinamento";
 
@@ -638,6 +639,7 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
             </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            <BotaoAtualizar />
             <button onClick={() => setTrocandoSenha(true)} style={styles.iconBtn} title="Trocar senha">
               <KeyRound size={16} />
             </button>

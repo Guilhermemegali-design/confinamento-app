@@ -366,6 +366,7 @@ export default function ConfinamentoTab({
       <FormTransferencia
         cabecasRestantes={cabecasRestantes}
         lotesDestino={lotesDestino}
+        currais={currais}
         custoSugerido={fechamentoOrigem.custoProducaoPorAnimal ?? indicadoresOrigem.custoAcumuladoAnimal}
         pesoSugerido={indicadoresOrigem.pesoEsperadoHoje}
         onCancel={() => setTela({ modo: "lote", id: lote.id })}
@@ -420,6 +421,7 @@ export default function ConfinamentoTab({
       <FormTransferencia
         cabecasRestantes={cabecasRestantes}
         lotesDestino={lotesDestino}
+        currais={currais}
         transferenciaExistente={{ saida: saidaExistente, entrada: entradaVinculada }}
         onCancel={() => setTela({ modo: "lote", id: lote.id })}
         onExcluir={onExcluir}
@@ -2829,7 +2831,7 @@ function FormMorte({ cabecasRestantes, onCancel, onSave, saidaExistente = null, 
 // calcularCustoAcumulado em lib/confinamento.js, que soma esse custo
 // herdado ao custo acumulado do lote de destino.
 function FormTransferencia({
-  cabecasRestantes, lotesDestino, custoSugerido, pesoSugerido, onCancel, onSave,
+  cabecasRestantes, lotesDestino, currais = [], custoSugerido, pesoSugerido, onCancel, onSave,
   transferenciaExistente = null, onExcluir,
 }) {
   const editando = Boolean(transferenciaExistente);
@@ -2851,6 +2853,13 @@ function FormTransferencia({
   );
   const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
+  const nomeCurralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
+  const destinosOrdenados = [...lotesDestino].sort((a, b) => {
+    const curralA = nomeCurralPorId.get(a.curral_id) || "Sem curral";
+    const curralB = nomeCurralPorId.get(b.curral_id) || "Sem curral";
+    const porCurral = curralA.localeCompare(curralB, "pt-BR", { numeric: true });
+    return porCurral || a.nome.localeCompare(b.nome, "pt-BR", { numeric: true });
+  });
   const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= cabecasRestantes;
   const valido = data && numCabecasValido && loteDestinoId;
 
@@ -2885,11 +2894,17 @@ function FormTransferencia({
       <BackHeader title={editando ? "Editar troca de lote" : "Trocar animais de lote"} onBack={onCancel} />
       <div style={styles.card}>
         <SelectField
-          label="Lote de destino *"
+          label="Curral / lote de destino *"
           value={loteDestinoId}
           onChange={setLoteDestinoId}
-          options={lotesDestino.map((l) => ({ value: l.id, label: l.nome }))}
+          options={destinosOrdenados.map((lote) => ({
+            value: lote.id,
+            label: `${nomeCurralPorId.get(lote.curral_id) || "Sem curral"} — ${lote.nome}`,
+          }))}
         />
+        <div style={{ fontSize: 11.5, color: "#7C7C76", padding: "0 0 8px" }}>
+          Ao escolher o curral, os animais entram automaticamente no lote vinculado mostrado ao lado.
+        </div>
         <InputField label="Data da troca *" type="date" value={data} onChange={setData} />
         <InputField
           label={`Nº de cabeças * (máx. ${cabecasRestantes})`}
