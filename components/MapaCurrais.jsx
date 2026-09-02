@@ -335,14 +335,27 @@ export default function MapaCurrais({ cliente, lotes, currais, curralOcupacoes =
       const curralAlvoId = curralAlvoEl ? curralAlvoEl.getAttribute("data-curral-id") : null;
 
       const mover = onMoverLoteParaCurral || ((loteId, novoCurralId) => onAtualizarLote(loteId, { curral_id: novoCurralId }));
+      const loteMovido = lotesAtivos.find((lote) => lote.id === arrasto.loteId);
+      const curralOrigem = currais.find((curral) => curral.id === arrasto.origemCurralId);
 
       if (bandejaEl && !curralAlvoId) {
-        if (arrasto.origemCurralId) mover(arrasto.loteId, null, arrasto.origemCurralId);
+        if (arrasto.origemCurralId) {
+          const confirmou = window.confirm(
+            `Confirma retirar ${loteMovido?.nome || "este lote"} de ${curralOrigem?.nome || "seu curral atual"} e deixá-lo sem curral?`
+          );
+          if (confirmou) mover(arrasto.loteId, null, arrasto.origemCurralId);
+        }
         return;
       }
       if (!curralAlvoId || curralAlvoId === arrasto.origemCurralId) return;
 
       const ocupanteAlvo = loteDoCurral.get(curralAlvoId);
+      const curralAlvo = currais.find((curral) => curral.id === curralAlvoId);
+      const mensagem = ocupanteAlvo && ocupanteAlvo.id !== arrasto.loteId
+        ? `Confirma mover ${loteMovido?.nome || "este lote"} para ${curralAlvo?.nome || "o curral escolhido"}? ${ocupanteAlvo.nome} será movido para ${curralOrigem?.nome || "sem curral"}.`
+        : `Confirma mover ${loteMovido?.nome || "este lote"} de ${curralOrigem?.nome || "sem curral"} para ${curralAlvo?.nome || "o curral escolhido"}?`;
+      if (!window.confirm(mensagem)) return;
+
       mover(arrasto.loteId, curralAlvoId, arrasto.origemCurralId);
       if (ocupanteAlvo && ocupanteAlvo.id !== arrasto.loteId) {
         mover(ocupanteAlvo.id, arrasto.origemCurralId || null, curralAlvoId);
