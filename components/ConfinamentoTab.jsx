@@ -958,6 +958,7 @@ export default function ConfinamentoTab({
       ) : aba === "cocho" && onRegistrarLeituraCocho ? (
         <AbaLeituraCocho
           lotes={lotes}
+          currais={currais}
           consumosPorLote={consumosPorLote}
           leiturasCochoPorLote={leiturasCochoPorLote}
           onRegistrar={onRegistrarLeituraCocho}
@@ -5836,9 +5837,17 @@ async function exportarGraficosPDF(itens, tituloGrafico) {
 // ajuste do trato de hoje. Uma leitura por lote/dia — clicar em outra nota
 // no mesmo dia substitui a anterior (upsert), corrigindo clique errado sem
 // precisar excluir nada.
-function AbaLeituraCocho({ lotes, consumosPorLote, leiturasCochoPorLote, onRegistrar, onAbrirImportar }) {
+function AbaLeituraCocho({ lotes, currais = [], consumosPorLote, leiturasCochoPorLote, onRegistrar, onAbrirImportar }) {
   const hoje = new Date().toISOString().slice(0, 10);
-  const ativos = lotes.filter((l) => !l.data_saida);
+  const nomeCurralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
+  const ativos = lotes
+    .filter((l) => !l.data_saida)
+    .sort((a, b) => {
+      const curralA = nomeCurralPorId.get(a.curral_id) || "Sem curral";
+      const curralB = nomeCurralPorId.get(b.curral_id) || "Sem curral";
+      const porCurral = curralA.localeCompare(curralB, "pt-BR", { numeric: true });
+      return porCurral || a.nome.localeCompare(b.nome, "pt-BR", { numeric: true });
+    });
   const [salvandoId, setSalvandoId] = useState(null);
 
   return (
@@ -5850,12 +5859,12 @@ function AbaLeituraCocho({ lotes, consumosPorLote, leiturasCochoPorLote, onRegis
           </button>
         </div>
       )}
-      {ativos.length === 0 ? <EmptyHint text="Nenhum lote ativo." /> : <ListaLeituraCocho ativos={ativos} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} onRegistrar={onRegistrar} salvandoId={salvandoId} setSalvandoId={setSalvandoId} hoje={hoje} />}
+      {ativos.length === 0 ? <EmptyHint text="Nenhum lote ativo." /> : <ListaLeituraCocho ativos={ativos} nomeCurralPorId={nomeCurralPorId} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} onRegistrar={onRegistrar} salvandoId={salvandoId} setSalvandoId={setSalvandoId} hoje={hoje} />}
     </div>
   );
 }
 
-function ListaLeituraCocho({ ativos, consumosPorLote, leiturasCochoPorLote, onRegistrar, salvandoId, setSalvandoId, hoje }) {
+function ListaLeituraCocho({ ativos, nomeCurralPorId, consumosPorLote, leiturasCochoPorLote, onRegistrar, salvandoId, setSalvandoId, hoje }) {
 
   async function registrar(lote, referencia, nota) {
     setSalvandoId(lote.id);
@@ -5876,12 +5885,14 @@ function ListaLeituraCocho({ ativos, consumosPorLote, leiturasCochoPorLote, onRe
     <div>
       <LegendaAjustesCocho />
       {ativos.map((lote) => {
+        const nomeCurral = nomeCurralPorId.get(lote.curral_id) || "Sem curral";
         const referencia = obterConsumoReferenciaCocho(consumosPorLote[lote.id] || []);
         const historico = [...(leiturasCochoPorLote[lote.id] || [])].sort((a, b) => a.data.localeCompare(b.data));
         const leituraHoje = historico.find((l) => l.data === hoje);
         return (
           <div key={lote.id} style={{ ...styles.card, marginBottom: 14 }}>
-            <div style={{ fontWeight: 700, fontSize: 14.5, padding: "10px 0 4px" }}>{lote.nome}</div>
+            <div style={{ fontWeight: 750, fontSize: 16, padding: "10px 0 2px", color: "#1F4D45" }}>{nomeCurral}</div>
+            <div style={{ fontSize: 12.5, color: "#686862", fontWeight: 600, paddingBottom: 6 }}>Lote vinculado: {lote.nome}</div>
             {referencia ? (
               <div style={{ fontSize: 12.5, color: "#9A9A94", paddingBottom: 8 }}>
                 Consumo de referência ({formatDataBR(referencia.data)}): {referencia.consumo_total_lote} kg/dia
