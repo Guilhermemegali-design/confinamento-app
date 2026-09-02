@@ -104,7 +104,7 @@ const OPCOES_ORDENACAO = [
   { value: "manual", label: "Ordem manual" },
   { value: "entrada_desc", label: "Mais recentes" },
   { value: "entrada_asc", label: "Mais antigos" },
-  { value: "nome", label: "Nome (A-Z)" },
+  { value: "nome", label: "Lote (A-Z)" },
   { value: "cabecas_desc", label: "Nº de cabeças" },
 ];
 
@@ -113,6 +113,7 @@ const OPCOES_ORDENACAO = [
 // telas (lançamento em massa, gráficos) que não carregam esse indicador.
 const OPCOES_ORDENACAO_ATIVOS = [
   ...OPCOES_ORDENACAO,
+  { value: "curral", label: "Curral" },
   { value: "peso_desc", label: "Peso atual (maior-menor)" },
   { value: "peso_asc", label: "Peso atual (menor-maior)" },
 ];
@@ -148,7 +149,7 @@ function usarAbaPersistida(clienteId) {
   return [aba, setAba];
 }
 
-function compararLotes(ordenacao) {
+function compararLotes(ordenacao, nomeCurralPorId = new Map()) {
   return (a, b) => {
     if (ordenacao === "manual") {
       const oa = a.lote.ordem != null ? a.lote.ordem : Infinity;
@@ -158,12 +159,26 @@ function compararLotes(ordenacao) {
     }
     // "numeric: true" faz "Curral 2" vir antes de "Curral 10".
     if (ordenacao === "nome") return a.lote.nome.localeCompare(b.lote.nome, "pt-BR", { numeric: true });
+    if (ordenacao === "curral") {
+      const curralA = nomeCurralPorId.get(a.lote.curral_id);
+      const curralB = nomeCurralPorId.get(b.lote.curral_id);
+      if (!curralA && curralB) return 1;
+      if (curralA && !curralB) return -1;
+      const porCurral = String(curralA || "").localeCompare(String(curralB || ""), "pt-BR", { numeric: true });
+      return porCurral || a.lote.nome.localeCompare(b.lote.nome, "pt-BR", { numeric: true });
+    }
     if (ordenacao === "cabecas_desc") return Number(b.lote.num_cabecas || 0) - Number(a.lote.num_cabecas || 0);
     if (ordenacao === "entrada_asc") return a.lote.data_entrada.localeCompare(b.lote.data_entrada);
     if (ordenacao === "peso_desc") return Number(b.pesoEsperadoHoje || 0) - Number(a.pesoEsperadoHoje || 0);
     if (ordenacao === "peso_asc") return Number(a.pesoEsperadoHoje || 0) - Number(b.pesoEsperadoHoje || 0);
     return b.lote.data_entrada.localeCompare(a.lote.data_entrada);
   };
+}
+
+function identificacaoCurral(nomeCurral) {
+  if (!nomeCurral) return "—";
+  const numero = String(nomeCurral).match(/\d+[A-Za-z]?/);
+  return numero?.[0] || String(nomeCurral).slice(0, 3).toUpperCase();
 }
 
 function faixaConsumoMS(percentual) {
@@ -753,9 +768,10 @@ export default function ConfinamentoTab({
     lote: l,
     ...calcularIndicadoresLote(l, pesagensPorLote[l.id] || [], consumosPorLote[l.id] || [], saidasPorLote[l.id] || [], entradasPorLote[l.id] || []),
   }));
+  const nomeCurralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
   const ativos = comIndicadores
     .filter((i) => i.status === "Ativo")
-    .sort(compararLotes(ordenacao));
+    .sort(compararLotes(ordenacao, nomeCurralPorId));
   const finalizados = comIndicadores
     .filter((i) => i.status === "Finalizado")
     .sort((a, b) => (b.lote.data_saida || "").localeCompare(a.lote.data_saida || ""));
@@ -1015,6 +1031,7 @@ export default function ConfinamentoTab({
               consumoMS, consumoMSMedio, consumoMSPercentualPV, consumoMSPercentualPVMedio,
               custoAcumuladoAnimal, custoMedioDiarioAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate,
             } = item;
+            const nomeCurral = nomeCurralPorId.get(lote.curral_id);
             const faixaMSUltimo = faixaConsumoMS(consumoMSPercentualPV);
             const faixaMSMedio = faixaConsumoMS(consumoMSPercentualPVMedio);
             const saidasLoteAtivo = saidasPorLote[lote.id] || [];
@@ -1055,7 +1072,16 @@ export default function ConfinamentoTab({
                   onClick={() => setTela({ modo: "lote", id: lote.id })}
                   style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0, background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}
                 >
-                  <div style={styles.avatar}>{lote.nome.charAt(0)}</div>
+                  <div
+                    style={{
+                      ...styles.avatar,
+                      ...(!nomeCurral ? { background: "#F1EFE8", color: "#8A8A84" } : {}),
+                      fontSize: identificacaoCurral(nomeCurral).length > 2 ? 11 : 14,
+                    }}
+                    title={nomeCurral || "Lote sem curral"}
+                  >
+                    {identificacaoCurral(nomeCurral)}
+                  </div>
                   <div style={{ flex: 1, textAlign: "left" }}>
                     <div style={styles.listItemTitle}>{lote.nome}{lote.categoria ? ` · ${CATEGORIA_LOTE_LABEL[lote.categoria]}` : ""}{lote.raca ? ` · ${RACA_LOTE_LABEL[lote.raca]}` : ""}</div>
                     <div style={styles.listItemSub}>
