@@ -118,6 +118,11 @@ const OPCOES_ORDENACAO_ATIVOS = [
   { value: "peso_asc", label: "Peso atual (menor-maior)" },
 ];
 
+const OPCOES_ORDENACAO_GRAFICOS = [
+  ...OPCOES_ORDENACAO,
+  { value: "curral", label: "Curral" },
+];
+
 // Lembra a ordenação escolhida pelo usuário (por cliente) entre uma
 // visita e outra — sem isso, toda vez que abre a tela teria que
 // escolher "Nome (A-Z)"/etc de novo.
@@ -970,9 +975,9 @@ export default function ConfinamentoTab({
           )}
 
       {aba === "graficos" ? (
-        <AbaGraficos lotes={ativos.map((item) => item.lote)} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} clienteId={cliente?.id} />
+        <AbaGraficos lotes={ativos.map((item) => item.lote)} currais={currais} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} clienteId={cliente?.id} />
       ) : aba === "graficos-finalizados" ? (
-        <AbaGraficos lotes={finalizados.map((item) => item.lote)} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} clienteId={cliente?.id} />
+        <AbaGraficos lotes={finalizados.map((item) => item.lote)} currais={currais} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} clienteId={cliente?.id} />
       ) : aba === "cocho" && onRegistrarLeituraCocho ? (
         <AbaLeituraCocho
           lotes={lotes}
@@ -5713,9 +5718,10 @@ function ImportarLeituraCochoPlanilha({ lotes, leiturasCocho, consumosPorLote, o
 // Gráfico de consumo por lote: consumo de MS em relação ao peso vivo (%).
 // Só entra na lista quem já tem pelo menos 2 lançamentos de consumo com o
 // dado necessário (MS da dieta preenchida).
-function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = {}, entradasPorLote = {}, clienteId }) {
+function AbaGraficos({ lotes, currais = [], pesagensPorLote, consumosPorLote, saidasPorLote = {}, entradasPorLote = {}, clienteId }) {
   const [exportando, setExportando] = useState(false);
   const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(clienteId);
+  const nomeCurralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
   const comDados = lotes
     .map((lote) => ({
       lote,
@@ -5729,7 +5735,7 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = 
       ).filter((p) => p.percentualPV != null),
     }))
     .filter((x) => x.pontosPV.length > 0)
-    .sort(compararLotes(ordenacao));
+    .sort(compararLotes(ordenacao, nomeCurralPorId));
 
   if (comDados.length === 0) {
     return (
@@ -5757,7 +5763,7 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = 
           onChange={(e) => setOrdenacao(e.target.value)}
           style={{ fontSize: 12, color: "#5C5C58", background: "#F1EFE8", border: "none", borderRadius: 8, padding: "5px 8px", fontFamily: "inherit" }}
         >
-          {OPCOES_ORDENACAO.map((o) => (
+          {OPCOES_ORDENACAO_GRAFICOS.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
@@ -5770,26 +5776,47 @@ function AbaGraficos({ lotes, pesagensPorLote, consumosPorLote, saidasPorLote = 
         </button>
       </div>
       <div className="desktop-graphs-grid">
-      {comDados.map(({ lote, pontosPV, svgId }) => (
-        <div key={lote.id} style={{ marginBottom: 26 }}>
-          <div style={{ fontWeight: 700, fontSize: 14.5, margin: "0 4px 10px" }}>{lote.nome}</div>
-          <div style={{ ...styles.sectionTitle, margin: "0 4px 6px" }}>Consumo de MS em relação ao peso vivo (%)</div>
-          {pontosPV.length > 1 ? (
-            <GraficoLinha
-              pontos={pontosPV}
-              valueKey="percentualPV"
-              unidade="%"
-              cor="#1F4D45"
-              tendencia
-              gradeDetalhada
-              consultaPorDia
-              id={svgId}
-            />
-          ) : (
-            <EmptyHint text="Falta a % de MS em pelo menos 2 lançamentos para montar este gráfico." />
-          )}
-        </div>
-      ))}
+      {comDados.map(({ lote, pontosPV, svgId }) => {
+        const nomeCurral = nomeCurralPorId.get(lote.curral_id);
+        return (
+          <div key={lote.id} style={{ marginBottom: 26 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 4px 10px" }}>
+              <div
+                style={{
+                  ...styles.avatar,
+                  ...(!nomeCurral ? { background: "#F1EFE8", color: "#8A8A84" } : {}),
+                  fontSize: identificacaoCurral(nomeCurral).length > 2 ? 11 : 14,
+                  flexShrink: 0,
+                }}
+                title={nomeCurral || "Lote sem curral"}
+              >
+                {identificacaoCurral(nomeCurral)}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{lote.nome}</div>
+                <div style={{ fontSize: 11.5, color: nomeCurral ? "#1F4D45" : "#8A8A84", marginTop: 2 }}>
+                  {nomeCurral || "Sem curral"}
+                </div>
+              </div>
+            </div>
+            <div style={{ ...styles.sectionTitle, margin: "0 4px 6px" }}>Consumo de MS em relação ao peso vivo (%)</div>
+            {pontosPV.length > 1 ? (
+              <GraficoLinha
+                pontos={pontosPV}
+                valueKey="percentualPV"
+                unidade="%"
+                cor="#1F4D45"
+                tendencia
+                gradeDetalhada
+                consultaPorDia
+                id={svgId}
+              />
+            ) : (
+              <EmptyHint text="Falta a % de MS em pelo menos 2 lançamentos para montar este gráfico." />
+            )}
+          </div>
+        );
+      })}
       </div>
     </div>
   );
