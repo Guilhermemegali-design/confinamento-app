@@ -11,7 +11,7 @@ import { formatDataBR, formatBRL } from "@/lib/format";
 import {
   calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo,
   calcularResumoSaidas, calcularCabecasNaData, calcularFechamentoCusto, calcularGmdSaidaParcial,
-  calcularRendimentoCarcaca, calcularPesoMorto,
+  calcularRendimentoCarcaca, calcularPesoMorto, calcularPesoMedioSaida, calcularPesoTotalSaida,
   NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, obterConsumoReferenciaAntesDe,
   ajustePercentualDaNota, calcularHistoricoEsperadoRealizado, montarTabelaConsumoEsperado,
 } from "@/lib/confinamento";
@@ -1549,7 +1549,9 @@ function LoteDetalhe({
           <>
             <Field label="Data de saída" value={formatDataBR(lote.data_saida)} />
             {lote.peso_saida_vivo != null && <Field label="Peso de saída vivo" value={`${lote.peso_saida_vivo} kg`} />}
+            {lote.peso_saida_vivo_total != null && <Field label="Peso vivo total" value={`${lote.peso_saida_vivo_total} kg`} />}
             {lote.peso_saida_morto != null && <Field label="Peso morto" value={`${lote.peso_saida_morto} kg/cab.`} />}
+            {lote.peso_saida_morto_total != null && <Field label="Peso morto total" value={`${lote.peso_saida_morto_total} kg`} />}
             <Field
               label="GMD entrada-saída"
               value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(2)} kg/dia` : "—"}
@@ -1632,7 +1634,9 @@ function LoteDetalhe({
                   </div>
                   <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
                     {s.num_cabecas} cab.{s.peso_saida_vivo != null ? ` · ${s.peso_saida_vivo} kg vivo/cab.` : ""}
+                    {s.peso_saida_vivo_total != null ? ` · ${s.peso_saida_vivo_total} kg vivo total` : ""}
                     {s.peso_saida_morto != null ? ` · ${s.peso_saida_morto} kg morto/cab.` : ""}
+                    {s.peso_saida_morto_total != null ? ` · ${s.peso_saida_morto_total} kg morto total` : ""}
                     {s.rendimento_carcaca != null ? ` · ${s.rendimento_carcaca}% carcaça` : ""}
                     {s.tipo === "transferencia" && s.lote_destino_id ? ` · → ${lotesMap[s.lote_destino_id] || "lote excluído"}` : ""}
                     {s.observacoes ? ` · ${s.observacoes}` : ""}
@@ -2430,7 +2434,6 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
   const [categoria, setCategoria] = useState(lote?.categoria || "");
   const [raca, setRaca] = useState(lote?.raca || "");
   const [dataEntrada, setDataEntrada] = useState(lote?.data_entrada || new Date().toISOString().slice(0, 10));
-  const [numCabecas, setNumCabecas] = useState(lote?.num_cabecas != null ? String(lote.num_cabecas) : "");
   const [pesoEntrada, setPesoEntrada] = useState(lote?.peso_entrada != null ? String(lote.peso_entrada) : "");
   const [gmdEsperado, setGmdEsperado] = useState(lote?.gmd_esperado != null ? String(lote.gmd_esperado) : "");
   const [pesoEsperadoAbate, setPesoEsperadoAbate] = useState(lote?.peso_esperado_abate != null ? String(lote.peso_esperado_abate) : "");
@@ -2442,13 +2445,26 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
   const [custoTerminacao, setCustoTerminacao] = useState(lote?.custo_kg_mn_terminacao != null ? String(lote.custo_kg_mn_terminacao) : "");
   const [dataSaida, setDataSaida] = useState(lote?.data_saida || "");
   const {
+    numCabecas,
     pesoSaidaVivo,
+    pesoSaidaVivoTotal,
     pesoSaidaMorto,
+    pesoSaidaMortoTotal,
     rendimentoCarcaca,
+    alterarNumCabecas,
     alterarPesoSaidaVivo,
+    alterarPesoSaidaVivoTotal,
     alterarPesoSaidaMorto,
+    alterarPesoSaidaMortoTotal,
     alterarRendimentoCarcaca,
-  } = useCalculoCarcaca(lote?.peso_saida_vivo, lote?.peso_saida_morto, lote?.rendimento_carcaca);
+  } = useCalculoCarcaca({
+    numCabecasInicial: lote?.num_cabecas,
+    pesoVivoMedioInicial: lote?.peso_saida_vivo,
+    pesoVivoTotalInicial: lote?.peso_saida_vivo_total,
+    pesoMortoMedioInicial: lote?.peso_saida_morto,
+    pesoMortoTotalInicial: lote?.peso_saida_morto_total,
+    rendimentoInicial: lote?.rendimento_carcaca,
+  });
   const [precoVendaArroba, setPrecoVendaArroba] = useState(lote?.preco_venda_arroba != null ? String(lote.preco_venda_arroba) : "");
   const [custoOperacional, setCustoOperacional] = useState(lote?.custo_operacional != null ? String(lote.custo_operacional) : "");
   const [observacoes, setObservacoes] = useState(lote?.observacoes || "");
@@ -2476,7 +2492,9 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
         custo_kg_mn_terminacao: custoTerminacao !== "" ? Number(custoTerminacao) : null,
         data_saida: dataSaida || null,
         peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
+        peso_saida_vivo_total: pesoSaidaVivoTotal !== "" ? Number(pesoSaidaVivoTotal) : null,
         peso_saida_morto: pesoSaidaMorto !== "" ? Number(pesoSaidaMorto) : null,
+        peso_saida_morto_total: pesoSaidaMortoTotal !== "" ? Number(pesoSaidaMortoTotal) : null,
         rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
         preco_venda_arroba: precoVendaArroba !== "" ? Number(precoVendaArroba) : null,
         custo_operacional: custoOperacional !== "" ? Number(custoOperacional) : null,
@@ -2495,7 +2513,7 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
         <SelectField label="Categoria dos animais" value={categoria} onChange={setCategoria} options={CATEGORIAS_LOTE} />
         <SelectField label="Raça" value={raca} onChange={setRaca} options={RACAS_LOTE} />
         <InputField label="Data de entrada *" type="date" value={dataEntrada} onChange={setDataEntrada} />
-        <InputField label="Nº de cabeças *" type="number" value={numCabecas} onChange={setNumCabecas} placeholder="Ex: 130" />
+        <InputField label="Nº de cabeças *" type="number" value={numCabecas} onChange={alterarNumCabecas} placeholder="Ex: 130" />
         <InputField label="Peso de entrada (kg) *" type="number" value={pesoEntrada} onChange={setPesoEntrada} placeholder="Ex: 410" />
         <InputField label="GMD esperado (kg/dia)" type="number" value={gmdEsperado} onChange={setGmdEsperado} placeholder="Ex: 1.5" />
         <InputField
@@ -2535,13 +2553,29 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
       <SectionTitle>Saída</SectionTitle>
       <div style={styles.card}>
         <InputField label="Data de saída" type="date" value={dataSaida} onChange={setDataSaida} />
-        <InputField label="Peso de saída vivo (kg)" type="number" value={pesoSaidaVivo} onChange={alterarPesoSaidaVivo} min="0" step="0.01" />
+        <InputField label="Peso vivo médio (kg/cab.)" type="number" value={pesoSaidaVivo} onChange={alterarPesoSaidaVivo} min="0" step="0.01" />
         <InputField
-          label="Peso morto (kg/cab.)"
+          label="Peso vivo total (kg)"
+          type="number"
+          value={pesoSaidaVivoTotal}
+          onChange={alterarPesoSaidaVivoTotal}
+          min="0"
+          step="0.01"
+        />
+        <InputField
+          label="Peso morto médio (kg/cab.)"
           type="number"
           value={pesoSaidaMorto}
           onChange={alterarPesoSaidaMorto}
           placeholder="Ex: 295"
+          min="0"
+          step="0.01"
+        />
+        <InputField
+          label="Peso morto total (kg)"
+          type="number"
+          value={pesoSaidaMortoTotal}
+          onChange={alterarPesoSaidaMortoTotal}
           min="0"
           step="0.01"
         />
@@ -2687,50 +2721,140 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave, entradaExistente = nul
   );
 }
 
-// Mantém peso morto e rendimento sincronizados a partir do último dos dois
-// campos editado pelo usuário. O peso vivo é a base comum dos dois cálculos.
-function useCalculoCarcaca(pesoVivoInicial, pesoMortoInicial, rendimentoInicial) {
-  const pesoMortoCalculado = pesoMortoInicial == null
-    ? calcularPesoMorto(pesoVivoInicial, rendimentoInicial)
-    : Number(pesoMortoInicial);
-  const [pesoSaidaVivo, setPesoSaidaVivo] = useState(pesoVivoInicial != null ? String(pesoVivoInicial) : "");
-  const [pesoSaidaMorto, setPesoSaidaMorto] = useState(pesoMortoCalculado != null ? String(pesoMortoCalculado) : "");
-  const [rendimentoCarcaca, setRendimentoCarcaca] = useState(rendimentoInicial != null ? String(rendimentoInicial) : "");
-  const [campoBase, setCampoBase] = useState(
-    pesoMortoInicial != null ? "peso_morto" : rendimentoInicial != null ? "rendimento" : null
+// Mantém pesos médios, pesos totais e rendimento sincronizados a partir do
+// último campo editado pelo usuário. A quantidade de cabeças liga total e média.
+function useCalculoCarcaca({
+  numCabecasInicial,
+  pesoVivoMedioInicial,
+  pesoVivoTotalInicial,
+  pesoMortoMedioInicial,
+  pesoMortoTotalInicial,
+  rendimentoInicial,
+}) {
+  const pesoVivoMedioCalculado = pesoVivoMedioInicial != null
+    ? Number(pesoVivoMedioInicial)
+    : calcularPesoMedioSaida(pesoVivoTotalInicial, numCabecasInicial);
+  const pesoVivoTotalCalculado = pesoVivoTotalInicial != null
+    ? Number(pesoVivoTotalInicial)
+    : calcularPesoTotalSaida(pesoVivoMedioCalculado, numCabecasInicial);
+  const pesoMortoMedioCalculado = pesoMortoMedioInicial != null
+    ? Number(pesoMortoMedioInicial)
+    : pesoMortoTotalInicial != null
+      ? calcularPesoMedioSaida(pesoMortoTotalInicial, numCabecasInicial)
+      : calcularPesoMorto(pesoVivoMedioCalculado, rendimentoInicial);
+  const pesoMortoTotalCalculado = pesoMortoTotalInicial != null
+    ? Number(pesoMortoTotalInicial)
+    : calcularPesoTotalSaida(pesoMortoMedioCalculado, numCabecasInicial);
+  const texto = (valor) => valor != null ? String(valor) : "";
+
+  const [numCabecas, setNumCabecas] = useState(texto(numCabecasInicial));
+  const [pesoSaidaVivo, setPesoSaidaVivo] = useState(texto(pesoVivoMedioCalculado));
+  const [pesoSaidaVivoTotal, setPesoSaidaVivoTotal] = useState(texto(pesoVivoTotalCalculado));
+  const [pesoSaidaMorto, setPesoSaidaMorto] = useState(texto(pesoMortoMedioCalculado));
+  const [pesoSaidaMortoTotal, setPesoSaidaMortoTotal] = useState(texto(pesoMortoTotalCalculado));
+  const [rendimentoCarcaca, setRendimentoCarcaca] = useState(texto(rendimentoInicial));
+  const [origemPesoVivo, setOrigemPesoVivo] = useState(
+    pesoVivoMedioInicial != null ? "medio" : pesoVivoTotalInicial != null ? "total" : null
   );
+  const [origemPesoMorto, setOrigemPesoMorto] = useState(
+    pesoMortoMedioInicial != null ? "medio" : pesoMortoTotalInicial != null ? "total" : null
+  );
+  const [campoBaseCarcaca, setCampoBaseCarcaca] = useState(
+    pesoMortoMedioInicial != null || pesoMortoTotalInicial != null
+      ? "peso_morto"
+      : rendimentoInicial != null ? "rendimento" : null
+  );
+
+  function sincronizarCarcacaAPartirDoVivo(novoPesoVivoMedio, cabecas = numCabecas) {
+    if (campoBaseCarcaca === "peso_morto") {
+      const rendimento = calcularRendimentoCarcaca(novoPesoVivoMedio, pesoSaidaMorto);
+      setRendimentoCarcaca(texto(rendimento));
+    } else if (campoBaseCarcaca === "rendimento") {
+      const pesoMortoMedio = calcularPesoMorto(novoPesoVivoMedio, rendimentoCarcaca);
+      setPesoSaidaMorto(texto(pesoMortoMedio));
+      setPesoSaidaMortoTotal(texto(calcularPesoTotalSaida(pesoMortoMedio, cabecas)));
+    }
+  }
+
+  function alterarNumCabecas(valor) {
+    setNumCabecas(valor);
+
+    let novoPesoVivoMedio = pesoSaidaVivo;
+    if (origemPesoVivo === "total") {
+      novoPesoVivoMedio = texto(calcularPesoMedioSaida(pesoSaidaVivoTotal, valor));
+      setPesoSaidaVivo(novoPesoVivoMedio);
+    } else if (origemPesoVivo === "medio") {
+      setPesoSaidaVivoTotal(texto(calcularPesoTotalSaida(pesoSaidaVivo, valor)));
+    }
+
+    if (campoBaseCarcaca === "rendimento") {
+      const pesoMortoMedio = calcularPesoMorto(novoPesoVivoMedio, rendimentoCarcaca);
+      setPesoSaidaMorto(texto(pesoMortoMedio));
+      setPesoSaidaMortoTotal(texto(calcularPesoTotalSaida(pesoMortoMedio, valor)));
+    } else if (campoBaseCarcaca === "peso_morto") {
+      let novoPesoMortoMedio = pesoSaidaMorto;
+      if (origemPesoMorto === "total") {
+        novoPesoMortoMedio = texto(calcularPesoMedioSaida(pesoSaidaMortoTotal, valor));
+        setPesoSaidaMorto(novoPesoMortoMedio);
+      } else if (origemPesoMorto === "medio") {
+        setPesoSaidaMortoTotal(texto(calcularPesoTotalSaida(pesoSaidaMorto, valor)));
+      }
+      setRendimentoCarcaca(texto(calcularRendimentoCarcaca(novoPesoVivoMedio, novoPesoMortoMedio)));
+    }
+  }
 
   function alterarPesoSaidaVivo(valor) {
     setPesoSaidaVivo(valor);
-    if (campoBase === "peso_morto") {
-      const rendimento = calcularRendimentoCarcaca(valor, pesoSaidaMorto);
-      setRendimentoCarcaca(rendimento != null ? String(rendimento) : "");
-    } else if (campoBase === "rendimento") {
-      const pesoMorto = calcularPesoMorto(valor, rendimentoCarcaca);
-      setPesoSaidaMorto(pesoMorto != null ? String(pesoMorto) : "");
-    }
+    setOrigemPesoVivo("medio");
+    setPesoSaidaVivoTotal(texto(calcularPesoTotalSaida(valor, numCabecas)));
+    sincronizarCarcacaAPartirDoVivo(valor);
+  }
+
+  function alterarPesoSaidaVivoTotal(valor) {
+    setPesoSaidaVivoTotal(valor);
+    setOrigemPesoVivo("total");
+    const pesoVivoMedio = calcularPesoMedioSaida(valor, numCabecas);
+    setPesoSaidaVivo(texto(pesoVivoMedio));
+    sincronizarCarcacaAPartirDoVivo(pesoVivoMedio);
   }
 
   function alterarPesoSaidaMorto(valor) {
     setPesoSaidaMorto(valor);
-    setCampoBase("peso_morto");
-    const rendimento = calcularRendimentoCarcaca(pesoSaidaVivo, valor);
-    setRendimentoCarcaca(rendimento != null ? String(rendimento) : "");
+    setOrigemPesoMorto("medio");
+    setCampoBaseCarcaca("peso_morto");
+    setPesoSaidaMortoTotal(texto(calcularPesoTotalSaida(valor, numCabecas)));
+    setRendimentoCarcaca(texto(calcularRendimentoCarcaca(pesoSaidaVivo, valor)));
+  }
+
+  function alterarPesoSaidaMortoTotal(valor) {
+    setPesoSaidaMortoTotal(valor);
+    setOrigemPesoMorto("total");
+    setCampoBaseCarcaca("peso_morto");
+    const pesoMortoMedio = calcularPesoMedioSaida(valor, numCabecas);
+    setPesoSaidaMorto(texto(pesoMortoMedio));
+    setRendimentoCarcaca(texto(calcularRendimentoCarcaca(pesoSaidaVivo, pesoMortoMedio)));
   }
 
   function alterarRendimentoCarcaca(valor) {
     setRendimentoCarcaca(valor);
-    setCampoBase("rendimento");
-    const pesoMorto = calcularPesoMorto(pesoSaidaVivo, valor);
-    setPesoSaidaMorto(pesoMorto != null ? String(pesoMorto) : "");
+    setCampoBaseCarcaca("rendimento");
+    const pesoMortoMedio = calcularPesoMorto(pesoSaidaVivo, valor);
+    setPesoSaidaMorto(texto(pesoMortoMedio));
+    setPesoSaidaMortoTotal(texto(calcularPesoTotalSaida(pesoMortoMedio, numCabecas)));
   }
 
   return {
+    numCabecas,
     pesoSaidaVivo,
+    pesoSaidaVivoTotal,
     pesoSaidaMorto,
+    pesoSaidaMortoTotal,
     rendimentoCarcaca,
+    alterarNumCabecas,
     alterarPesoSaidaVivo,
+    alterarPesoSaidaVivoTotal,
     alterarPesoSaidaMorto,
+    alterarPesoSaidaMortoTotal,
     alterarRendimentoCarcaca,
   };
 }
@@ -2745,21 +2869,27 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
   // aumentar, mesmo que ainda "caiba" no lote.
   const tetoCabecas = editando ? cabecasRestantes + Number(saidaExistente.num_cabecas || 0) : cabecasRestantes;
   const [data, setData] = useState(saidaExistente?.data || new Date().toISOString().slice(0, 10));
-  const [numCabecas, setNumCabecas] = useState(
-    saidaExistente?.num_cabecas != null ? String(saidaExistente.num_cabecas) : (cabecasRestantes != null ? String(cabecasRestantes) : "")
-  );
   const {
+    numCabecas,
     pesoSaidaVivo,
+    pesoSaidaVivoTotal,
     pesoSaidaMorto,
+    pesoSaidaMortoTotal,
     rendimentoCarcaca,
+    alterarNumCabecas,
     alterarPesoSaidaVivo,
+    alterarPesoSaidaVivoTotal,
     alterarPesoSaidaMorto,
+    alterarPesoSaidaMortoTotal,
     alterarRendimentoCarcaca,
-  } = useCalculoCarcaca(
-    saidaExistente?.peso_saida_vivo,
-    saidaExistente?.peso_saida_morto,
-    saidaExistente?.rendimento_carcaca
-  );
+  } = useCalculoCarcaca({
+    numCabecasInicial: saidaExistente?.num_cabecas != null ? saidaExistente.num_cabecas : cabecasRestantes,
+    pesoVivoMedioInicial: saidaExistente?.peso_saida_vivo,
+    pesoVivoTotalInicial: saidaExistente?.peso_saida_vivo_total,
+    pesoMortoMedioInicial: saidaExistente?.peso_saida_morto,
+    pesoMortoTotalInicial: saidaExistente?.peso_saida_morto_total,
+    rendimentoInicial: saidaExistente?.rendimento_carcaca,
+  });
   const [precoVendaArroba, setPrecoVendaArroba] = useState(saidaExistente?.preco_venda_arroba != null ? String(saidaExistente.preco_venda_arroba) : "");
   const [custoOperacional, setCustoOperacional] = useState(saidaExistente?.custo_operacional != null ? String(saidaExistente.custo_operacional) : "");
   const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
@@ -2775,7 +2905,9 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
         num_cabecas: Number(numCabecas),
         tipo,
         peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
+        peso_saida_vivo_total: pesoSaidaVivoTotal !== "" ? Number(pesoSaidaVivoTotal) : null,
         peso_saida_morto: pesoSaidaMorto !== "" ? Number(pesoSaidaMorto) : null,
+        peso_saida_morto_total: pesoSaidaMortoTotal !== "" ? Number(pesoSaidaMortoTotal) : null,
         rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
         preco_venda_arroba: precoVendaArroba !== "" ? Number(precoVendaArroba) : null,
         custo_operacional: custoOperacional !== "" ? Number(custoOperacional) : null,
@@ -2795,7 +2927,7 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
           label={`Nº de cabeças que saíram * (máx. ${tetoCabecas})`}
           type="number"
           value={numCabecas}
-          onChange={setNumCabecas}
+          onChange={alterarNumCabecas}
           placeholder={`Máx. ${tetoCabecas}`}
         />
         {numCabecas !== "" && !numCabecasValido && (
@@ -2803,13 +2935,31 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
             Só cabem {tetoCabecas} cabeça(s) nesse lote.
           </div>
         )}
-        <InputField label="Peso de saída vivo (kg/cab.)" type="number" value={pesoSaidaVivo} onChange={alterarPesoSaidaVivo} placeholder="Ex: 540" min="0" step="0.01" />
+        <InputField label="Peso vivo médio (kg/cab.)" type="number" value={pesoSaidaVivo} onChange={alterarPesoSaidaVivo} placeholder="Ex: 540" min="0" step="0.01" />
         <InputField
-          label="Peso morto (kg/cab.)"
+          label="Peso vivo total da saída (kg)"
+          type="number"
+          value={pesoSaidaVivoTotal}
+          onChange={alterarPesoSaidaVivoTotal}
+          placeholder="Ex: 6480"
+          min="0"
+          step="0.01"
+        />
+        <InputField
+          label="Peso morto médio (kg/cab.)"
           type="number"
           value={pesoSaidaMorto}
           onChange={alterarPesoSaidaMorto}
           placeholder="Ex: 295"
+          min="0"
+          step="0.01"
+        />
+        <InputField
+          label="Peso morto total da saída (kg)"
+          type="number"
+          value={pesoSaidaMortoTotal}
+          onChange={alterarPesoSaidaMortoTotal}
+          placeholder="Ex: 3564"
           min="0"
           step="0.01"
         />
