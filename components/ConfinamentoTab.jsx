@@ -11,6 +11,7 @@ import { formatDataBR, formatBRL } from "@/lib/format";
 import {
   calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo,
   calcularResumoSaidas, calcularCabecasNaData, calcularFechamentoCusto, calcularGmdSaidaParcial,
+  calcularRendimentoCarcaca, calcularPesoMorto,
   NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, obterConsumoReferenciaAntesDe,
   ajustePercentualDaNota, calcularHistoricoEsperadoRealizado, montarTabelaConsumoEsperado,
 } from "@/lib/confinamento";
@@ -1548,6 +1549,7 @@ function LoteDetalhe({
           <>
             <Field label="Data de saída" value={formatDataBR(lote.data_saida)} />
             {lote.peso_saida_vivo != null && <Field label="Peso de saída vivo" value={`${lote.peso_saida_vivo} kg`} />}
+            {lote.peso_saida_morto != null && <Field label="Peso morto" value={`${lote.peso_saida_morto} kg/cab.`} />}
             <Field
               label="GMD entrada-saída"
               value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(2)} kg/dia` : "—"}
@@ -1630,6 +1632,7 @@ function LoteDetalhe({
                   </div>
                   <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
                     {s.num_cabecas} cab.{s.peso_saida_vivo != null ? ` · ${s.peso_saida_vivo} kg vivo/cab.` : ""}
+                    {s.peso_saida_morto != null ? ` · ${s.peso_saida_morto} kg morto/cab.` : ""}
                     {s.rendimento_carcaca != null ? ` · ${s.rendimento_carcaca}% carcaça` : ""}
                     {s.tipo === "transferencia" && s.lote_destino_id ? ` · → ${lotesMap[s.lote_destino_id] || "lote excluído"}` : ""}
                     {s.observacoes ? ` · ${s.observacoes}` : ""}
@@ -2438,8 +2441,14 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
   const [custoCrescimento, setCustoCrescimento] = useState(lote?.custo_kg_mn_crescimento != null ? String(lote.custo_kg_mn_crescimento) : "");
   const [custoTerminacao, setCustoTerminacao] = useState(lote?.custo_kg_mn_terminacao != null ? String(lote.custo_kg_mn_terminacao) : "");
   const [dataSaida, setDataSaida] = useState(lote?.data_saida || "");
-  const [pesoSaidaVivo, setPesoSaidaVivo] = useState(lote?.peso_saida_vivo != null ? String(lote.peso_saida_vivo) : "");
-  const [rendimentoCarcaca, setRendimentoCarcaca] = useState(lote?.rendimento_carcaca != null ? String(lote.rendimento_carcaca) : "");
+  const {
+    pesoSaidaVivo,
+    pesoSaidaMorto,
+    rendimentoCarcaca,
+    alterarPesoSaidaVivo,
+    alterarPesoSaidaMorto,
+    alterarRendimentoCarcaca,
+  } = useCalculoCarcaca(lote?.peso_saida_vivo, lote?.peso_saida_morto, lote?.rendimento_carcaca);
   const [precoVendaArroba, setPrecoVendaArroba] = useState(lote?.preco_venda_arroba != null ? String(lote.preco_venda_arroba) : "");
   const [custoOperacional, setCustoOperacional] = useState(lote?.custo_operacional != null ? String(lote.custo_operacional) : "");
   const [observacoes, setObservacoes] = useState(lote?.observacoes || "");
@@ -2467,6 +2476,7 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
         custo_kg_mn_terminacao: custoTerminacao !== "" ? Number(custoTerminacao) : null,
         data_saida: dataSaida || null,
         peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
+        peso_saida_morto: pesoSaidaMorto !== "" ? Number(pesoSaidaMorto) : null,
         rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
         preco_venda_arroba: precoVendaArroba !== "" ? Number(precoVendaArroba) : null,
         custo_operacional: custoOperacional !== "" ? Number(custoOperacional) : null,
@@ -2525,13 +2535,25 @@ function FormLote({ lote, onCancel, onSave, onDelete }) {
       <SectionTitle>Saída</SectionTitle>
       <div style={styles.card}>
         <InputField label="Data de saída" type="date" value={dataSaida} onChange={setDataSaida} />
-        <InputField label="Peso de saída vivo (kg)" type="number" value={pesoSaidaVivo} onChange={setPesoSaidaVivo} />
+        <InputField label="Peso de saída vivo (kg)" type="number" value={pesoSaidaVivo} onChange={alterarPesoSaidaVivo} min="0" step="0.01" />
+        <InputField
+          label="Peso morto (kg/cab.)"
+          type="number"
+          value={pesoSaidaMorto}
+          onChange={alterarPesoSaidaMorto}
+          placeholder="Ex: 295"
+          min="0"
+          step="0.01"
+        />
         <InputField
           label="Rendimento de carcaça (%)"
           type="number"
           value={rendimentoCarcaca}
-          onChange={setRendimentoCarcaca}
+          onChange={alterarRendimentoCarcaca}
           placeholder="Ex: 54.5"
+          min="0"
+          max="100"
+          step="0.01"
         />
         <InputField
           label="Preço de venda da arroba (R$/@)"
@@ -2665,6 +2687,54 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave, entradaExistente = nul
   );
 }
 
+// Mantém peso morto e rendimento sincronizados a partir do último dos dois
+// campos editado pelo usuário. O peso vivo é a base comum dos dois cálculos.
+function useCalculoCarcaca(pesoVivoInicial, pesoMortoInicial, rendimentoInicial) {
+  const pesoMortoCalculado = pesoMortoInicial == null
+    ? calcularPesoMorto(pesoVivoInicial, rendimentoInicial)
+    : Number(pesoMortoInicial);
+  const [pesoSaidaVivo, setPesoSaidaVivo] = useState(pesoVivoInicial != null ? String(pesoVivoInicial) : "");
+  const [pesoSaidaMorto, setPesoSaidaMorto] = useState(pesoMortoCalculado != null ? String(pesoMortoCalculado) : "");
+  const [rendimentoCarcaca, setRendimentoCarcaca] = useState(rendimentoInicial != null ? String(rendimentoInicial) : "");
+  const [campoBase, setCampoBase] = useState(
+    pesoMortoInicial != null ? "peso_morto" : rendimentoInicial != null ? "rendimento" : null
+  );
+
+  function alterarPesoSaidaVivo(valor) {
+    setPesoSaidaVivo(valor);
+    if (campoBase === "peso_morto") {
+      const rendimento = calcularRendimentoCarcaca(valor, pesoSaidaMorto);
+      setRendimentoCarcaca(rendimento != null ? String(rendimento) : "");
+    } else if (campoBase === "rendimento") {
+      const pesoMorto = calcularPesoMorto(valor, rendimentoCarcaca);
+      setPesoSaidaMorto(pesoMorto != null ? String(pesoMorto) : "");
+    }
+  }
+
+  function alterarPesoSaidaMorto(valor) {
+    setPesoSaidaMorto(valor);
+    setCampoBase("peso_morto");
+    const rendimento = calcularRendimentoCarcaca(pesoSaidaVivo, valor);
+    setRendimentoCarcaca(rendimento != null ? String(rendimento) : "");
+  }
+
+  function alterarRendimentoCarcaca(valor) {
+    setRendimentoCarcaca(valor);
+    setCampoBase("rendimento");
+    const pesoMorto = calcularPesoMorto(pesoSaidaVivo, valor);
+    setPesoSaidaMorto(pesoMorto != null ? String(pesoMorto) : "");
+  }
+
+  return {
+    pesoSaidaVivo,
+    pesoSaidaMorto,
+    rendimentoCarcaca,
+    alterarPesoSaidaVivo,
+    alterarPesoSaidaMorto,
+    alterarRendimentoCarcaca,
+  };
+}
+
 // Registra a saída de parte das cabeças do lote (vai tirando boi aos poucos
 // até esvaziar). Quando o número de cabeças bater com o que resta, o lote
 // é finalizado sozinho — não precisa editar o lote pra fechar.
@@ -2678,8 +2748,18 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
   const [numCabecas, setNumCabecas] = useState(
     saidaExistente?.num_cabecas != null ? String(saidaExistente.num_cabecas) : (cabecasRestantes != null ? String(cabecasRestantes) : "")
   );
-  const [pesoSaidaVivo, setPesoSaidaVivo] = useState(saidaExistente?.peso_saida_vivo != null ? String(saidaExistente.peso_saida_vivo) : "");
-  const [rendimentoCarcaca, setRendimentoCarcaca] = useState(saidaExistente?.rendimento_carcaca != null ? String(saidaExistente.rendimento_carcaca) : "");
+  const {
+    pesoSaidaVivo,
+    pesoSaidaMorto,
+    rendimentoCarcaca,
+    alterarPesoSaidaVivo,
+    alterarPesoSaidaMorto,
+    alterarRendimentoCarcaca,
+  } = useCalculoCarcaca(
+    saidaExistente?.peso_saida_vivo,
+    saidaExistente?.peso_saida_morto,
+    saidaExistente?.rendimento_carcaca
+  );
   const [precoVendaArroba, setPrecoVendaArroba] = useState(saidaExistente?.preco_venda_arroba != null ? String(saidaExistente.preco_venda_arroba) : "");
   const [custoOperacional, setCustoOperacional] = useState(saidaExistente?.custo_operacional != null ? String(saidaExistente.custo_operacional) : "");
   const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
@@ -2695,6 +2775,7 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
         num_cabecas: Number(numCabecas),
         tipo,
         peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
+        peso_saida_morto: pesoSaidaMorto !== "" ? Number(pesoSaidaMorto) : null,
         rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
         preco_venda_arroba: precoVendaArroba !== "" ? Number(precoVendaArroba) : null,
         custo_operacional: custoOperacional !== "" ? Number(custoOperacional) : null,
@@ -2722,13 +2803,25 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
             Só cabem {tetoCabecas} cabeça(s) nesse lote.
           </div>
         )}
-        <InputField label="Peso de saída vivo (kg/cab.)" type="number" value={pesoSaidaVivo} onChange={setPesoSaidaVivo} placeholder="Ex: 540" />
+        <InputField label="Peso de saída vivo (kg/cab.)" type="number" value={pesoSaidaVivo} onChange={alterarPesoSaidaVivo} placeholder="Ex: 540" min="0" step="0.01" />
+        <InputField
+          label="Peso morto (kg/cab.)"
+          type="number"
+          value={pesoSaidaMorto}
+          onChange={alterarPesoSaidaMorto}
+          placeholder="Ex: 295"
+          min="0"
+          step="0.01"
+        />
         <InputField
           label="Rendimento de carcaça (%)"
           type="number"
           value={rendimentoCarcaca}
-          onChange={setRendimentoCarcaca}
+          onChange={alterarRendimentoCarcaca}
           placeholder="Ex: 54.5"
+          min="0"
+          max="100"
+          step="0.01"
         />
         <InputField
           label="Preço de venda da arroba (R$/@)"
