@@ -627,6 +627,8 @@ export default function ConfinamentoTab({
         lotes={lotes}
         consumos={consumos}
         ingredientesMs={ingredientesMs}
+        currais={currais}
+        curralOcupacoes={curralOcupacoes}
         onCancel={() => setTela({ modo: "lista" })}
         onImportar={onImportarCargas}
         onImportarConsumos={onImportarConsumos}
@@ -693,6 +695,7 @@ export default function ConfinamentoTab({
       <LoteDetalhe
         cliente={cliente}
         lote={lote}
+        lotes={lotes}
         lotesMap={lotesMap}
         indicadores={indicadores}
         saidas={saidasLote}
@@ -701,6 +704,8 @@ export default function ConfinamentoTab({
         evolucaoConsumo={evolucaoConsumo}
         cargasVagao={cargasVagao}
         ingredientesMs={ingredientesMs}
+        currais={currais}
+        curralOcupacoes={curralOcupacoes}
         onBack={() => setTela({ modo: "lista" })}
         onEditar={() => setTela({ modo: "editar", id: lote.id })}
         onNovaPesagem={onAdicionarPesagem && (() => setTela({ modo: "nova-pesagem", loteId: lote.id }))}
@@ -996,6 +1001,8 @@ export default function ConfinamentoTab({
           ingredientesMs={ingredientesMs}
           lotes={lotes}
           consumos={consumos}
+          currais={currais}
+          curralOcupacoes={curralOcupacoes}
           onSalvarMs={onSalvarMsIngrediente}
           onSincronizar={onSincronizarCustosMs}
           onImportar={onImportarCargas && (() => setTela({ modo: "importar-cargas" }))}
@@ -1478,8 +1485,8 @@ function PainelCard({ label, valor, faixa }) {
 }
 
 function LoteDetalhe({
-  cliente, lote, lotesMap = {}, indicadores, saidas = [], entradas = [], evolucao, evolucaoConsumo,
-  cargasVagao = [], ingredientesMs = [],
+  cliente, lote, lotes = [], lotesMap = {}, indicadores, saidas = [], entradas = [], evolucao, evolucaoConsumo,
+  cargasVagao = [], ingredientesMs = [], currais = [], curralOcupacoes = [],
   onBack, onEditar,
   onNovaPesagem, onExcluirPesagem,
   onNovaSaida, onExcluirSaida, onEditarSaida,
@@ -1492,7 +1499,7 @@ function LoteDetalhe({
   const saidasOrdenadas = [...saidas].sort((a, b) => b.data.localeCompare(a.data));
   const entradasOrdenadas = [...entradas].sort((a, b) => b.data.localeCompare(a.data));
   const fechamento = indicadores.status === "Finalizado" ? calcularFechamentoCusto(lote, indicadores, saidas) : null;
-  const consumoIngredientes = calcularConsumoIngredientesLote(lote, cargasVagao, ingredientesMs);
+  const consumoIngredientes = calcularConsumoIngredientesLote(lote, cargasVagao, ingredientesMs, currais, curralOcupacoes, lotes);
   return (
     <div>
       <div style={styles.backHeaderRow}>
@@ -3797,6 +3804,59 @@ function encontrarLoteDescarga(valor, lotes) {
   return porNumero.length === 1 ? porNumero[0] : null;
 }
 
+function encontrarCurralDescarga(descarga, currais = []) {
+  if (descarga?.curral_id) {
+    const porId = currais.find((curral) => curral.id === descarga.curral_id);
+    if (porId) return porId;
+  }
+
+  // O Trato Certo grava o destino como "Curral 5 — Lote 10". A parte
+  // anterior ao travessão identifica o curral físico e continua válida
+  // mesmo depois que outro lote ocupar esse curral.
+  const texto = String(descarga?.lote_codigo || "").trim();
+  const nomeCurral = texto.match(/^((?:curral|cocheira)\s+[^—–-]+)/i)?.[1]?.trim();
+  if (!nomeCurral) return null;
+  const alvo = normalizarTexto(nomeCurral);
+  return currais.find((curral) => normalizarTexto(curral.nome) === alvo) || null;
+}
+
+function encontrarLoteDaDescarga(descarga, lotes, currais = [], curralOcupacoes = []) {
+  const data = descarga?.data;
+  const curral = encontrarCurralDescarga(descarga, currais);
+  const loteDireto = descarga?.lote_id
+    ? lotes.find((lote) => lote.id === descarga.lote_id) || null
+    : null;
+
+  if (curral && data) {
+    const ocupacoes = curralOcupacoes
+      .filter((ocupacao) => ocupacao.curral_id === curral.id
+        && ocupacao.data_inicio <= data
+        && (ocupacao.data_fim == null || ocupacao.data_fim >= data))
+      .map((ocupacao) => ({ ocupacao, lote: lotes.find((lote) => lote.id === ocupacao.lote_id) }))
+      .filter(({ lote }) => lote
+        && lote.data_entrada <= data
+        && (lote.data_saida == null || lote.data_saida >= data))
+      .sort((a, b) => b.ocupacao.data_inicio.localeCompare(a.ocupacao.data_inicio)
+        || Number(b.ocupacao.data_fim == null) - Number(a.ocupacao.data_fim == null)
+        || String(b.ocupacao.criado_em || "").localeCompare(String(a.ocupacao.criado_em || "")));
+    if (ocupacoes.length) return ocupacoes[0].lote;
+
+    // Alguns currais antigos ainda não têm todo o histórico preenchido.
+    // Nesses casos, aceita o lote que veio junto da descarga somente se o
+    // vínculo físico dele com o curral confere.
+    if (loteDireto?.curral_id === curral.id) return loteDireto;
+    const lotesCompativeis = lotes.filter((lote) => lote.curral_id === curral.id
+      && lote.data_entrada <= data
+      && (lote.data_saida == null || lote.data_saida >= data));
+    if (lotesCompativeis.length === 1) return lotesCompativeis[0];
+  }
+
+  // Descargas novas também trazem o ID imutável do lote. Ele preserva a
+  // vinculação histórica quando o curral não pôde ser identificado.
+  if (loteDireto) return loteDireto;
+  return encontrarLoteDescarga(descarga?.lote_codigo, lotes);
+}
+
 function adicionarAoGrupo(grupos, lote, data, valor, fase, ms) {
   const chave = `${lote.id}|${data}`;
   if (grupos.has(chave)) {
@@ -4577,7 +4637,7 @@ function calcularComposicaoCarga(carga, configuracoes) {
 // previsto — a base tanto pro consumo acumulado (ativo e finalizado)
 // quanto pro erro entre dieta proposta e realizada (só faz sentido pra
 // lote finalizado, onde o período fechou).
-function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = []) {
+function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = [], currais = [], curralOcupacoes = [], lotes = [lote]) {
   const custoPorChave = new Map(
     ingredientesMs.map((item) => [item.ingrediente_chave, item.custo_kg_mn == null ? null : Number(item.custo_kg_mn)])
   );
@@ -4593,7 +4653,7 @@ function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = [])
     const pesoTotalCarga = itens.reduce((soma, item) => soma + Number(item.peso_real || 0), 0);
     if (!(pesoTotalCarga > 0)) continue;
     const pesoNoLote = (Array.isArray(carga.descargas) ? carga.descargas : [])
-      .filter((descarga) => encontrarLoteDescarga(descarga.lote_codigo, [lote]))
+      .filter((descarga) => encontrarLoteDaDescarga(descarga, lotes, currais, curralOcupacoes)?.id === lote.id)
       .reduce((soma, descarga) => soma + Number(descarga.peso || 0), 0);
     if (!(pesoNoLote > 0)) continue;
     const proporcao = pesoNoLote / pesoTotalCarga;
@@ -4620,7 +4680,7 @@ function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = [])
     .sort((a, b) => b.real - a.real);
 }
 
-function montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesMs) {
+function montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesMs, currais = [], curralOcupacoes = []) {
   const configuracoes = new Map(ingredientesMs.map((item) => [
     item.ingrediente_chave,
     {
@@ -4632,7 +4692,7 @@ function montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientes
   for (const carga of cargas) {
     const composicao = calcularComposicaoCarga(carga, configuracoes);
     for (const descarga of Array.isArray(carga.descargas) ? carga.descargas : []) {
-      const lote = encontrarLoteDescarga(descarga.lote_codigo, lotes);
+      const lote = encontrarLoteDaDescarga(descarga, lotes, currais, curralOcupacoes);
       const peso = Number(descarga.peso || 0);
       if (!lote || !descarga.data || peso <= 0) continue;
       const chave = `${lote.id}|${descarga.data}`;
@@ -4860,7 +4920,7 @@ function processarPdfsSaicon(cargaPdf, descargaPdf, lotes, consumos, cargasExist
   };
 }
 
-function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingredientesMs, onCancel, onImportar, onImportarConsumos, onSincronizar, onConcluido }) {
+function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingredientesMs, currais = [], curralOcupacoes = [], onCancel, onImportar, onImportarConsumos, onSincronizar, onConcluido }) {
   const [processando, setProcessando] = useState(false);
   const [importando, setImportando] = useState(false);
   const [erro, setErro] = useState(null);
@@ -4929,7 +4989,7 @@ function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingrediente
         : [];
       const todosConsumos = [...consumos, ...(Array.isArray(consumosImportados) ? consumosImportados : [])];
       const atualizacoes = onSincronizar
-        ? montarSincronizacoesConsumoCargas([...cargasExistentes, ...cargasImportadas], lotes, todosConsumos, ingredientesMs)
+        ? montarSincronizacoesConsumoCargas([...cargasExistentes, ...cargasImportadas], lotes, todosConsumos, ingredientesMs, currais, curralOcupacoes)
         : [];
       if (atualizacoes.length) await onSincronizar(atualizacoes);
       setConcluido({
@@ -5265,7 +5325,7 @@ function FormDieta({ onCancel, onSave, dietaExistente, onDelete, ingredientesMs 
   );
 }
 
-function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSincronizar, onImportar, onExcluirCarga }) {
+function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curralOcupacoes = [], onSalvarMs, onSincronizar, onImportar, onExcluirCarga }) {
   const datas = [...new Set(cargas.map((c) => c.data))].sort((a, b) => b.localeCompare(a));
   const primeiraData = datas[datas.length - 1];
   const ultimaData = datas[0];
@@ -5402,7 +5462,7 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
           ...ingredientesMs.filter((i) => i.ingrediente_chave !== item.chave),
           configuracaoAtualizada,
         ];
-        const atualizacoes = montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesAtualizados);
+        const atualizacoes = montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesAtualizados, currais, curralOcupacoes);
         if (atualizacoes.length) await onSincronizar(atualizacoes);
       }
     } finally {
@@ -5415,7 +5475,7 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, onSalvarMs, onSinc
     setSincronizando(true);
     setMensagemSincronizacao("");
     try {
-      const atualizacoes = montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesMs);
+      const atualizacoes = montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesMs, currais, curralOcupacoes);
       await onSincronizar(atualizacoes);
       setMensagemSincronizacao(
         atualizacoes.length
