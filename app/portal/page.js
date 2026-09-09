@@ -10,6 +10,7 @@ import MarcaDesenvolvedor from "@/components/MarcaDesenvolvedor";
 import BotaoAtualizar from "@/components/BotaoAtualizar";
 import { BackHeader, InputField, PrimaryButton } from "@/components/UI";
 import { calcularResumoSaidas } from "@/lib/confinamento";
+import { buscarVinculoPortal, mensagemErroConvite, resgatarConvitePortal } from "@/lib/convitePortal.mjs";
 import {
   atualizarLeiturasNoCache,
   carregarCacheCocho,
@@ -66,6 +67,8 @@ export default function PortalCliente() {
   const [sessao, setSessao] = useState(undefined);
   const [cliente, setCliente] = useState(undefined);
   const [papel, setPapel] = useState("editor");
+  const [erroAcesso, setErroAcesso] = useState("");
+  const usuarioId = sessao?.user?.id;
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSessao(data.session));
@@ -73,15 +76,12 @@ export default function PortalCliente() {
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  const carregarCliente = useCallback(async () => {
-    if (!sessao) return;
+  const carregarCliente = useCallback(async (clienteId) => {
+    if (!usuarioId) return;
+    setErroAcesso("");
+    setCliente(undefined);
     try {
-      const { data: vinculo, error: erroVinculo } = await supabase
-        .from("clientes_usuarios")
-        .select("cliente_id, papel")
-        .eq("auth_user_id", sessao.user.id)
-        .maybeSingle();
-      if (erroVinculo) throw erroVinculo;
+      const vinculo = await buscarVinculoPortal(supabase, usuarioId, clienteId);
       if (!vinculo) {
         setCliente(null);
         return;
@@ -89,27 +89,42 @@ export default function PortalCliente() {
       const papelAtual = vinculo.papel || "editor";
       const { data, error } = await supabase.from("clientes").select("*").eq("id", vinculo.cliente_id).maybeSingle();
       if (error) throw error;
+      if (!data) throw new Error("O vínculo existe, mas o cadastro do cliente não pôde ser carregado.");
       setPapel(papelAtual);
       setCliente(data || null);
-      if (data) salvarPerfilPortal(sessao.user.id, { cliente: data, papel: papelAtual });
+      if (data) salvarPerfilPortal(usuarioId, { cliente: data, papel: papelAtual });
     } catch (error) {
-      const perfilSalvo = lerPerfilPortal(sessao.user.id);
-      if (perfilSalvo?.cliente) {
+      const perfilSalvo = lerPerfilPortal(usuarioId);
+      if (erroEhDeRede(error) && perfilSalvo?.cliente && (!clienteId || perfilSalvo.cliente.id === clienteId)) {
         setPapel(perfilSalvo.papel || "editor");
         setCliente(perfilSalvo.cliente);
       } else {
         setCliente(null);
+        setErroAcesso("Não foi possível carregar seu acesso. Confira sua conexão e tente novamente. Não é necessário criar outra conta.");
       }
       console.error("Não foi possível atualizar o acesso do portal:", error);
     }
-  }, [sessao]);
+  }, [usuarioId]);
 
   useEffect(() => {
-    if (sessao) carregarCliente();
-  }, [sessao, carregarCliente]);
+    if (usuarioId) carregarCliente();
+    else {
+      setCliente(undefined);
+      setErroAcesso("");
+    }
+  }, [usuarioId, carregarCliente]);
 
   if (sessao === undefined) return <div style={styles.loadingScreen}>Carregando...</div>;
   if (!sessao) return <TelaLoginCliente />;
+  if (erroAcesso) return (
+    <div style={styles.loginScreen}>
+      <div style={styles.loginCard}>
+        <div role="alert" style={styles.errorBox}>{erroAcesso}</div>
+        <button type="button" onClick={() => carregarCliente()} style={styles.primaryBtn}>Tentar novamente</button>
+        <button type="button" onClick={() => supabase.auth.signOut()} style={styles.linkBtn}>Sair</button>
+      </div>
+    </div>
+  );
   if (cliente === undefined) return <div style={styles.loadingScreen}>Carregando...</div>;
   if (cliente === null) return <TelaVincularConvite onVinculado={carregarCliente} />;
   return <PainelCliente cliente={cliente} somenteLeitura={papel === "leitor"} papel={papel} />;
@@ -220,29 +235,10 @@ function TelaVincularConvite({ onVinculado }) {
     setErro("");
     setCarregando(true);
     try {
-      const { data: sessao } = await supabase.auth.getSession();
-      const userId = sessao.session.user.id;
-      const userEmail = sessao.session.user.email;
-      const { data: clienteEncontrado, error: erroBusca } = await supabase
-        .from("clientes").select("id, consultor_id").eq("codigo_convite", codigo.trim()).maybeSingle();
-      if (erroBusca) throw erroBusca;
-      if (!clienteEncontrado) { setErro("Código inválido. Confira com seu consultor."); return; }
-      const { error: erroVinculo } = await supabase.from("clientes_usuarios").insert({
-        cliente_id: clienteEncontrado.id,
-        consultor_id: clienteEncontrado.consultor_id,
-        auth_user_id: userId,
-        email: userEmail,
-      });
-      if (erroVinculo) {
-        if (erroVinculo.code === "23505") {
-          setErro("Você já tem acesso a essa fazenda.");
-          return;
-        }
-        throw erroVinculo;
-      }
-      onVinculado();
+      const clienteId = await resgatarConvitePortal(supabase, codigo);
+      await onVinculado(clienteId);
     } catch (err) {
-      setErro(err.message);
+      setErro(mensagemErroConvite(err));
     } finally {
       setCarregando(false);
     }
@@ -252,15 +248,16 @@ function TelaVincularConvite({ onVinculado }) {
     <div style={styles.loginScreen}>
       <div style={styles.loginCard}>
         <div style={styles.loginBrand}>Quase lá!</div>
-        <div style={styles.loginSub}>Digite o código que seu consultor te enviou para liberar seu acesso</div>
+        <div style={styles.loginSub}>Seu login já está ativo. Digite o código do cliente enviado pelo consultor para vincular esta conta. Não é o código de confirmação do e-mail.</div>
         <form onSubmit={handleVincular}>
           <label style={styles.field}>
-            <div style={styles.fieldLabel}>Código de acesso</div>
+            <div style={styles.fieldLabel}>Código do cliente</div>
             <input type="text" required value={codigo} onChange={(e) => setCodigo(e.target.value)}
+              autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="off"
               style={{ ...styles.input, textTransform: "uppercase", letterSpacing: 2, fontWeight: 700, fontSize: 18 }}
               placeholder="EX: A1B2C3D4" />
           </label>
-          {erro && <div style={styles.errorBox}>{erro}</div>}
+          {erro && <div role="alert" style={styles.errorBox}>{erro}</div>}
           <button type="submit" disabled={carregando} style={styles.primaryBtn}>
             {carregando ? "Verificando..." : "Confirmar código"}
           </button>
