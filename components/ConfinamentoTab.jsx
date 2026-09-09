@@ -142,7 +142,7 @@ function usarOrdenacaoPersistida(clienteId) {
 
 function usarAbaPersistida(clienteId) {
   const chave = `confinamento_aba_${clienteId || "geral"}`;
-  const abasValidas = ["painel", "lotes-ativos", "lotes-finalizados", "cocho", "esperado", "graficos", "graficos-finalizados", "cargas", "dieta", "mapa"];
+  const abasValidas = ["painel", "lotes-ativos", "lotes-finalizados", "cocho", "esperado", "graficos", "graficos-finalizados", "cargas", "descargas", "dieta", "mapa"];
   const [aba, setAbaState] = useState(() => {
     if (typeof window === "undefined") return "painel";
     const salva = window.localStorage.getItem(chave);
@@ -635,7 +635,7 @@ export default function ConfinamentoTab({
         onSincronizar={onSincronizarCustosMs}
         onConcluido={() => {
           setTela({ modo: "lista" });
-          setAba("cargas");
+          setAba(tela.retornarPara || "cargas");
         }}
       />
     );
@@ -901,9 +901,9 @@ export default function ConfinamentoTab({
                 Importar
               </button>
             )}
-            {aba === "cargas" && onImportarCargas && (
-              <button onClick={() => setTela({ modo: "importar-cargas" })} style={styles.secondaryActionBtn}>
-                Importar cargas
+            {(aba === "cargas" || aba === "descargas") && onImportarCargas && (
+              <button onClick={() => setTela({ modo: "importar-cargas", retornarPara: aba })} style={styles.secondaryActionBtn}>
+                Importar dados
               </button>
             )}
             {aba === "lotes-ativos" && onAdicionar && (
@@ -931,6 +931,7 @@ export default function ConfinamentoTab({
           {aba === "graficos-finalizados" && "Gráficos dos lotes finalizados"}
           {aba === "mapa" && "Localização dos currais"}
           {aba === "cargas" && "Precisão do abastecimento e matéria seca"}
+          {aba === "descargas" && "Precisão da distribuição por lote e tratador"}
           {aba === "dieta" && "Formulação de dieta por fase"}
         </div>
       </div>
@@ -942,6 +943,7 @@ export default function ConfinamentoTab({
           <NavArea icon={ClipboardList} label="Rotina" active={aba === "cocho" || aba === "esperado"} onClick={() => setAba(onRegistrarLeituraCocho ? "cocho" : "esperado")} />
           <NavArea icon={BarChart3} label="Análises" active={aba === "graficos" || aba === "graficos-finalizados"} onClick={() => setAba("graficos")} />
           <NavArea icon={Truck} label="Cargas" active={aba === "cargas"} onClick={() => setAba("cargas")} />
+          <NavArea icon={Download} label="Descargas" active={aba === "descargas"} onClick={() => setAba("descargas")} />
           <NavArea icon={Wheat} label="Dieta" active={aba === "dieta"} onClick={() => setAba("dieta")} />
           <NavArea icon={MapIcon} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
         </nav>
@@ -1005,9 +1007,11 @@ export default function ConfinamentoTab({
           curralOcupacoes={curralOcupacoes}
           onSalvarMs={onSalvarMsIngrediente}
           onSincronizar={onSincronizarCustosMs}
-          onImportar={onImportarCargas && (() => setTela({ modo: "importar-cargas" }))}
+          onImportar={onImportarCargas && (() => setTela({ modo: "importar-cargas", retornarPara: "cargas" }))}
           onExcluirCarga={onExcluirCarga}
         />
+      ) : aba === "descargas" ? (
+        <AbaDescargas cargas={cargasVagao} lotes={lotes} currais={currais} />
       ) : aba === "dieta" ? (
         <AbaDietas dietas={dietas} ingredientesMs={ingredientesMs} onAbrir={(id) => setTela({ modo: "editar-dieta", id })} />
       ) : aba === "mapa" ? (
@@ -5095,6 +5099,271 @@ function corErroCarga(percentual) {
   return { cor: "#B4473D", fundo: "#FBE8E6" };
 }
 
+function numeroDistribuicao(valor) {
+  if (valor == null || valor === "") return null;
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? numero : null;
+}
+
+function tratadorDaCarga(carga) {
+  const candidatos = [
+    carga?.tratador,
+    ...(Array.isArray(carga?.itens) ? carga.itens.map((item) => item?.tratador) : []),
+    ...(Array.isArray(carga?.descargas) ? carga.descargas.map((item) => item?.tratador) : []),
+  ];
+  return candidatos.find((nome) => String(nome || "").trim()) || "Não informado";
+}
+
+function resumoErroDaCarga(carga) {
+  const itens = Array.isArray(carga?.itens) ? carga.itens : [];
+  const previstoItens = itens.reduce((soma, item) => soma + (numeroDistribuicao(item.peso_previsto) || 0), 0);
+  if (itens.length > 0 && previstoItens > 0) {
+    const realizado = itens.reduce((soma, item) => soma + (numeroDistribuicao(item.peso_real) || 0), 0);
+    const erroAbsoluto = itens.reduce((soma, item) => {
+      const real = numeroDistribuicao(item.peso_real) || 0;
+      const previsto = numeroDistribuicao(item.peso_previsto) || 0;
+      return soma + Math.abs(real - previsto);
+    }, 0);
+    return {
+      previsto: previstoItens,
+      realizado,
+      saldo: realizado - previstoItens,
+      erroAbsoluto,
+      percentual: erroAbsoluto / previstoItens * 100,
+    };
+  }
+
+  const previsto = numeroDistribuicao(carga?.peso_previsto) || 0;
+  const realizado = numeroDistribuicao(carga?.peso_real) || 0;
+  const erroAbsoluto = Math.abs(realizado - previsto);
+  return {
+    previsto,
+    realizado,
+    saldo: realizado - previsto,
+    erroAbsoluto,
+    percentual: previsto > 0 ? erroAbsoluto / previsto * 100 : 0,
+  };
+}
+
+function agruparErros(registros, chaveDoRegistro, nomeDoRegistro) {
+  const grupos = new Map();
+  for (const registro of registros) {
+    const chave = chaveDoRegistro(registro);
+    const grupo = grupos.get(chave) || {
+      chave,
+      nome: nomeDoRegistro(registro),
+      registros: [],
+      previsto: 0,
+      realizado: 0,
+      saldo: 0,
+      erroAbsoluto: 0,
+      semPrevisto: 0,
+    };
+    grupo.registros.push(registro);
+    if (registro.previsto > 0) {
+      grupo.previsto += registro.previsto;
+      grupo.realizado += registro.realizado;
+      grupo.saldo += registro.saldo;
+      grupo.erroAbsoluto += registro.erroAbsoluto;
+    } else {
+      grupo.semPrevisto += 1;
+    }
+    grupos.set(chave, grupo);
+  }
+  return [...grupos.values()]
+    .map((grupo) => ({
+      ...grupo,
+      percentual: grupo.previsto > 0 ? grupo.erroAbsoluto / grupo.previsto * 100 : null,
+    }))
+    .sort((a, b) => (b.percentual ?? -1) - (a.percentual ?? -1) || a.nome.localeCompare(b.nome, "pt-BR", { numeric: true }));
+}
+
+function textoPesoDistribuicao(valor, sinal = false) {
+  if (valor == null) return "—";
+  const prefixo = sinal && valor > 0 ? "+" : "";
+  return `${prefixo}${valor.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg`;
+}
+
+function BadgeErroDistribuicao({ percentual, assinado = false }) {
+  if (percentual == null) return <span style={{ color: "#8A8A82", fontSize: 12 }}>Sem previsto</span>;
+  const sinal = corErroCarga(percentual);
+  return (
+    <span style={{ color: sinal.cor, background: sinal.fundo, padding: "4px 7px", borderRadius: 999, fontWeight: 700, whiteSpace: "nowrap" }}>
+      {assinado && percentual > 0 ? "+" : ""}{percentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+    </span>
+  );
+}
+
+function AbaDescargas({ cargas, lotes, currais = [] }) {
+  const lotePorId = new Map(lotes.map((lote) => [lote.id, lote]));
+  const curralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
+  const eventos = [];
+
+  for (const carga of cargas) {
+    for (let indice = 0; indice < (Array.isArray(carga.descargas) ? carga.descargas.length : 0); indice++) {
+      const descarga = carga.descargas[indice];
+      const realizado = numeroDistribuicao(descarga.peso ?? descarga.peso_real);
+      if (realizado == null) continue;
+      const erroInformado = numeroDistribuicao(descarga.erro_kg);
+      const previstoInformado = numeroDistribuicao(descarga.peso_previsto);
+      const previsto = previstoInformado ?? (erroInformado != null ? realizado - erroInformado : null);
+      const lote = descarga.lote_id ? lotePorId.get(descarga.lote_id) : encontrarLoteDescarga(descarga.lote_codigo, lotes);
+      const nomeCurral = curralPorId.get(descarga.curral_id || lote?.curral_id) || descarga.lote_codigo || "Sem curral";
+      const nomeLote = lote?.nome || descarga.lote_codigo || "Lote não identificado";
+      const saldo = previsto != null ? realizado - previsto : null;
+      eventos.push({
+        chave: `${carga.id || carga.carga_codigo}:${indice}`,
+        data: descarga.data || carga.data,
+        hora: descarga.hora || carga.hora || null,
+        cargaCodigo: carga.carga_codigo,
+        receita: carga.receita,
+        tratador: String(descarga.tratador || tratadorDaCarga(carga)).trim() || "Não informado",
+        loteId: lote?.id || descarga.lote_id || `codigo:${descarga.lote_codigo || indice}`,
+        loteNome: nomeLote,
+        curralNome: nomeCurral,
+        previsto: previsto != null && previsto > 0 ? previsto : 0,
+        realizado,
+        saldo: saldo || 0,
+        erroAbsoluto: saldo != null ? Math.abs(saldo) : 0,
+        percentual: previsto != null && previsto > 0 ? saldo / previsto * 100 : null,
+      });
+    }
+  }
+
+  const datas = [...new Set(eventos.map((evento) => evento.data).filter(Boolean))].sort((a, b) => b.localeCompare(a));
+  const primeiraData = datas[datas.length - 1] || "";
+  const ultimaData = datas[0] || "";
+  const [modo, setModo] = useState("dia");
+  const [dataEscolhida, setDataEscolhida] = useState("");
+  const [periodoInicio, setPeriodoInicio] = useState("");
+  const [periodoFim, setPeriodoFim] = useState("");
+  const [loteExpandido, setLoteExpandido] = useState(null);
+  const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
+  const inicio = periodoInicio || primeiraData;
+  const fim = periodoFim || ultimaData;
+  const eventosFiltrados = modo === "periodo"
+    ? eventos.filter((evento) => evento.data >= inicio && evento.data <= fim)
+    : eventos.filter((evento) => evento.data === data);
+  const analisados = eventosFiltrados.filter((evento) => evento.previsto > 0);
+  const totalPrevisto = analisados.reduce((soma, evento) => soma + evento.previsto, 0);
+  const totalRealizado = analisados.reduce((soma, evento) => soma + evento.realizado, 0);
+  const saldoGeral = totalRealizado - totalPrevisto;
+  const erroAbsoluto = analisados.reduce((soma, evento) => soma + evento.erroAbsoluto, 0);
+  const erroPercentual = totalPrevisto > 0 ? erroAbsoluto / totalPrevisto * 100 : null;
+  const porTratador = agruparErros(eventosFiltrados, (evento) => evento.tratador, (evento) => evento.tratador);
+  const porLote = agruparErros(
+    eventosFiltrados,
+    (evento) => evento.loteId,
+    (evento) => `${evento.curralNome} — ${evento.loteNome}`
+  );
+  const semPrevisto = eventosFiltrados.length - analisados.length;
+
+  if (!eventos.length) return <EmptyHint text="Nenhuma descarga detalhada encontrada nas cargas importadas." />;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <SectionTitle>Análise das descargas</SectionTitle>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid #D8D5CC" }}>
+            <button type="button" onClick={() => setModo("dia")} style={{ padding: "6px 10px", fontSize: 12, border: 0, cursor: "pointer", background: modo === "dia" ? "#1F4D45" : "transparent", color: modo === "dia" ? "#fff" : "#5C5C58" }}>Dia</button>
+            <button type="button" onClick={() => setModo("periodo")} style={{ padding: "6px 10px", fontSize: 12, border: 0, cursor: "pointer", background: modo === "periodo" ? "#1F4D45" : "transparent", color: modo === "periodo" ? "#fff" : "#5C5C58" }}>Período</button>
+          </div>
+          {modo === "dia" ? (
+            <select value={data || ""} onChange={(e) => setDataEscolhida(e.target.value)} style={{ ...styles.input, width: "auto", minWidth: 140, padding: "7px 9px" }}>
+              {datas.map((item) => <option key={item} value={item}>{formatDataBR(item)}</option>)}
+            </select>
+          ) : (
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input type="date" value={inicio} min={primeiraData} max={fim} onChange={(e) => setPeriodoInicio(e.target.value)} style={{ ...styles.input, width: "auto", padding: "7px 9px", fontSize: 12 }} />
+              <span style={{ fontSize: 12, color: "#9A9A94" }}>até</span>
+              <input type="date" value={fim} min={inicio} max={ultimaData} onChange={(e) => setPeriodoFim(e.target.value)} style={{ ...styles.input, width: "auto", padding: "7px 9px", fontSize: 12 }} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={styles.gestaoGrid} className="desktop-summary-grid">
+        <PainelCard label={modo === "periodo" ? "Tratos no período" : "Tratos no dia"} valor={eventosFiltrados.length} />
+        <PainelCard label="Lotes atendidos" valor={porLote.length} />
+        <PainelCard label="Previsto" valor={textoPesoDistribuicao(totalPrevisto)} />
+        <PainelCard label="Realizado" valor={textoPesoDistribuicao(totalRealizado)} />
+        <PainelCard label="Saldo real − previsto" valor={textoPesoDistribuicao(saldoGeral, true)} />
+        <PainelCard label="Erro absoluto acumulado" valor={erroPercentual != null ? `${erroPercentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : "—"} />
+      </div>
+
+      {semPrevisto > 0 && (
+        <div style={{ ...styles.card, padding: 12, marginBottom: 12, color: "#8A6420", background: "#FFF8E8", fontSize: 12.5 }}>
+          {semPrevisto} descarga(s) antiga(s) não possuem peso previsto e aparecem no histórico, mas não entram no cálculo do erro.
+        </div>
+      )}
+
+      <div style={{ ...styles.card, overflowX: "auto", padding: 0, marginBottom: 12 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Erro de descarga por tratador</div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O percentual usa a soma dos erros absolutos, evitando que sobra em um trato esconda falta em outro.</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620, fontSize: 12.5 }}>
+          <thead><tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}><th style={{ padding: 10, textAlign: "left" }}>Tratador</th><th style={{ padding: 10 }}>Tratos</th><th style={{ padding: 10 }}>Previsto</th><th style={{ padding: 10 }}>Realizado</th><th style={{ padding: 10 }}>Saldo</th><th style={{ padding: 10 }}>Erro</th></tr></thead>
+          <tbody>
+            {porTratador.map((grupo) => (
+              <tr key={grupo.chave} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                <td style={{ padding: 10, textAlign: "left", fontWeight: 700 }}>{grupo.nome}</td>
+                <td style={{ padding: 10 }}>{grupo.registros.length}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
+                <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Acumulado por lote</div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>Clique em um lote para visualizar o erro de cada trato.</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720, fontSize: 12.5 }}>
+          <thead><tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}><th style={{ padding: 10, textAlign: "left" }}>Curral / lote</th><th style={{ padding: 10 }}>Tratos</th><th style={{ padding: 10 }}>Previsto</th><th style={{ padding: 10 }}>Realizado</th><th style={{ padding: 10 }}>Saldo</th><th style={{ padding: 10 }}>Erro acumulado</th></tr></thead>
+          <tbody>
+            {porLote.map((grupo) => {
+              const expandido = loteExpandido === grupo.chave;
+              return (
+                <Fragment key={grupo.chave}>
+                  <tr onClick={() => setLoteExpandido(expandido ? null : grupo.chave)} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right", cursor: "pointer" }}>
+                    <td style={{ padding: 10, textAlign: "left", fontWeight: 700 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ChevronDown size={14} style={{ transform: expandido ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s" }} />{grupo.nome}</span></td>
+                    <td style={{ padding: 10 }}>{grupo.registros.length}</td>
+                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
+                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
+                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
+                    <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} /></td>
+                  </tr>
+                  {expandido && (
+                    <tr><td colSpan={6} style={{ padding: 0, background: "#FAFAF7" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760, fontSize: 12 }}>
+                        <thead><tr style={{ color: "#8A8A82", textAlign: "right" }}><th style={{ padding: "7px 10px 7px 34px", textAlign: "left" }}>Data / hora</th><th style={{ padding: 7, textAlign: "left" }}>Trato / carga</th><th style={{ padding: 7, textAlign: "left" }}>Tratador</th><th style={{ padding: 7 }}>Previsto</th><th style={{ padding: 7 }}>Realizado</th><th style={{ padding: 7 }}>Saldo</th><th style={{ padding: 7 }}>Erro</th></tr></thead>
+                        <tbody>{[...grupo.registros].sort((a, b) => `${b.data}${b.hora || ""}`.localeCompare(`${a.data}${a.hora || ""}`)).map((evento) => (
+                          <tr key={evento.chave} style={{ borderTop: "1px solid #EFEDE6", textAlign: "right" }}>
+                            <td style={{ padding: "7px 10px 7px 34px", textAlign: "left" }}>{formatDataBR(evento.data)}{evento.hora ? ` · ${evento.hora}` : ""}</td>
+                            <td style={{ padding: 7, textAlign: "left" }}>{evento.cargaCodigo}{evento.receita ? ` · ${evento.receita}` : ""}</td>
+                            <td style={{ padding: 7, textAlign: "left" }}>{evento.tratador}</td>
+                            <td style={{ padding: 7 }}>{evento.previsto > 0 ? textoPesoDistribuicao(evento.previsto) : "—"}</td>
+                            <td style={{ padding: 7 }}>{textoPesoDistribuicao(evento.realizado)}</td>
+                            <td style={{ padding: 7 }}>{evento.previsto > 0 ? textoPesoDistribuicao(evento.saldo, true) : "—"}</td>
+                            <td style={{ padding: 7 }}><BadgeErroDistribuicao percentual={evento.percentual} assinado /></td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    </td></tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // Lista de dietas formuladas (Adaptação/Recria/Crescimento/Terminação/
 // Sequestro) do cliente — cada uma com sua própria lista de ingredientes.
 function AbaDietas({ dietas, ingredientesMs, onAbrir }) {
@@ -5373,9 +5642,20 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curr
 
   const ingredientes = [...resumo.values()].sort((a, b) => b.real - a.real);
   const totalReal = ingredientes.reduce((s, i) => s + i.real, 0);
-  const totalPrevisto = ingredientes.reduce((s, i) => s + i.previsto, 0);
-  const erroAbsoluto = ingredientes.reduce((s, i) => s + Math.abs(i.real - i.previsto), 0);
-  const erroMedio = totalPrevisto > 0 ? erroAbsoluto / totalPrevisto * 100 : 0;
+  const errosPorCarga = cargasDia.map((carga) => ({
+    carga,
+    tratador: tratadorDaCarga(carga),
+    ...resumoErroDaCarga(carga),
+  }));
+  const totalPrevistoCargas = errosPorCarga.reduce((soma, item) => soma + item.previsto, 0);
+  const totalRealCargas = errosPorCarga.reduce((soma, item) => soma + item.realizado, 0);
+  const erroAbsolutoCargas = errosPorCarga.reduce((soma, item) => soma + item.erroAbsoluto, 0);
+  const erroMedio = totalPrevistoCargas > 0 ? erroAbsolutoCargas / totalPrevistoCargas * 100 : 0;
+  const errosCargaPorTratador = agruparErros(
+    errosPorCarga,
+    (item) => item.tratador,
+    (item) => item.tratador
+  );
   const totalMs = ingredientes.reduce((s, i) => {
     const ms = msPorIngrediente.get(i.chave);
     return s + (Number.isFinite(ms) ? i.real * ms / 100 : 0);
@@ -5542,12 +5822,45 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curr
 
       <div style={styles.gestaoGrid} className="desktop-summary-grid">
         <PainelCard label={modo === "periodo" ? "Cargas no período" : "Cargas no dia"} valor={cargasDia.length} />
-        <PainelCard label="Matéria natural" valor={`${totalReal.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`} />
+        <PainelCard label="Matéria natural" valor={`${totalRealCargas.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`} />
         <PainelCard label="Erro absoluto" valor={`${erroMedio.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`} />
         <PainelCard label="Matéria seca" valor={`${totalMs.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg MS`} />
         <PainelCard label="Custo total das cargas" valor={faltamCustos === 0 ? formatBRL(custoTotal) : "Preencha os custos"} />
         <PainelCard label="Custo da dieta (MN)" valor={faltamCustos === 0 && custoDietaKgMn != null ? `${formatBRL(custoDietaKgMn)}/kg` : "—"} />
         <PainelCard label="Custo da dieta (MS)" valor={faltamCustos === 0 && custoDietaKgMs != null ? `${formatBRL(custoDietaKgMs)}/kg MS` : "—"} />
+      </div>
+
+      <div style={{ ...styles.card, marginBottom: 12, overflowX: "auto", padding: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>
+          Erro de carga por tratador {modo === "periodo" ? "no período" : "no dia"}
+        </div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>
+          O acumulado soma o erro absoluto de cada ingrediente em cada carga; erros positivos e negativos não se anulam.
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 650, fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}>
+              <th style={{ padding: 10, textAlign: "left" }}>Tratador</th>
+              <th style={{ padding: 10 }}>Cargas</th>
+              <th style={{ padding: 10 }}>Previsto</th>
+              <th style={{ padding: 10 }}>Realizado</th>
+              <th style={{ padding: 10 }}>Saldo</th>
+              <th style={{ padding: 10 }}>Erro acumulado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {errosCargaPorTratador.map((grupo) => (
+              <tr key={grupo.chave} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                <td style={{ padding: 10, textAlign: "left", fontWeight: 700 }}>{grupo.nome}</td>
+                <td style={{ padding: 10 }}>{grupo.registros.length}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
+                <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {(faltamMs > 0 || faltamCustos > 0) && (
@@ -5736,10 +6049,9 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curr
           .sort((a, b) => (a.data + (a.hora || "")).localeCompare(b.data + (b.hora || "")))
           .map((carga) => {
           const itens = Array.isArray(carga.itens) ? carga.itens : [];
-          const previsto = itens.reduce((s, i) => s + Number(i.peso_previsto || 0), 0);
-          const erro = previsto > 0
-            ? itens.reduce((s, i) => s + Math.abs(Number(i.peso_real || 0) - Number(i.peso_previsto || 0)), 0) / previsto * 100
-            : 0;
+          const resumoErro = resumoErroDaCarga(carga);
+          const erro = resumoErro.percentual;
+          const tratador = tratadorDaCarga(carga);
           const sinal = corErroCarga(erro);
           const custoCarga = itens.reduce((s, item) => {
             const custo = custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente));
@@ -5770,7 +6082,7 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curr
                     <div style={{ fontWeight: 600 }}>Carga {carga.carga_codigo} · {carga.receita}</div>
                     <div style={{ fontSize: 11.5, color: "#777770" }}>
                       {modo === "periodo" ? `${formatDataBR(carga.data)} · ` : ""}
-                      {carga.hora || "Horário não informado"} · {Number(carga.peso_real || 0).toLocaleString("pt-BR")} kg
+                      {carga.hora || "Horário não informado"} · {tratador} · {resumoErro.realizado.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg
                       {msCarga != null ? ` · MS ${msCarga.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : " · MS incompleta"}
                       {cargaComCustoCompleto && custoKgCarga != null ? ` · ${formatBRL(custoCarga)} · ${formatBRL(custoKgCarga)}/kg dieta` : ""}
                     </div>
