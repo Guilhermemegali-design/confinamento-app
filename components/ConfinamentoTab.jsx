@@ -6306,6 +6306,11 @@ function ListaLeituraCocho({ ativos, nomeCurralPorId, consumosPorLote, leiturasC
                 {Number(leituraHoje.ajuste_percentual)}%)
               </div>
             )}
+            {leituraHoje?._offline_pendente && (
+              <div style={{ fontSize: 12.5, color: "#8A6A20", fontWeight: 700, padding: "7px 0 3px" }}>
+                Salva neste aparelho · aguardando internet para sincronizar
+              </div>
+            )}
             {historico.length > 1 && <GraficoLinha pontos={historico} valueKey="nota" unidade="pontos" cor="#7A4B26" />}
           </div>
         );

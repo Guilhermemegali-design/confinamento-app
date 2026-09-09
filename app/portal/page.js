@@ -10,6 +10,39 @@ import MarcaDesenvolvedor from "@/components/MarcaDesenvolvedor";
 import BotaoAtualizar from "@/components/BotaoAtualizar";
 import { BackHeader, InputField, PrimaryButton } from "@/components/UI";
 import { calcularResumoSaidas } from "@/lib/confinamento";
+import {
+  atualizarLeiturasNoCache,
+  carregarCacheCocho,
+  carregarLeiturasPendentes,
+  criarEscopoCocho,
+  erroEhDeRede,
+  mesclarLeiturasPendentes,
+  removerLeituraPendente,
+  salvarCacheCocho,
+  salvarLeituraPendente,
+  sincronizarLeiturasPendentes,
+  substituirLeituraNaLista,
+} from "@/lib/leituraCochoOffline";
+
+const CHAVE_PERFIL_PORTAL = "rastro-portal-perfil-v1";
+
+function lerPerfilPortal(userId) {
+  if (typeof window === "undefined") return null;
+  try {
+    return JSON.parse(window.localStorage.getItem(`${CHAVE_PERFIL_PORTAL}:${userId}`) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function salvarPerfilPortal(userId, perfil) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(`${CHAVE_PERFIL_PORTAL}:${userId}`, JSON.stringify(perfil));
+  } catch (error) {
+    console.warn("Não foi possível guardar o acesso offline do portal:", error);
+  }
+}
 
 // O PostgREST limita cada resposta a 1.000 linhas. Sem paginação, clientes
 // com muito histórico deixam de receber parte dos lançamentos mais recentes.
@@ -42,18 +75,33 @@ export default function PortalCliente() {
 
   const carregarCliente = useCallback(async () => {
     if (!sessao) return;
-    const { data: vinculo } = await supabase
-      .from("clientes_usuarios")
-      .select("cliente_id, papel")
-      .eq("auth_user_id", sessao.user.id)
-      .maybeSingle();
-    if (!vinculo) {
-      setCliente(null);
-      return;
+    try {
+      const { data: vinculo, error: erroVinculo } = await supabase
+        .from("clientes_usuarios")
+        .select("cliente_id, papel")
+        .eq("auth_user_id", sessao.user.id)
+        .maybeSingle();
+      if (erroVinculo) throw erroVinculo;
+      if (!vinculo) {
+        setCliente(null);
+        return;
+      }
+      const papelAtual = vinculo.papel || "editor";
+      const { data, error } = await supabase.from("clientes").select("*").eq("id", vinculo.cliente_id).maybeSingle();
+      if (error) throw error;
+      setPapel(papelAtual);
+      setCliente(data || null);
+      if (data) salvarPerfilPortal(sessao.user.id, { cliente: data, papel: papelAtual });
+    } catch (error) {
+      const perfilSalvo = lerPerfilPortal(sessao.user.id);
+      if (perfilSalvo?.cliente) {
+        setPapel(perfilSalvo.papel || "editor");
+        setCliente(perfilSalvo.cliente);
+      } else {
+        setCliente(null);
+      }
+      console.error("Não foi possível atualizar o acesso do portal:", error);
     }
-    setPapel(vinculo.papel || "editor");
-    const { data } = await supabase.from("clientes").select("*").eq("id", vinculo.cliente_id).maybeSingle();
-    setCliente(data || null);
   }, [sessao]);
 
   useEffect(() => {
@@ -241,52 +289,82 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
   const [relatorios, setRelatorios] = useState([]);
 
   const carregar = useCallback(async () => {
-    const l = await buscarTodasLinhasPortal("lotes_confinamento", "cliente_id", cliente.id);
-    setLotes(l);
-    const loteIds = l.map((x) => x.id);
-    if (loteIds.length > 0) {
-      const [p, c, s, e, lc] = await Promise.all([
-        buscarTodasLinhasPortal("pesagens_lote", "lote_id", loteIds),
-        buscarTodasLinhasPortal("consumos_lote", "lote_id", loteIds),
-        buscarTodasLinhasPortal("saidas_lote", "lote_id", loteIds),
-        buscarTodasLinhasPortal("entradas_lote", "lote_id", loteIds),
-        buscarTodasLinhasPortal("leituras_cocho", "lote_id", loteIds),
+    const escopoCocho = criarEscopoCocho("portal", cliente.id);
+    const cacheCocho = carregarCacheCocho(escopoCocho);
+    if (cacheCocho) {
+      setLotes(cacheCocho.lotes || []);
+      setConsumos(cacheCocho.consumos || []);
+      setLeiturasCocho(mesclarLeiturasPendentes(cacheCocho.leiturasCocho || [], carregarLeiturasPendentes(escopoCocho)));
+      setCurrais(cacheCocho.currais || []);
+    }
+
+    try {
+      await sincronizarLeiturasPendentes(escopoCocho, supabase);
+      const l = await buscarTodasLinhasPortal("lotes_confinamento", "cliente_id", cliente.id);
+      setLotes(l);
+      const loteIds = l.map((x) => x.id);
+      let consumosNovos = [];
+      let leiturasNovas = [];
+      if (loteIds.length > 0) {
+        const [p, c, s, e, lc] = await Promise.all([
+          buscarTodasLinhasPortal("pesagens_lote", "lote_id", loteIds),
+          buscarTodasLinhasPortal("consumos_lote", "lote_id", loteIds),
+          buscarTodasLinhasPortal("saidas_lote", "lote_id", loteIds),
+          buscarTodasLinhasPortal("entradas_lote", "lote_id", loteIds),
+          buscarTodasLinhasPortal("leituras_cocho", "lote_id", loteIds),
+        ]);
+        consumosNovos = c;
+        leiturasNovas = mesclarLeiturasPendentes(lc, carregarLeiturasPendentes(escopoCocho));
+        setPesagens(p);
+        setConsumos(c);
+        setSaidas(s);
+        setEntradas(e);
+        setLeiturasCocho(leiturasNovas);
+      } else {
+        setPesagens([]);
+        setConsumos([]);
+        setSaidas([]);
+        setEntradas([]);
+        setLeiturasCocho([]);
+      }
+      const [cu, cv, im, dt] = await Promise.all([
+        buscarTodasLinhasPortal("currais", "cliente_id", cliente.id),
+        buscarTodasLinhasPortal("cargas_vagao", "cliente_id", cliente.id),
+        buscarTodasLinhasPortal("ingredientes_ms", "cliente_id", cliente.id),
+        buscarTodasLinhasPortal("dietas", "cliente_id", cliente.id),
       ]);
-      setPesagens(p);
-      setConsumos(c);
-      setSaidas(s);
-      setEntradas(e);
-      setLeiturasCocho(lc);
-    } else {
-      setPesagens([]);
-      setConsumos([]);
-      setSaidas([]);
-      setEntradas([]);
-      setLeiturasCocho([]);
-    }
-    const [cu, cv, im, dt] = await Promise.all([
-      buscarTodasLinhasPortal("currais", "cliente_id", cliente.id),
-      buscarTodasLinhasPortal("cargas_vagao", "cliente_id", cliente.id),
-      buscarTodasLinhasPortal("ingredientes_ms", "cliente_id", cliente.id),
-      buscarTodasLinhasPortal("dietas", "cliente_id", cliente.id),
-    ]);
-    setCurrais(cu);
-    setCargasVagao(cv);
-    setIngredientesMs(im);
-    setDietas(dt);
-    const curralIds = cu.map((x) => x.id);
-    if (curralIds.length > 0) {
-      setCurralOcupacoes(await buscarTodasLinhasPortal("curral_ocupacoes", "curral_id", curralIds));
-    } else {
-      setCurralOcupacoes([]);
-    }
-    if (papel === "administrador") {
-      setRelatorios(await buscarTodasLinhasPortal("relatorios", "cliente_id", cliente.id));
+      setCurrais(cu);
+      setCargasVagao(cv);
+      setIngredientesMs(im);
+      setDietas(dt);
+      salvarCacheCocho(escopoCocho, {
+        lotes: l,
+        consumos: consumosNovos,
+        leiturasCocho: leiturasNovas,
+        currais: cu,
+      });
+      const curralIds = cu.map((x) => x.id);
+      if (curralIds.length > 0) {
+        setCurralOcupacoes(await buscarTodasLinhasPortal("curral_ocupacoes", "curral_id", curralIds));
+      } else {
+        setCurralOcupacoes([]);
+      }
+      if (papel === "administrador") {
+        setRelatorios(await buscarTodasLinhasPortal("relatorios", "cliente_id", cliente.id));
+      }
+    } catch (error) {
+      console.error("Não foi possível atualizar os dados do portal:", error);
     }
   }, [cliente.id, papel]);
 
   useEffect(() => {
     carregar();
+  }, [carregar]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.addEventListener("online", carregar);
+    return () => window.removeEventListener("online", carregar);
   }, [carregar]);
 
   async function atualizarLote(loteId, dados) {
@@ -440,15 +518,42 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
   // Upsert: uma leitura por lote/dia — clicar em outra nota no mesmo dia
   // substitui a anterior.
   async function registrarLeituraCocho(loteId, dados) {
-    const { data, error } = await supabase
-      .from("leituras_cocho")
-      .upsert({ ...dados, lote_id: loteId, consultor_id: cliente.consultor_id }, { onConflict: "lote_id,data" })
-      .select()
-      .single();
-    if (error) throw error;
-    setLeiturasCocho((ls) => {
-      const existe = ls.some((l) => l.lote_id === loteId && l.data === data.data);
-      return existe ? ls.map((l) => (l.lote_id === loteId && l.data === data.data ? data : l)) : [...ls, data];
+    const escopoCocho = criarEscopoCocho("portal", cliente.id);
+    const payload = { ...dados, lote_id: loteId, consultor_id: cliente.consultor_id };
+
+    const guardarOffline = () => {
+      const local = salvarLeituraPendente(escopoCocho, payload);
+      setLeiturasCocho((atuais) => {
+        const proximas = substituirLeituraNaLista(atuais, local);
+        atualizarLeiturasNoCache(escopoCocho, proximas);
+        return proximas;
+      });
+      return local;
+    };
+
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return guardarOffline();
+
+    let resultado;
+    try {
+      resultado = await supabase
+        .from("leituras_cocho")
+        .upsert(payload, { onConflict: "lote_id,data" })
+        .select()
+        .single();
+    } catch (error) {
+      if (erroEhDeRede(error)) return guardarOffline();
+      throw error;
+    }
+    const { data, error } = resultado;
+    if (error) {
+      if (erroEhDeRede(error)) return guardarOffline();
+      throw error;
+    }
+    removerLeituraPendente(escopoCocho, payload);
+    setLeiturasCocho((atuais) => {
+      const proximas = substituirLeituraNaLista(atuais, data);
+      atualizarLeiturasNoCache(escopoCocho, proximas);
+      return proximas;
     });
     return data;
   }

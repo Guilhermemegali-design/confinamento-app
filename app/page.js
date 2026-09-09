@@ -172,8 +172,8 @@ export default function Home() {
             mostrarToast("Consumo excluído");
           }}
           onRegistrarLeituraCocho={async (loteId, l) => {
-            await dados.registrarLeituraCocho(loteId, l);
-            mostrarToast("Leitura de cocho registrada");
+            const leitura = await dados.registrarLeituraCocho(loteId, l);
+            mostrarToast(leitura?._offline_pendente ? "Leitura salva no aparelho; será sincronizada quando houver internet" : "Leitura de cocho registrada");
           }}
           onImportarLeiturasCocho={async (linhas) => {
             await dados.importarLeiturasCochoEmLote(linhas);

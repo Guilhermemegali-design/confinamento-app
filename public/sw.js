@@ -2,11 +2,11 @@
 // SERVICE WORKER
 //
 // Função: deixar o app abrir mesmo sem internet, guardando
-// uma cópia das telas (HTML/CSS/JS) no celular. Não sincroniza
-// dados — só garante que a interface carregue offline.
+// uma cópia das telas (HTML/CSS/JS) no celular. As leituras de
+// cocho são guardadas e sincronizadas pelo código do aplicativo.
 // ============================================================
 
-const CACHE_NAME = "rastro-confinamento-cache-v4";
+const CACHE_NAME = "rastro-confinamento-cache-v5";
 
 const ARQUIVOS_ESSENCIAIS = [
   "/",
