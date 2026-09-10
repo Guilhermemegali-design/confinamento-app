@@ -114,6 +114,23 @@ export default function PortalCliente() {
     }
   }, [usuarioId, carregarCliente]);
 
+  async function atualizarMapaCliente(clienteId, mapa) {
+    if (papel === "leitor" || clienteId !== cliente?.id) {
+      throw new Error("Sem permissão para importar o mapa desta fazenda.");
+    }
+    const { data, error } = await supabase.rpc("atualizar_mapa_cliente", {
+      p_cliente_id: clienteId,
+      p_contorno: mapa.mapa_contorno,
+      p_centro_lat: mapa.mapa_centro_lat,
+      p_centro_lng: mapa.mapa_centro_lng,
+    });
+    if (error) throw error;
+    const clienteAtualizado = { ...cliente, ...data };
+    setCliente((atual) => atual?.id === clienteId ? clienteAtualizado : atual);
+    salvarPerfilPortal(usuarioId, { cliente: clienteAtualizado, papel });
+    return data;
+  }
+
   if (sessao === undefined) return <div style={styles.loadingScreen}>Carregando...</div>;
   if (!sessao) return <TelaLoginCliente />;
   if (erroAcesso) return (
@@ -127,7 +144,7 @@ export default function PortalCliente() {
   );
   if (cliente === undefined) return <div style={styles.loadingScreen}>Carregando...</div>;
   if (cliente === null) return <TelaVincularConvite onVinculado={carregarCliente} />;
-  return <PainelCliente cliente={cliente} somenteLeitura={papel === "leitor"} papel={papel} />;
+  return <PainelCliente cliente={cliente} somenteLeitura={papel === "leitor"} papel={papel} onAtualizarMapaCliente={atualizarMapaCliente} />;
 }
 
 // ---------- Login ----------
@@ -269,7 +286,7 @@ function TelaVincularConvite({ onVinculado }) {
 }
 
 // ---------- Painel principal ----------
-function PainelCliente({ cliente, somenteLeitura, papel }) {
+function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente }) {
   const [abaPortal, setAbaPortal] = useState("confinamento");
   const [trocandoSenha, setTrocandoSenha] = useState(false);
   const [lotes, setLotes] = useState([]);
@@ -797,6 +814,7 @@ function PainelCliente({ cliente, somenteLeitura, papel }) {
             onAtualizarCurral={somenteLeitura ? undefined : atualizarCurral}
             onExcluirCurral={somenteLeitura ? undefined : excluirCurral}
             onImportarCurrais={somenteLeitura ? undefined : importarCurraisEmLote}
+            onAtualizarCliente={somenteLeitura ? undefined : onAtualizarMapaCliente}
             onMoverLoteParaCurral={somenteLeitura ? undefined : moverLoteParaCurral}
           />
         )}

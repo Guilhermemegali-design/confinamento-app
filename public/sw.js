@@ -6,7 +6,7 @@
 // cocho são guardadas e sincronizadas pelo código do aplicativo.
 // ============================================================
 
-const CACHE_NAME = "rastro-confinamento-cache-v5";
+const CACHE_NAME = "rastro-confinamento-cache-v6";
 
 const ARQUIVOS_ESSENCIAIS = [
   "/",

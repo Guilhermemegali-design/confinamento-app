@@ -133,6 +133,7 @@ export default function MapaCurrais({ cliente, lotes, currais, curralOcupacoes =
   const [importandoKml, setImportandoKml] = useState(false);
   const [erroKml, setErroKml] = useState(null);
   const [previaKml, setPreviaKml] = useState(null);
+  const podeImportarKml = Boolean(onAtualizarCliente && onImportarCurrais);
 
   const lotesAtivos = lotes.filter((l) => !l.data_saida);
   const loteDoCurral = new Map();
@@ -406,8 +407,9 @@ export default function MapaCurrais({ cliente, lotes, currais, curralOcupacoes =
   }
 
   async function confirmarImportacaoKml() {
-    if (!previaKml) return;
+    if (!previaKml || importandoKml || !podeImportarKml) return;
     setImportandoKml(true);
+    setErroKml(null);
     try {
       if (previaKml.contorno || previaKml.centro) {
         await onAtualizarCliente(cliente.id, {
@@ -423,6 +425,8 @@ export default function MapaCurrais({ cliente, lotes, currais, curralOcupacoes =
         );
       }
       setPreviaKml(null);
+    } catch (e) {
+      setErroKml(e.message || "Não foi possível importar o KML. Tente novamente.");
     } finally {
       setImportandoKml(false);
     }
@@ -442,14 +446,19 @@ export default function MapaCurrais({ cliente, lotes, currais, curralOcupacoes =
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 4px 10px", gap: 8, flexWrap: "wrap" }}>
         <div style={{ ...styles.sectionTitle, margin: 0 }}>Mapa de currais</div>
         <div style={{ display: "flex", gap: 8 }}>
-          {onAtualizarCliente && (
+          {podeImportarKml && (
             <label style={{ ...styles.editLinkBtn, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
               <Upload size={14} /> {lendoKml ? "Lendo..." : "Importar KML"}
               <input
                 type="file"
                 accept=".kml"
-                disabled={lendoKml}
-                onChange={(e) => lerKml(e.target.files?.[0])}
+                aria-label="Importar KML"
+                disabled={lendoKml || importandoKml}
+                onChange={(e) => {
+                  const arquivo = e.target.files?.[0];
+                  e.target.value = "";
+                  lerKml(arquivo);
+                }}
                 style={{ display: "none" }}
               />
             </label>
@@ -473,7 +482,7 @@ export default function MapaCurrais({ cliente, lotes, currais, curralOcupacoes =
             {previaKml.contorno
               ? "Contorno da fazenda encontrado (vai centralizar o mapa)."
               : "Sem contorno geral nesse KML — só os currais."}
-            <div>{previaKml.novos.length} curral{previaKml.novos.length !== 1 ? "is" : ""} novo{previaKml.novos.length !== 1 ? "s" : ""}: {previaKml.novos.map((n) => n.nome).join(", ") || "—"}</div>
+            <div>{previaKml.novos.length} {previaKml.novos.length === 1 ? "curral novo" : "currais novos"}: {previaKml.novos.map((n) => n.nome).join(", ") || "—"}</div>
             {previaKml.jaExistiam > 0 && <div>{previaKml.jaExistiam} já existiam (não serão duplicados)</div>}
             {previaKml.duplicadosNoArquivo.length > 0 && (
               <div style={{ color: "#B8763E", marginTop: 4 }}>
@@ -482,7 +491,7 @@ export default function MapaCurrais({ cliente, lotes, currais, curralOcupacoes =
             )}
           </div>
           <div style={{ display: "flex", gap: 8, padding: "0 0 12px" }}>
-            <button onClick={() => setPreviaKml(null)} style={{ ...styles.editLinkBtn, background: "#F1EFE8", color: "#5C5C58", flex: 1 }}>
+            <button onClick={() => setPreviaKml(null)} disabled={importandoKml} style={{ ...styles.editLinkBtn, background: "#F1EFE8", color: "#5C5C58", flex: 1 }}>
               Cancelar
             </button>
             <button onClick={confirmarImportacaoKml} disabled={importandoKml} style={{ ...styles.editLinkBtn, flex: 1 }}>
