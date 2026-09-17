@@ -51,6 +51,7 @@ As pesagens são comparadas antes de agrupar, preservando faltas e excessos que 
 Nas cargas importadas por receita, o previsto é a proporção da receita ajustada ao total carregado.
 
 No modo **Período** (inclusive quando o intervalo tem um único dia), o PDF abre com a comparação das turmas e depois apresenta uma tabela de ingredientes acumulados por login. Cada ingrediente tem previsto, feito e **um único resultado acumulado**: faltou (vermelho), passou (azul) ou no previsto (neutro). O resultado é a diferença entre os totais feito e previsto; nunca há duas barras no mesmo ingrediente. Descargas seguem a mesma apresentação por lote.
+Antes do resultado acumulado, a coluna **Erro %** mostra `(feito - previsto) / previsto × 100`: sinal positivo em azul para excesso, negativo em vermelho para falta e 0% no previsto. Valores sem peso/meta completos mostram **Sem dados**; previsto zero mostra **Sem base**, sem presumir um percentual.
 
 A comparação entre turmas continua usando os erros de cada pesagem, em kg e percentual. O resultado acumulado é diferente desse indicador: o total do mês pode bater mesmo quando houve erros em cargas distintas. Essa diferença aparece explicada no PDF. Dados incompletos não recebem um resultado acumulado presumido.
 

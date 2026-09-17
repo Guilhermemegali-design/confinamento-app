@@ -7,6 +7,8 @@ convite, mapas e leitura offline. A aba Cargas exporta PDF A4 horizontal por dia
 ou período. O dia tem painéis individuais por carga; o período compara turmas
 pelo login registrado no trato e acumula ingredientes por turma. Cada resultado
 tem uma só direção: vermelho para falta, azul para excesso, neutro no previsto.
+As tabelas acumuladas incluem **Erro %** antes do resultado: percentual do saldo
+sobre o previsto, com sinal positivo para excesso e negativo para falta.
 A classificação usa os erros absolutos de cada pesagem, ponderados pelo peso
 previsto. Não há associação automática a turno ou horário.
 
@@ -16,7 +18,7 @@ com as importações. O portal pagina o histórico com ordem estável e só libe
 exportação após a consulta completa, mantendo o cocho offline disponível.
 Não é necessária migração de banco nem alteração de registros anteriores.
 
-Validação: 36 testes automatizados e build de produção; geração de PDF e filtros
+Validação: 37 testes automatizados e build de produção; geração de PDF e filtros
 conferidos no navegador com dados fictícios. A rota `/previa-trato` serve somente
 em desenvolvimento e retorna 404 em produção. Exemplos em `output/pdf/`.
 
