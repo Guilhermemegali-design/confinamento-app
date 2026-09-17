@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Fragment } from "react";
+import { useEffect, useMemo, useState, Fragment } from "react";
 import dynamic from "next/dynamic";
 import {
   Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
+import { datasDisponiveisTrato, encontrarLoteDescarga, encontrarCurralDescarga, encontrarLoteDaDescarga, montarRelatorioTrato } from "@/lib/relatorioTrato.mjs";
 import {
   calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo,
   calcularResumoSaidas, calcularCabecasNaData, calcularFechamentoCusto, calcularGmdSaidaParcial,
@@ -228,7 +229,7 @@ export default function ConfinamentoTab({
   onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
   onAdicionarDieta, onAtualizarDieta, onExcluirDieta,
   onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onMoverLoteParaCurral, onAtualizarCliente,
-  onBack, onGerenciarCliente,
+  onBack, onGerenciarCliente, exportacaoTratoDisponivel = true,
 }) {
   const [tela, setTela] = useState({ modo: "lista" });
   const [aba, setAba] = usarAbaPersistida(cliente?.id);
@@ -999,7 +1000,10 @@ export default function ConfinamentoTab({
         <AbaConsumoEsperado lotes={lotes} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} />
       ) : aba === "cargas" ? (
         <AbaCargas
+          cliente={cliente}
+          exportacaoDisponivel={exportacaoTratoDisponivel}
           cargas={cargasVagao}
+          leiturasCocho={leiturasCocho}
           ingredientesMs={ingredientesMs}
           lotes={lotes}
           consumos={consumos}
@@ -3790,77 +3794,6 @@ function encontrarLinhaCabecalho(linhas, camposObrigatorios) {
   });
 }
 
-function encontrarLoteDescarga(valor, lotes) {
-  const textoAlvo = normalizarTexto(valor);
-  if (!textoAlvo) return null;
-  const porTexto = lotes.find((l) => normalizarTexto(l.nome) === textoAlvo);
-  if (porTexto) return porTexto;
-
-  // No arquivo bruto, códigos como "3B" podem representar outro curral e
-  // não devem cair acidentalmente no "Lote 3". Já zeros à esquerda ("08")
-  // são apenas outra escrita para o mesmo número.
-  if (!/^\d+$/.test(textoAlvo)) return null;
-  const numeroAlvo = String(Number(textoAlvo));
-  const porNumero = lotes.filter((l) => {
-    const numero = extrairNumero(l.nome);
-    return numero != null && String(Number(numero)) === numeroAlvo;
-  });
-  return porNumero.length === 1 ? porNumero[0] : null;
-}
-
-function encontrarCurralDescarga(descarga, currais = []) {
-  if (descarga?.curral_id) {
-    const porId = currais.find((curral) => curral.id === descarga.curral_id);
-    if (porId) return porId;
-  }
-
-  // O Trato Certo grava o destino como "Curral 5 — Lote 10". A parte
-  // anterior ao travessão identifica o curral físico e continua válida
-  // mesmo depois que outro lote ocupar esse curral.
-  const texto = String(descarga?.lote_codigo || "").trim();
-  const nomeCurral = texto.match(/^((?:curral|cocheira)\s+[^—–-]+)/i)?.[1]?.trim();
-  if (!nomeCurral) return null;
-  const alvo = normalizarTexto(nomeCurral);
-  return currais.find((curral) => normalizarTexto(curral.nome) === alvo) || null;
-}
-
-function encontrarLoteDaDescarga(descarga, lotes, currais = [], curralOcupacoes = []) {
-  const data = descarga?.data;
-  const curral = encontrarCurralDescarga(descarga, currais);
-  const loteDireto = descarga?.lote_id
-    ? lotes.find((lote) => lote.id === descarga.lote_id) || null
-    : null;
-
-  if (curral && data) {
-    const ocupacoes = curralOcupacoes
-      .filter((ocupacao) => ocupacao.curral_id === curral.id
-        && ocupacao.data_inicio <= data
-        && (ocupacao.data_fim == null || ocupacao.data_fim >= data))
-      .map((ocupacao) => ({ ocupacao, lote: lotes.find((lote) => lote.id === ocupacao.lote_id) }))
-      .filter(({ lote }) => lote
-        && lote.data_entrada <= data
-        && (lote.data_saida == null || lote.data_saida >= data))
-      .sort((a, b) => b.ocupacao.data_inicio.localeCompare(a.ocupacao.data_inicio)
-        || Number(b.ocupacao.data_fim == null) - Number(a.ocupacao.data_fim == null)
-        || String(b.ocupacao.criado_em || "").localeCompare(String(a.ocupacao.criado_em || "")));
-    if (ocupacoes.length) return ocupacoes[0].lote;
-
-    // Alguns currais antigos ainda não têm todo o histórico preenchido.
-    // Nesses casos, aceita o lote que veio junto da descarga somente se o
-    // vínculo físico dele com o curral confere.
-    if (loteDireto?.curral_id === curral.id) return loteDireto;
-    const lotesCompativeis = lotes.filter((lote) => lote.curral_id === curral.id
-      && lote.data_entrada <= data
-      && (lote.data_saida == null || lote.data_saida >= data));
-    if (lotesCompativeis.length === 1) return lotesCompativeis[0];
-  }
-
-  // Descargas novas também trazem o ID imutável do lote. Ele preserva a
-  // vinculação histórica quando o curral não pôde ser identificado.
-  if (loteDireto) return loteDireto;
-  return encontrarLoteDescarga(descarga?.lote_codigo, lotes);
-}
-
 function adicionarAoGrupo(grupos, lote, data, valor, fase, ms) {
   const chave = `${lote.id}|${data}`;
   if (grupos.has(chave)) {
@@ -4884,7 +4817,7 @@ function processarPdfsSaicon(cargaPdf, descargaPdf, lotes, consumos, cargasExist
           lotesNaoReconhecidos.add(item.nome);
           continue;
         }
-        descargas.push({ data, lote_codigo: item.nome, peso: item.realizado });
+        descargas.push({ data, hora: descarga.inicio, lote_codigo: item.nome, peso: item.realizado, peso_previsto: item.previsto });
         adicionarAoGrupo(gruposConsumo, lote, data, item.realizado, null, null);
       }
       if (codigosExistentes.has(codigo)) cargasJaExistentes++;
@@ -5594,11 +5527,13 @@ function FormDieta({ onCancel, onSave, dietaExistente, onDelete, ingredientesMs 
   );
 }
 
-function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curralOcupacoes = [], onSalvarMs, onSincronizar, onImportar, onExcluirCarga }) {
-  const datas = [...new Set(cargas.map((c) => c.data))].sort((a, b) => b.localeCompare(a));
+const SEM_DADOS_TRATO = [];
+
+export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, ingredientesMs, lotes, consumos, currais = SEM_DADOS_TRATO, curralOcupacoes = SEM_DADOS_TRATO, onSalvarMs, onSincronizar, onImportar, onExcluirCarga, modoInicial = "dia", exportacaoDisponivel = true }) {
+  const datas = datasDisponiveisTrato(cargas);
   const primeiraData = datas[datas.length - 1];
   const ultimaData = datas[0];
-  const [modo, setModo] = useState("dia");
+  const [modo, setModo] = useState(modoInicial);
   const [dataEscolhida, setDataEscolhida] = useState("");
   const [periodoInicio, setPeriodoInicio] = useState("");
   const [periodoFim, setPeriodoFim] = useState("");
@@ -5607,9 +5542,21 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curr
   const [tipoDietaExpandido, setTipoDietaExpandido] = useState(null);
   const [sincronizando, setSincronizando] = useState(false);
   const [mensagemSincronizacao, setMensagemSincronizacao] = useState("");
+  const [exportandoPdf, setExportandoPdf] = useState(false);
+  const [erroPdf, setErroPdf] = useState("");
+  const [pdfGerado, setPdfGerado] = useState(null);
+  const [destinatarioRelatorio, setDestinatarioRelatorio] = useState("");
   const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
   const inicio = periodoInicio || primeiraData;
   const fim = periodoFim || ultimaData;
+  const inicioRelatorio = modo === "dia" ? data : inicio;
+  const fimRelatorio = modo === "dia" ? data : fim;
+  const periodoValido = Boolean(inicioRelatorio && fimRelatorio && inicioRelatorio <= fimRelatorio);
+  const relatorioTrato = useMemo(() => periodoValido && exportacaoDisponivel
+    ? montarRelatorioTrato({ cargas, lotes, leiturasCocho, currais, curralOcupacoes, inicio: inicioRelatorio, fim: fimRelatorio, modo }) : null,
+  [cargas, lotes, leiturasCocho, currais, curralOcupacoes, inicioRelatorio, fimRelatorio, periodoValido, modo, exportacaoDisponivel]);
+  useEffect(() => () => { if (pdfGerado) URL.revokeObjectURL(pdfGerado.url); }, [pdfGerado]);
+  const pdfAtual = pdfGerado?.relatorio === relatorioTrato && pdfGerado?.destinatario === destinatarioRelatorio ? pdfGerado : null;
   const cargasDia = modo === "periodo"
     ? cargas.filter((c) => c.data >= inicio && c.data <= fim)
     : cargas.filter((c) => c.data === data);
@@ -5650,7 +5597,7 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curr
   const totalPrevistoCargas = errosPorCarga.reduce((soma, item) => soma + item.previsto, 0);
   const totalRealCargas = errosPorCarga.reduce((soma, item) => soma + item.realizado, 0);
   const erroAbsolutoCargas = errosPorCarga.reduce((soma, item) => soma + item.erroAbsoluto, 0);
-  const erroMedio = totalPrevistoCargas > 0 ? erroAbsolutoCargas / totalPrevistoCargas * 100 : 0;
+  const erroMedio = relatorioTrato?.cargas.erroPercentual ?? null;
   const errosCargaPorTratador = agruparErros(
     errosPorCarga,
     (item) => item.tratador,
@@ -5718,6 +5665,21 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curr
     const erroAbsolutoGrupo = ingredientesGrupo.reduce((s, i) => s + Math.abs(i.real - i.previsto), 0);
     return { ...grupo, previsto, erroAbsoluto: erroAbsolutoGrupo, ingredientes: ingredientesGrupo };
   }).sort((a, b) => b.real - a.real);
+
+  async function exportarErrosTrato() {
+    if (!relatorioTrato || (!relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length) || exportandoPdf) return;
+    setExportandoPdf(true);
+    setErroPdf("");
+    try {
+      const { exportarRelatorioTratoPdf } = await import("@/lib/relatorioTratoPdf.mjs");
+      const arquivo = await exportarRelatorioTratoPdf(relatorioTrato, { clienteNome: cliente?.nome, destinatario: destinatarioRelatorio });
+      setPdfGerado({ url: URL.createObjectURL(arquivo.blob), nome: arquivo.nomeArquivo, relatorio: relatorioTrato, destinatario: destinatarioRelatorio });
+    } catch (erro) {
+      setErroPdf(erro.message || "Não foi possível gerar o PDF. Tente novamente.");
+    } finally {
+      setExportandoPdf(false);
+    }
+  }
 
   async function salvarConfiguracao(item, campo, valor) {
     if (!onSalvarMs) return;
@@ -5801,18 +5763,20 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curr
           </div>
           {modo === "dia" ? (
             <label style={{ fontSize: 12, color: "#5C5C58" }}>
-              <select value={data || ""} onChange={(e) => setDataEscolhida(e.target.value)}
+              <select aria-label="Dia do relatório" value={data || ""} onChange={(e) => setDataEscolhida(e.target.value)}
                 style={{ ...styles.input, width: "auto", minWidth: 140, padding: "7px 9px" }}>
                 {datas.map((d) => <option key={d} value={d}>{formatDataBR(d)}</option>)}
               </select>
             </label>
           ) : (
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input type="date" value={inicio} min={primeiraData} max={fim}
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <input aria-label="Início do período" type="date" value={inicio || ""} min={primeiraData} max={fim}
+                onInput={(e) => setPeriodoInicio(e.currentTarget.value)}
                 onChange={(e) => setPeriodoInicio(e.target.value)}
                 style={{ ...styles.input, width: "auto", padding: "7px 9px", fontSize: 12 }} />
               <span style={{ fontSize: 12, color: "#9A9A94" }}>até</span>
-              <input type="date" value={fim} min={inicio} max={ultimaData}
+              <input aria-label="Fim do período" type="date" value={fim || ""} min={inicio} max={ultimaData}
+                onInput={(e) => setPeriodoFim(e.currentTarget.value)}
                 onChange={(e) => setPeriodoFim(e.target.value)}
                 style={{ ...styles.input, width: "auto", padding: "7px 9px", fontSize: 12 }} />
             </div>
@@ -5820,10 +5784,52 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curr
         </div>
       </div>
 
+      <div style={{ ...styles.card, marginBottom: 14, border: "1px solid #DCE5DE", background: "#F5F8F5" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 14 }}>
+          <div style={{ flex: "1 1 280px" }}>
+            <div style={{ fontWeight: 700, color: "#1F4D45", marginBottom: 5 }}>Painel para imprimir e expor</div>
+            <div style={{ fontSize: 12.5, color: "#5C5C58", lineHeight: 1.6 }}>
+              {modo === "periodo"
+                ? "Turmas agrupadas pelo login, em qualquer horário ou dia de trabalho. Cada ingrediente tem um único resultado acumulado: faltou, passou ou ficou no previsto."
+                : "Uma página por carga, com letras grandes: vermelho quando faltou e azul quando passou do previsto. Cargas com muitos itens continuam na próxima página."}
+            </div>
+          </div>
+          <button type="button" onClick={exportarErrosTrato}
+            disabled={exportandoPdf || !relatorioTrato || (!relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length)}
+            style={{ ...styles.secondaryActionBtn, display: "flex", alignItems: "center", gap: 7,
+              opacity: exportandoPdf || !relatorioTrato || (!relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length) ? 0.5 : 1 }}>
+            <Download size={16} /> {exportandoPdf ? "Gerando PDF..." : "Exportar erros em PDF"}
+          </button>
+        </div>
+        <label style={{ display: "block", marginTop: 12, fontSize: 12, color: "#5C5C58" }}>
+          Destinatário (opcional)
+          <input value={destinatarioRelatorio} onChange={(e) => setDestinatarioRelatorio(e.target.value)} maxLength={80}
+            placeholder="Ex.: Mural do trato" style={{ ...styles.input, display: "block", marginTop: 5, maxWidth: 340,
+              padding: "9px 11px", border: "1px solid #D8DFD9", borderRadius: 8, background: "#FFFFFF", fontSize: 13 }} />
+        </label>
+        <div style={{ fontSize: 11.5, color: "#68736C", lineHeight: 1.6, marginTop: 9 }}>
+          Descargas sem meta original usam o total esperado na leitura de cocho do mesmo dia, quando disponível.
+          Registros sem referência são identificados no PDF. O destinatário não altera os registros exportados.
+        </div>
+        {modo === "periodo" && relatorioTrato && <div style={{ fontSize: 12, color: "#1F4D45", lineHeight: 1.6, marginTop: 9 }}>
+          A comparação entre turmas considera os erros de cada pesagem. O acumulado compara os totais do período.
+          Turmas sem login registrado ou com pesagens incompletas ficam fora da classificação.
+        </div>}
+        {!periodoValido && <div role="alert" style={{ fontSize: 12, color: "#B4473D", marginTop: 8 }}>Escolha um período válido: o início deve ser anterior ou igual ao fim.</div>}
+        {relatorioTrato && !relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length &&
+          <div role="status" style={{ fontSize: 12, marginTop: 8 }}>Nenhuma carga ou descarga no período selecionado.</div>}
+        {erroPdf && <div role="alert" style={{ fontSize: 12, color: "#B4473D", marginTop: 8 }}>{erroPdf}</div>}
+        {pdfAtual && <div role="status" style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12, fontSize: 13, alignItems: "center" }}>
+          <strong style={{ color: "#1F4D45" }}>PDF pronto</strong>
+          <a href={pdfAtual.url} target="_blank" rel="noopener noreferrer" style={{ color: "#1F4D45", textDecoration: "underline" }}>Abrir PDF</a>
+          <a href={pdfAtual.url} download={pdfAtual.nome} style={{ color: "#1F4D45", textDecoration: "underline" }}>Baixar PDF</a>
+        </div>}
+      </div>
+
       <div style={styles.gestaoGrid} className="desktop-summary-grid">
         <PainelCard label={modo === "periodo" ? "Cargas no período" : "Cargas no dia"} valor={cargasDia.length} />
         <PainelCard label="Matéria natural" valor={`${totalRealCargas.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`} />
-        <PainelCard label="Erro absoluto" valor={`${erroMedio.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`} />
+        <PainelCard label="Erro absoluto" valor={erroMedio == null ? "Sem referência" : `${erroMedio.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`} />
         <PainelCard label="Matéria seca" valor={`${totalMs.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg MS`} />
         <PainelCard label="Custo total das cargas" valor={faltamCustos === 0 ? formatBRL(custoTotal) : "Preencha os custos"} />
         <PainelCard label="Custo da dieta (MN)" valor={faltamCustos === 0 && custoDietaKgMn != null ? `${formatBRL(custoDietaKgMn)}/kg` : "—"} />
@@ -5889,8 +5895,8 @@ function AbaCargas({ cargas, ingredientesMs, lotes, consumos, currais = [], curr
               <th style={{ padding: 10, textAlign: "left" }}>Ingrediente</th>
               <th style={{ padding: 10 }}>Previsto</th>
               <th style={{ padding: 10 }}>Realizado</th>
-              <th style={{ padding: 10 }}>Erro kg</th>
-              <th style={{ padding: 10 }}>Erro %</th>
+              <th style={{ padding: 10 }} title="Saldo entre o total realizado e o previsto">Saldo kg</th>
+              <th style={{ padding: 10 }} title="Saldo percentual; faltas e excessos podem se compensar">Saldo %</th>
               <th style={{ padding: 10 }}>MS %</th>
               <th style={{ padding: 10 }}>Kg MS/dia</th>
               <th style={{ padding: 10 }}>Custo R$/kg</th>

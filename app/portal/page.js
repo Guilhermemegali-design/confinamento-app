@@ -9,6 +9,7 @@ import RelatoriosPortalTab from "@/components/RelatoriosPortalTab";
 import MarcaDesenvolvedor from "@/components/MarcaDesenvolvedor";
 import BotaoAtualizar from "@/components/BotaoAtualizar";
 import { BackHeader, InputField, PrimaryButton } from "@/components/UI";
+import { buscarTodasPaginas } from "@/lib/paginacao.mjs";
 import { calcularResumoSaidas } from "@/lib/confinamento";
 import { buscarVinculoPortal, mensagemErroConvite, resgatarConvitePortal } from "@/lib/convitePortal.mjs";
 import {
@@ -48,19 +49,10 @@ function salvarPerfilPortal(userId, perfil) {
 // O PostgREST limita cada resposta a 1.000 linhas. Sem paginação, clientes
 // com muito histórico deixam de receber parte dos lançamentos mais recentes.
 async function buscarTodasLinhasPortal(tabela, coluna, valor) {
-  const tamanhoPagina = 1000;
-  const todas = [];
-  for (let inicio = 0; ; inicio += tamanhoPagina) {
-    let consulta = supabase.from(tabela).select("*");
-    consulta = Array.isArray(valor)
-      ? consulta.in(coluna, valor)
-      : consulta.eq(coluna, valor);
-    const { data, error } = await consulta.range(inicio, inicio + tamanhoPagina - 1);
-    if (error) throw error;
-    todas.push(...(data || []));
-    if (!data || data.length < tamanhoPagina) break;
-  }
-  return todas;
+  return buscarTodasPaginas(() => {
+    const consulta = supabase.from(tabela).select("*");
+    return Array.isArray(valor) ? consulta.in(coluna, valor) : consulta.eq(coluna, valor);
+  });
 }
 
 export default function PortalCliente() {
@@ -301,8 +293,12 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
   const [currais, setCurrais] = useState([]);
   const [curralOcupacoes, setCurralOcupacoes] = useState([]);
   const [relatorios, setRelatorios] = useState([]);
+  const [historicoTratoDisponivel, setHistoricoTratoDisponivel] = useState(false);
+  const [erroHistoricoTrato, setErroHistoricoTrato] = useState("");
 
   const carregar = useCallback(async () => {
+    setHistoricoTratoDisponivel(false);
+    setErroHistoricoTrato("");
     const escopoCocho = criarEscopoCocho("portal", cliente.id);
     const cacheCocho = carregarCacheCocho(escopoCocho);
     if (cacheCocho) {
@@ -363,10 +359,12 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
       } else {
         setCurralOcupacoes([]);
       }
+      setHistoricoTratoDisponivel(true);
       if (papel === "administrador") {
         setRelatorios(await buscarTodasLinhasPortal("relatorios", "cliente_id", cliente.id));
       }
     } catch (error) {
+      setErroHistoricoTrato("Não foi possível atualizar o histórico completo. Conecte-se e tente novamente para exportar o PDF.");
       console.error("Não foi possível atualizar os dados do portal:", error);
     }
   }, [cliente.id, papel]);
@@ -776,10 +774,15 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
       ) : (
       <>
       <div style={styles.content} className="app-content">
+        {!historicoTratoDisponivel && <div role={erroHistoricoTrato ? "alert" : "status"} style={{ ...styles.card, marginBottom: 12 }}>
+          {erroHistoricoTrato || "Carregando histórico completo para exportação..."}
+          {erroHistoricoTrato && <button type="button" onClick={carregar} style={{ ...styles.secondaryActionBtn, marginLeft: 12 }}>Tentar novamente</button>}
+        </div>}
         {abaPortal === "relatorios" && papel === "administrador" ? (
           <RelatoriosPortalTab relatorios={relatorios} />
         ) : (
           <ConfinamentoTab
+            exportacaoTratoDisponivel={historicoTratoDisponivel}
             cliente={cliente}
             lotes={lotes}
             pesagens={pesagens}
