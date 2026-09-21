@@ -295,6 +295,8 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
   const [relatorios, setRelatorios] = useState([]);
   const [historicoTratoDisponivel, setHistoricoTratoDisponivel] = useState(false);
   const [erroHistoricoTrato, setErroHistoricoTrato] = useState("");
+  const [avisosMovimentacao, setAvisosMovimentacao] = useState([]);
+  const [sincronizandoMovimento, setSincronizandoMovimento] = useState("");
 
   const carregar = useCallback(async () => {
     setHistoricoTratoDisponivel(false);
@@ -391,6 +393,54 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
     return data;
   }
 
+  function avisarSincronizacaoMovimentacao(loteId, tipo) {
+    const id = `${loteId}:${tipo}`;
+    const nomeLote = lotes.find((l) => l.id === loteId)?.nome || "Lote";
+    setAvisosMovimentacao((avisos) => [
+      ...avisos.filter((aviso) => aviso.id !== id),
+      { id, loteId, tipo, nomeLote },
+    ]);
+  }
+
+  function limparAvisoMovimentacao(loteId, tipo) {
+    setAvisosMovimentacao((avisos) => avisos.filter((aviso) => aviso.id !== `${loteId}:${tipo}`));
+  }
+
+  async function sincronizarEncerramentoLote(lote, saidasDoLote) {
+    const { finalizadoPorSaidas, dataSaidaCalculada, pesoSaidaVivoCalculado } = calcularResumoSaidas(lote, saidasDoLote);
+    const dataSaidaAlvo = finalizadoPorSaidas ? dataSaidaCalculada : null;
+    const pesoSaidaAlvo = finalizadoPorSaidas ? pesoSaidaVivoCalculado : null;
+    if ((lote.data_saida || null) !== dataSaidaAlvo || Number(lote.peso_saida_vivo || 0) !== Number(pesoSaidaAlvo || 0)) {
+      await atualizarLote(lote.id, { data_saida: dataSaidaAlvo, peso_saida_vivo: pesoSaidaAlvo });
+    }
+    limparAvisoMovimentacao(lote.id, "saida");
+  }
+
+  async function tentarSincronizarMovimentacao(aviso) {
+    setSincronizandoMovimento(aviso.id);
+    try {
+      const { data: lote, error } = await supabase
+        .from("lotes_confinamento")
+        .select("*")
+        .eq("id", aviso.loteId)
+        .single();
+      if (error) throw error;
+      setLotes((ls) => ls.map((l) => (l.id === lote.id ? lote : l)));
+      if (aviso.tipo === "saida") {
+        // Recalcula com os registros atuais; nunca repete o lançamento salvo.
+        const saidasDoLote = await buscarTodasLinhasPortal("saidas_lote", "lote_id", lote.id);
+        setSaidas((ss) => [...ss.filter((s) => s.lote_id !== lote.id), ...saidasDoLote]);
+        await sincronizarEncerramentoLote(lote, saidasDoLote);
+      }
+      limparAvisoMovimentacao(aviso.loteId, aviso.tipo);
+    } catch (error) {
+      console.error("O lançamento foi salvo, mas não foi possível atualizar o lote:", error);
+      setAvisosMovimentacao((avisos) => avisos.map((item) => item.id === aviso.id ? { ...item, falhouNovamente: true } : item));
+    } finally {
+      setSincronizandoMovimento("");
+    }
+  }
+
   async function adicionarLote(dados) {
     const { data, error } = await supabase
       .from("lotes_confinamento")
@@ -426,12 +476,11 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
     setSaidas(atualizadas);
     const lote = saidaAtual && lotes.find((l) => l.id === saidaAtual.lote_id);
     if (lote) {
-      const saidasDoLote = atualizadas.filter((s) => s.lote_id === lote.id);
-      const { finalizadoPorSaidas, dataSaidaCalculada, pesoSaidaVivoCalculado } = calcularResumoSaidas(lote, saidasDoLote);
-      const dataSaidaAlvo = finalizadoPorSaidas ? dataSaidaCalculada : null;
-      const pesoSaidaAlvo = finalizadoPorSaidas ? pesoSaidaVivoCalculado : null;
-      if ((lote.data_saida || null) !== dataSaidaAlvo || Number(lote.peso_saida_vivo || 0) !== Number(pesoSaidaAlvo || 0)) {
-        await atualizarLote(lote.id, { data_saida: dataSaidaAlvo, peso_saida_vivo: pesoSaidaAlvo });
+      try {
+        await sincronizarEncerramentoLote(lote, atualizadas.filter((s) => s.lote_id === lote.id));
+      } catch (erroLote) {
+        console.error("A alteração da saída foi salva, mas o lote não foi atualizado:", erroLote);
+        avisarSincronizacaoMovimentacao(lote.id, "saida");
       }
     }
     return data;
@@ -456,7 +505,13 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
         novasSaidas.filter((s) => s.lote_id === loteId)
       );
       if (finalizadoPorSaidas) {
-        await atualizarLote(loteId, { data_saida: dataSaidaCalculada, peso_saida_vivo: pesoSaidaVivoCalculado });
+        try {
+          await atualizarLote(loteId, { data_saida: dataSaidaCalculada, peso_saida_vivo: pesoSaidaVivoCalculado });
+          limparAvisoMovimentacao(loteId, "saida");
+        } catch (erroLote) {
+          console.error("A saída foi salva, mas o lote não foi atualizado:", erroLote);
+          avisarSincronizacaoMovimentacao(loteId, "saida");
+        }
       }
     }
     return data;
@@ -470,13 +525,21 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
       .single();
     if (error) throw error;
     setEntradas((es) => [...es, data]);
-    const { data: loteAtualizado, error: erroLote } = await supabase
-      .from("lotes_confinamento")
-      .select("*")
-      .eq("id", loteId)
-      .single();
-    if (erroLote) throw erroLote;
-    setLotes((ls) => ls.map((l) => (l.id === loteId ? loteAtualizado : l)));
+    try {
+      const { data: loteAtualizado, error: erroLote } = await supabase
+        .from("lotes_confinamento")
+        .select("*")
+        .eq("id", loteId)
+        .single();
+      if (erroLote) throw erroLote;
+      setLotes((ls) => ls.map((l) => (l.id === loteId ? loteAtualizado : l)));
+      limparAvisoMovimentacao(loteId, "entrada");
+    } catch (erroLote) {
+      // O trigger já somou as cabeças na mesma transação do INSERT confirmado.
+      setLotes((ls) => ls.map((l) => l.id === loteId ? { ...l, num_cabecas: Number(l.num_cabecas || 0) + Number(data.num_cabecas) } : l));
+      console.error("A entrada foi salva, mas o lote não pôde ser recarregado:", erroLote);
+      avisarSincronizacaoMovimentacao(loteId, "entrada");
+    }
     return data;
   }
 
@@ -774,6 +837,17 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
       ) : (
       <>
       <div style={styles.content} className="app-content">
+        {avisosMovimentacao.map((aviso) => (
+          <div key={aviso.id} role="alert" style={{ ...styles.card, marginBottom: 12, border: "1px solid #D6AA50", background: "#FFF9EB" }}>
+            <strong>{aviso.nomeLote}: {aviso.tipo === "entrada" ? "entrada salva" : "saída salva"}.</strong>{" "}
+            {aviso.tipo === "entrada" ? "Não foi possível recarregar os dados do lote." : "Não foi possível atualizar o encerramento do lote."}{" "}
+            Não lance esse registro novamente.
+            {aviso.falhouNovamente && <div style={{ marginTop: 8 }}>O lote ainda não pôde ser atualizado. Confira sua conexão e tente atualizar somente o lote.</div>}
+            <button type="button" disabled={!!sincronizandoMovimento} onClick={() => tentarSincronizarMovimentacao(aviso)} style={{ ...styles.secondaryActionBtn, marginTop: 8, display: "block" }}>
+              {sincronizandoMovimento === aviso.id ? "Atualizando lote..." : "Atualizar lote"}
+            </button>
+          </div>
+        ))}
         {!historicoTratoDisponivel && <div role={erroHistoricoTrato ? "alert" : "status"} style={{ ...styles.card, marginBottom: 12 }}>
           {erroHistoricoTrato || "Carregando histórico completo para exportação..."}
           {erroHistoricoTrato && <button type="button" onClick={carregar} style={{ ...styles.secondaryActionBtn, marginLeft: 12 }}>Tentar novamente</button>}

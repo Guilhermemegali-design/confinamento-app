@@ -728,7 +728,7 @@ export default function ConfinamentoTab({
           })
         }
         onEditarSaida={onAtualizarSaida && ((saidaId) => setTela({ modo: "editar-saida", loteId: lote.id, saidaId }))}
-        onEditarTransferencia={onAtualizarSaida && ((saidaId) => setTela({ modo: "editar-transferencia", loteId: lote.id, saidaId }))}
+        onEditarTransferencia={onAtualizarSaida && onAtualizarEntrada && ((saidaId) => setTela({ modo: "editar-transferencia", loteId: lote.id, saidaId }))}
         onNovaMorte={
           onAdicionarSaida &&
           indicadores.status === "Ativo" &&
@@ -756,7 +756,7 @@ export default function ConfinamentoTab({
         }
         onEditarEntrada={onAtualizarEntrada && ((entradaId) => setTela({ modo: "editar-entrada", loteId: lote.id, entradaId }))}
         onEditarTransferenciaDaEntrada={
-          onAtualizarSaida && ((loteOrigemId, saidaId) => setTela({ modo: "editar-transferencia", loteId: loteOrigemId, saidaId }))
+          onAtualizarSaida && onAtualizarEntrada && ((loteOrigemId, saidaId) => setTela({ modo: "editar-transferencia", loteId: loteOrigemId, saidaId }))
         }
         onExcluirEntrada={
           onExcluirEntrada &&
@@ -2666,6 +2666,26 @@ function FormPesagem({ onCancel, onSave }) {
   );
 }
 
+function mensagemErroMovimentacao(erro) {
+  const mensagem = String(erro?.message || "");
+  if (erro?.status === 401 || /jwt expired|invalid jwt|sessão expirou/i.test(mensagem)) {
+    return "Sua sessão expirou. Entre novamente para continuar o lançamento.";
+  }
+  if (erro?.code === "42501" || /row.level security|permission denied/i.test(mensagem)) {
+    return "Seu acesso não permite concluir este lançamento. Peça ao responsável pela fazenda para conferir sua permissão.";
+  }
+  if (/entrada adicional não pode ser anterior/i.test(mensagem)) {
+    return "A data desta entrada deve ser igual ou posterior à entrada inicial do lote.";
+  }
+  if (/adicionar animais a um lote finalizado/i.test(mensagem)) {
+    return "Este lote já está finalizado. Confira o lote escolhido antes de registrar a entrada.";
+  }
+  if (/fetch|network|load failed|timeout|timed out/i.test(mensagem)) {
+    return "A conexão falhou durante o lançamento. Os campos foram mantidos. Quando a conexão voltar, confira o histórico do lote antes de tentar novamente.";
+  }
+  return "Não foi possível concluir o lançamento. Os campos foram mantidos. Confira o histórico do lote antes de tentar novamente. Se o problema continuar, avise o responsável pela fazenda.";
+}
+
 // Acrescenta animais a um lote que ainda está em formação.
 function FormEntrada({ dataEntradaLote, onCancel, onSave, entradaExistente = null, onExcluir }) {
   const editando = Boolean(entradaExistente);
@@ -2685,12 +2705,14 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave, entradaExistente = nul
   );
   const [observacoes, setObservacoes] = useState(entradaExistente?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
   const quantidade = Number(numCabecas);
   const peso = Number(pesoEntrada);
   const valido = data && data >= dataEntradaLote && data <= hoje && Number.isInteger(quantidade) && quantidade > 0 && peso > 0;
 
   async function handleSave() {
     if (!valido) return;
+    setErro("");
     setSalvando(true);
     try {
       await onSave({
@@ -2703,6 +2725,8 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave, entradaExistente = nul
         rendimento_entrada: rendimentoEntrada !== "" ? Number(rendimentoEntrada) : null,
         observacoes: observacoes.trim() || null,
       });
+    } catch (error) {
+      setErro(mensagemErroMovimentacao(error));
     } finally {
       setSalvando(false);
     }
@@ -2724,6 +2748,7 @@ function FormEntrada({ dataEntradaLote, onCancel, onSave, entradaExistente = nul
           A quantidade será somada ao total do lote a partir desta data.
         </div>
       </div>
+      {erro && <div role="alert" style={styles.errorBox}>{erro}</div>}
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
         {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Registrar entrada"}
       </PrimaryButton>
@@ -2879,10 +2904,8 @@ function useCalculoCarcaca({
 // é finalizado sozinho — não precisa editar o lote pra fechar.
 function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo = "Registrar saída", textoBotao = "Salvar saída", saidaExistente = null, onExcluir }) {
   const editando = Boolean(saidaExistente);
-  // Editando, o teto de cabeças precisa devolver as que essa própria saída
-  // já tinha tirado do lote — senão o campo trava no valor atual sem deixar
-  // aumentar, mesmo que ainda "caiba" no lote.
-  const tetoCabecas = editando ? cabecasRestantes + Number(saidaExistente.num_cabecas || 0) : cabecasRestantes;
+  // Na edição, o chamador já calcula o saldo excluindo a própria saída.
+  const tetoCabecas = cabecasRestantes;
   const [data, setData] = useState(saidaExistente?.data || new Date().toISOString().slice(0, 10));
   const {
     numCabecas,
@@ -2909,10 +2932,12 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
   const [custoOperacional, setCustoOperacional] = useState(saidaExistente?.custo_operacional != null ? String(saidaExistente.custo_operacional) : "");
   const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
   const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= tetoCabecas;
   const valido = data && numCabecasValido;
 
   async function handleSave() {
+    setErro("");
     setSalvando(true);
     try {
       await onSave({
@@ -2928,6 +2953,8 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
         custo_operacional: custoOperacional !== "" ? Number(custoOperacional) : null,
         observacoes: observacoes || null,
       });
+    } catch (error) {
+      setErro(mensagemErroMovimentacao(error));
     } finally {
       setSalvando(false);
     }
@@ -3011,6 +3038,7 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
           placeholder={tipo === "doenca_trauma" ? "Ex: doença respiratória, fratura de membro" : "Ex: venda parcial, frigorífico X"}
         />
       </div>
+      {erro && <div role="alert" style={styles.errorBox}>{erro}</div>}
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
         {salvando ? "Salvando..." : editando ? "Salvar alterações" : textoBotao}
       </PrimaryButton>
@@ -3031,15 +3059,17 @@ function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo 
 // fechamento financeiro do lote.
 function FormMorte({ cabecasRestantes, onCancel, onSave, saidaExistente = null, onExcluir }) {
   const editando = Boolean(saidaExistente);
-  const tetoCabecas = editando ? cabecasRestantes + Number(saidaExistente.num_cabecas || 0) : cabecasRestantes;
+  const tetoCabecas = cabecasRestantes;
   const [data, setData] = useState(saidaExistente?.data || new Date().toISOString().slice(0, 10));
   const [numCabecas, setNumCabecas] = useState(saidaExistente?.num_cabecas != null ? String(saidaExistente.num_cabecas) : "");
   const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
   const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= tetoCabecas;
   const valido = data && numCabecasValido;
 
   async function handleSave() {
+    setErro("");
     setSalvando(true);
     try {
       await onSave({
@@ -3048,6 +3078,8 @@ function FormMorte({ cabecasRestantes, onCancel, onSave, saidaExistente = null, 
         tipo: "morte",
         observacoes: observacoes || null,
       });
+    } catch (error) {
+      setErro(mensagemErroMovimentacao(error));
     } finally {
       setSalvando(false);
     }
@@ -3074,6 +3106,7 @@ function FormMorte({ cabecasRestantes, onCancel, onSave, saidaExistente = null, 
       <div style={styles.card}>
         <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: causa da morte" />
       </div>
+      {erro && <div role="alert" style={styles.errorBox}>{erro}</div>}
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
         {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Registrar morte"}
       </PrimaryButton>
@@ -3116,6 +3149,7 @@ function FormTransferencia({
   );
   const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
   const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
   const nomeCurralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
   const destinosOrdenados = [...lotesDestino].sort((a, b) => {
     const curralA = nomeCurralPorId.get(a.curral_id) || "Sem curral";
@@ -3128,6 +3162,7 @@ function FormTransferencia({
 
   async function handleSave() {
     if (!valido) return;
+    setErro("");
     setSalvando(true);
     try {
       await onSave({
@@ -3138,6 +3173,8 @@ function FormTransferencia({
         custo_acumulado_herdado: custoAcumulado !== "" ? Number(custoAcumulado) : null,
         observacoes: observacoes.trim() || null,
       });
+    } catch (error) {
+      setErro(mensagemErroMovimentacao(error));
     } finally {
       setSalvando(false);
     }
@@ -3205,6 +3242,7 @@ function FormTransferencia({
       <div style={styles.card}>
         <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: sobra da venda parcial de 12/08" />
       </div>
+      {erro && <div role="alert" style={styles.errorBox}>{erro}</div>}
       <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
         {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Trocar animais de lote"}
       </PrimaryButton>
