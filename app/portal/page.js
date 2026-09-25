@@ -11,6 +11,7 @@ import BotaoAtualizar from "@/components/BotaoAtualizar";
 import { BackHeader, InputField, PrimaryButton } from "@/components/UI";
 import { buscarTodasPaginas } from "@/lib/paginacao.mjs";
 import { calcularResumoSaidas } from "@/lib/confinamento";
+import { useIngredientesMs } from "@/lib/useIngredientesMs";
 import { buscarVinculoPortal, mensagemErroConvite, resgatarConvitePortal } from "@/lib/convitePortal.mjs";
 import {
   atualizarLeiturasNoCache,
@@ -288,7 +289,7 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
   const [entradas, setEntradas] = useState([]);
   const [leiturasCocho, setLeiturasCocho] = useState([]);
   const [cargasVagao, setCargasVagao] = useState([]);
-  const [ingredientesMs, setIngredientesMs] = useState([]);
+  const { ingredientesMs, setIngredientesMs, carregarIngredientesMs } = useIngredientesMs("cliente_id", cliente.id);
   const [dietas, setDietas] = useState([]);
   const [currais, setCurrais] = useState([]);
   const [curralOcupacoes, setCurralOcupacoes] = useState([]);
@@ -339,15 +340,14 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
         setEntradas([]);
         setLeiturasCocho([]);
       }
-      const [cu, cv, im, dt] = await Promise.all([
+      const [cu, cv, , dt] = await Promise.all([
         buscarTodasLinhasPortal("currais", "cliente_id", cliente.id),
         buscarTodasLinhasPortal("cargas_vagao", "cliente_id", cliente.id),
-        buscarTodasLinhasPortal("ingredientes_ms", "cliente_id", cliente.id),
+        carregarIngredientesMs(),
         buscarTodasLinhasPortal("dietas", "cliente_id", cliente.id),
       ]);
       setCurrais(cu);
       setCargasVagao(cv);
-      setIngredientesMs(im);
       setDietas(dt);
       salvarCacheCocho(escopoCocho, {
         lotes: l,
@@ -369,7 +369,7 @@ function PainelCliente({ cliente, somenteLeitura, papel, onAtualizarMapaCliente 
       setErroHistoricoTrato("Não foi possível atualizar o histórico completo. Conecte-se e tente novamente para exportar o PDF.");
       console.error("Não foi possível atualizar os dados do portal:", error);
     }
-  }, [cliente.id, papel]);
+  }, [cliente.id, papel, carregarIngredientesMs]);
 
   useEffect(() => {
     carregar();

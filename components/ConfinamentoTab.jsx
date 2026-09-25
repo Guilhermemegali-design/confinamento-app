@@ -5355,6 +5355,7 @@ function FormDieta({ onCancel, onSave, dietaExistente, onDelete, ingredientesMs 
     const numero = valor === "" ? null : Number(valor);
     if (numero != null && (isNaN(numero) || numero < 0 || (campo === "ms_percentual" && numero > 100))) return;
     const existente = ingredientesMs.find((i) => i.ingrediente_chave === chave);
+    if (numero === (existente?.[campo] == null ? null : Number(existente[campo]))) return;
     setSalvandoCampo(`${chave}:${campo}`);
     try {
       await onSalvarMs({
@@ -5674,6 +5675,7 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
     if (numero == null || numero < 0 || (campo === "ms_percentual" && numero > 100)) return;
     const msAtual = msPorIngrediente.get(item.chave);
     const custoAtual = custoPorIngrediente.get(item.chave);
+    if (numero === (campo === "ms_percentual" ? msAtual : custoAtual)) return;
     setSalvando(item.chave);
     try {
       const configuracaoAtualizada = {
@@ -5910,6 +5912,7 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
                   </td>
                   <td style={{ padding: 7 }}>
                     <input type="number" min="0" max="100" step="0.1" defaultValue={Number.isFinite(ms) ? ms : ""}
+                      key={`ms-${item.chave}-${ms ?? ""}`}
                       disabled={!onSalvarMs || salvando === item.chave}
                       onBlur={(e) => salvarConfiguracao(item, "ms_percentual", e.target.value)}
                       placeholder="MS"
@@ -5920,6 +5923,7 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
                   </td>
                   <td style={{ padding: 7 }}>
                     <input type="number" min="0" step="0.001" defaultValue={Number.isFinite(custo) ? custo : ""}
+                      key={`custo-${item.chave}-${custo ?? ""}`}
                       disabled={!onSalvarMs || salvando === item.chave}
                       onBlur={(e) => salvarConfiguracao(item, "custo_kg_mn", e.target.value)}
                       placeholder="R$/kg"
