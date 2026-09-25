@@ -17,6 +17,7 @@ import {
   ajustePercentualDaNota, calcularHistoricoEsperadoRealizado, montarTabelaConsumoEsperado,
 } from "@/lib/confinamento";
 import { TIPOS_DIETA, labelTipoDieta, ingredienteVazio, calcularDieta } from "@/lib/dieta";
+import { montarSincronizacoesConsumoCargas, completarCustosConsumosCargas } from "@/lib/custosTrato.mjs";
 import { BackHeader, SectionTitle, EmptyHint, Field, InputField, TextAreaField, SelectField, PrimaryButton } from "./UI";
 
 // Leaflet mexe com "window"/"document" ao criar o mapa — precisa ficar fora
@@ -219,7 +220,7 @@ function msDaFase(cliente, fase) {
 // Reaproveitado tanto na tela do consultor (com criar/excluir) quanto no portal
 // do cliente (ver e editar).
 export default function ConfinamentoTab({
-  cliente, lotes, pesagens = [], consumos = [], saidas = [], entradas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], currais = [], curralOcupacoes = [],
+  cliente, lotes, pesagens = [], consumos: consumosRegistrados = [], saidas = [], entradas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas = [], currais = [], curralOcupacoes = [],
   onAdicionar, onAtualizar, onExcluir,
   onAdicionarPesagem, onExcluirPesagem,
   onAdicionarSaida, onAtualizarSaida, onExcluirSaida,
@@ -235,6 +236,10 @@ export default function ConfinamentoTab({
   const [aba, setAba] = usarAbaPersistida(cliente?.id);
   const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(cliente?.id);
   const [movendo, setMovendo] = useState(false);
+  const consumos = useMemo(() => exportacaoTratoDisponivel
+    ? completarCustosConsumosCargas(cargasVagao, lotes, consumosRegistrados, ingredientesMs, currais, curralOcupacoes)
+    : consumosRegistrados,
+  [exportacaoTratoDisponivel, cargasVagao, lotes, consumosRegistrados, ingredientesMs, currais, curralOcupacoes]);
 
   const lotesMap = Object.fromEntries(lotes.map((l) => [l.id, l.nome]));
 
@@ -4588,21 +4593,6 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
   };
 }
 
-function calcularComposicaoCarga(carga, configuracoes) {
-  const itens = (Array.isArray(carga.itens) ? carga.itens : []).filter((item) => Number(item.peso_real || 0) > 0);
-  const pesoTotal = itens.reduce((soma, item) => soma + Number(item.peso_real || 0), 0);
-  if (!pesoTotal) return {};
-  const todosComMs = itens.every((item) => Number.isFinite(configuracoes.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente))?.ms));
-  const todosComCusto = itens.every((item) => Number.isFinite(configuracoes.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente))?.custo));
-  return {
-    ms: todosComMs
-      ? itens.reduce((soma, item) => soma + Number(item.peso_real) * configuracoes.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)).ms, 0) / pesoTotal
-      : null,
-    custo: todosComCusto
-      ? itens.reduce((soma, item) => soma + Number(item.peso_real) * configuracoes.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)).custo, 0) / pesoTotal
-      : null,
-  };
-}
 
 // Consumo acumulado por ingrediente de um lote: cada descarga de vagão no
 // lote carrega uma fração proporcional (peso descarregado / peso real da
@@ -4655,47 +4645,6 @@ function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = [],
     .sort((a, b) => b.real - a.real);
 }
 
-function montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesMs, currais = [], curralOcupacoes = []) {
-  const configuracoes = new Map(ingredientesMs.map((item) => [
-    item.ingrediente_chave,
-    {
-      ms: item.ms_percentual == null ? null : Number(item.ms_percentual),
-      custo: item.custo_kg_mn == null ? null : Number(item.custo_kg_mn),
-    },
-  ]));
-  const grupos = new Map();
-  for (const carga of cargas) {
-    const composicao = calcularComposicaoCarga(carga, configuracoes);
-    for (const descarga of Array.isArray(carga.descargas) ? carga.descargas : []) {
-      const lote = encontrarLoteDaDescarga(descarga, lotes, currais, curralOcupacoes);
-      const peso = Number(descarga.peso || 0);
-      if (!lote || !descarga.data || peso <= 0) continue;
-      const chave = `${lote.id}|${descarga.data}`;
-      const grupo = grupos.get(chave) || { loteId: lote.id, data: descarga.data, peso: 0, pesoMs: 0, somaMs: 0, pesoCusto: 0, somaCusto: 0 };
-      grupo.peso += peso;
-      if (Number.isFinite(composicao.ms)) {
-        grupo.pesoMs += peso;
-        grupo.somaMs += peso * composicao.ms;
-      }
-      if (Number.isFinite(composicao.custo)) {
-        grupo.pesoCusto += peso;
-        grupo.somaCusto += peso * composicao.custo;
-      }
-      grupos.set(chave, grupo);
-    }
-  }
-  const consumoPorChave = new Map(consumos.map((consumo) => [`${consumo.lote_id}|${consumo.data}`, consumo]));
-  const atualizacoes = [];
-  for (const [chave, grupo] of grupos) {
-    const consumo = consumoPorChave.get(chave);
-    if (!consumo) continue;
-    const dados = {};
-    if (grupo.pesoMs === grupo.peso && grupo.peso > 0) dados.ms_dieta = grupo.somaMs / grupo.peso;
-    if (grupo.pesoCusto === grupo.peso && grupo.peso > 0) dados.custo_kg_mn = grupo.somaCusto / grupo.peso;
-    if (Object.keys(dados).length) atualizacoes.push({ id: consumo.id, ...dados });
-  }
-  return atualizacoes;
-}
 
 function removerDuplicacaoSaicon(texto) {
   if (!texto || texto.length < 4) return texto;
