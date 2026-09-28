@@ -1819,6 +1819,13 @@ function LoteDetalhe({
         )}
       </div>
 
+      {indicadores.estimativaConsumo && (
+        <div style={{ ...styles.card, fontSize: 13, color: "#7A4B26" }}>
+          <strong>Período com estimativa de alimentação</strong>
+          <div>{formatDataBR(indicadores.estimativaConsumo.dataInicio)} a {formatDataBR(indicadores.estimativaConsumo.dataFim)}: {formatBRL(indicadores.estimativaConsumo.custoDiario)}/cab/dia e MS de {indicadores.estimativaConsumo.msPercentualPV.toLocaleString("pt-BR")}% do peso vivo.</div>
+          <div>As médias incluem {indicadores.diasConsumoEstimado} dias de MS estimada, usando a projeção de peso do lote. Os lançamentos existentes têm prioridade. O histórico abaixo mostra os consumos registrados.</div>
+        </div>
+      )}
       {indicadores.consumoMS != null && (
         <div style={{ margin: "-4px 4px 4px", fontSize: 13, color: "#A85A2A", fontWeight: 700 }}>
           Consumo de MS por cabeça (mais recente): {indicadores.consumoMS.toFixed(2)} kg/dia
@@ -2161,6 +2168,11 @@ function FechamentoCustoCard({ cliente, lote, indicadores, saidas, consumoIngred
           </ResultadoBloco>
         )}
       </div>
+      {indicadores.estimativaConsumo && (
+        <div className="resultado-nota">
+          Inclui estimativa de alimentação de {formatDataBR(indicadores.estimativaConsumo.dataInicio)} a {formatDataBR(indicadores.estimativaConsumo.dataFim)}: {formatBRL(indicadores.estimativaConsumo.custoDiario)}/cab/dia e MS de {indicadores.estimativaConsumo.msPercentualPV.toLocaleString("pt-BR")}% do peso vivo, nos dias sem dados registrados. A MS em kg usa a projeção de peso do lote.
+        </div>
+      )}
       <div className="resultado-nota">A margem mensal representa o retorno sobre o custo total, proporcionalizado para períodos de 30 dias.</div>
     </section>
   );
@@ -2307,6 +2319,16 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
     ["Consumo médio de MS / peso vivo", indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}% do PV` : "-"],
     ["Arrobas produzidas com rendimento", f.arrobasProduzidas != null ? `${f.arrobasProduzidas.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} @` : "-"],
   ], verde);
+
+  if (indicadores.estimativaConsumo) {
+    const e = indicadores.estimativaConsumo;
+    secao("Estimativa de alimentação nos dias sem dados", [
+      ["Período", `${formatDataBR(e.dataInicio)} a ${formatDataBR(e.dataFim)}`],
+      ["Custo diário estimado", `${formatBRL(e.custoDiario)}/cab/dia`],
+      ["Consumo estimado de MS / peso vivo", `${e.msPercentualPV.toLocaleString("pt-BR")}% do PV`],
+      ["Base para MS em kg", "Projeção de peso do lote"],
+    ], laranja);
+  }
 
   secao("Custos de produção", [
     ["Custo de alimentação", f.custoAlimentarTotal != null ? formatBRL(f.custoAlimentarTotal) : "-"],
