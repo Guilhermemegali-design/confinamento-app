@@ -6,6 +6,8 @@ import {
   Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
   LayoutDashboard, Beef, ClipboardList, BarChart3, Map as MapIcon, Settings2, Truck, Wheat, Plus, AlertTriangle,
 } from "lucide-react";
+import { supabase } from "@/lib/supabaseClient";
+import { buscarTodasPaginas } from "@/lib/paginacao.mjs";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import { datasDisponiveisTrato, encontrarLoteDescarga, encontrarCurralDescarga, encontrarLoteDaDescarga, montarRelatorioTrato } from "@/lib/relatorioTrato.mjs";
@@ -5540,6 +5542,25 @@ function FormDieta({ onCancel, onSave, dietaExistente, onDelete, ingredientesMs 
 const SEM_DADOS_TRATO = [];
 
 export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, ingredientesMs, lotes, consumos, currais = SEM_DADOS_TRATO, curralOcupacoes = SEM_DADOS_TRATO, onSalvarMs, onSincronizar, onImportar, onExcluirCarga, modoInicial = "dia", exportacaoDisponivel = true }) {
+  const [composicoes, setComposicoes] = useState({ clienteId: null, receitas: [], erro: "" });
+  useEffect(() => {
+    let ativa = true;
+    const atualizar = async () => {
+      if (!cliente?.id) return;
+      setComposicoes({ clienteId: null, receitas: [], erro: "" });
+      try {
+        const receitas = await buscarTodasPaginas(() => supabase.from("trato_dietas")
+          .select("id,cliente_id,nome,tipo_receita,ingredientes")
+          .eq("cliente_id", cliente.id).eq("tipo_receita", "pre_mistura"));
+        if (ativa) setComposicoes({ clienteId: cliente.id, receitas, erro: "" });
+      } catch {
+        if (ativa) setComposicoes({ clienteId: cliente.id, receitas: [], erro: "Não foi possível carregar a composição das pré-misturas. Reconecte e reabra Cargas para exportar." });
+      }
+    };
+    atualizar();
+    return () => { ativa = false; };
+  }, [cliente?.id]);
+  const composicoesProntas = composicoes.clienteId === cliente?.id && !composicoes.erro;
   const datas = datasDisponiveisTrato(cargas);
   const primeiraData = datas[datas.length - 1];
   const ultimaData = datas[0];
@@ -5563,8 +5584,8 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
   const fimRelatorio = modo === "dia" ? data : fim;
   const periodoValido = Boolean(inicioRelatorio && fimRelatorio && inicioRelatorio <= fimRelatorio);
   const relatorioTrato = useMemo(() => periodoValido && exportacaoDisponivel
-    ? montarRelatorioTrato({ cargas, lotes, leiturasCocho, currais, curralOcupacoes, inicio: inicioRelatorio, fim: fimRelatorio, modo }) : null,
-  [cargas, lotes, leiturasCocho, currais, curralOcupacoes, inicioRelatorio, fimRelatorio, periodoValido, modo, exportacaoDisponivel]);
+    ? montarRelatorioTrato({ cargas, lotes, leiturasCocho, currais, curralOcupacoes, premisturas: composicoes.receitas, clienteId: cliente?.id, inicio: inicioRelatorio, fim: fimRelatorio, modo }) : null,
+  [cargas, lotes, leiturasCocho, currais, curralOcupacoes, composicoes, cliente?.id, inicioRelatorio, fimRelatorio, periodoValido, modo, exportacaoDisponivel]);
   useEffect(() => () => { if (pdfGerado) URL.revokeObjectURL(pdfGerado.url); }, [pdfGerado]);
   const pdfAtual = pdfGerado?.relatorio === relatorioTrato && pdfGerado?.destinatario === destinatarioRelatorio ? pdfGerado : null;
   const cargasDia = modo === "periodo"
@@ -5677,6 +5698,10 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
   }).sort((a, b) => b.real - a.real);
 
   async function exportarErrosTrato() {
+    if (!composicoesProntas) {
+      setErroPdf(composicoes.erro || "Aguarde o carregamento da composição das pré-misturas.");
+      return;
+    }
     if (!relatorioTrato || (!relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length) || exportandoPdf) return;
     setExportandoPdf(true);
     setErroPdf("");
