@@ -124,17 +124,3 @@ test("modo dia conserva os painéis individuais e as mensagens de falta e excess
   assert.ok(paginas.every((p) => /FALTOU/.test(p) && /PASSOU/.test(p)));
   assert.ok(paginas.every((p) => !/TURMAS NO PERÍODO/.test(p)));
 });
-
-test("PDF acrescenta consumo detalhado sem inventar pesagens dos componentes", async () => {
-  const relatorio = montarRelatorioTrato({ inicio: "2026-10-01", fim: "2026-10-05", clienteId: "f",
-    cargas: [{ id: "c", data: "2026-10-01", itens: [{ ingrediente: "Núcleo", peso_previsto: 100, peso_real: 110 }] }],
-    premisturas: [{ cliente_id: "f", nome: "Núcleo", tipo_receita: "pre_mistura", ingredientes: [{ name: "Milho", percent: 70 }, { name: "Farelo", percent: 30 }] }] });
-  const paginas = await lerPdf(relatorio);
-  assert.match(paginas.at(-1), /CONSUMO POR INGREDIENTE/);
-  assert.match(paginas.at(-1), /Milho/);
-  assert.match(paginas.at(-1), /77/);
-  assert.match(paginas.at(-1), /Farelo/);
-  assert.match(paginas.at(-1), /33/);
-  assert.match(paginas.at(-1), /composição histórica pode ser diferente/);
-  assert.equal(relatorio.carregamentos.length, 1);
-});

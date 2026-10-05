@@ -7,6 +7,8 @@ import {
   LayoutDashboard, Beef, ClipboardList, BarChart3, Map as MapIcon, Settings2, Truck, Wheat, Plus, AlertTriangle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { montarConsumoIngredientes } from "@/lib/consumoIngredientes.mjs";
+import { montarCSV } from "@/lib/exportacaoConsumo.mjs";
 import { buscarTodasPaginas } from "@/lib/paginacao.mjs";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
@@ -5577,6 +5579,11 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
   const [erroPdf, setErroPdf] = useState("");
   const [pdfGerado, setPdfGerado] = useState(null);
   const [destinatarioRelatorio, setDestinatarioRelatorio] = useState("");
+  const [exportandoIngredientes, setExportandoIngredientes] = useState(false);
+  const [erroIngredientes, setErroIngredientes] = useState("");
+  const [pdfIngredientes, setPdfIngredientes] = useState(null);
+  useEffect(() => () => { if (pdfIngredientes) URL.revokeObjectURL(pdfIngredientes.url); }, [pdfIngredientes]);
+
   const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
   const inicio = periodoInicio || primeiraData;
   const fim = periodoFim || ultimaData;
@@ -5584,8 +5591,8 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
   const fimRelatorio = modo === "dia" ? data : fim;
   const periodoValido = Boolean(inicioRelatorio && fimRelatorio && inicioRelatorio <= fimRelatorio);
   const relatorioTrato = useMemo(() => periodoValido && exportacaoDisponivel
-    ? montarRelatorioTrato({ cargas, lotes, leiturasCocho, currais, curralOcupacoes, premisturas: composicoes.receitas, clienteId: cliente?.id, inicio: inicioRelatorio, fim: fimRelatorio, modo }) : null,
-  [cargas, lotes, leiturasCocho, currais, curralOcupacoes, composicoes, cliente?.id, inicioRelatorio, fimRelatorio, periodoValido, modo, exportacaoDisponivel]);
+    ? montarRelatorioTrato({ cargas, lotes, leiturasCocho, currais, curralOcupacoes, inicio: inicioRelatorio, fim: fimRelatorio, modo }) : null,
+  [cargas, lotes, leiturasCocho, currais, curralOcupacoes, inicioRelatorio, fimRelatorio, periodoValido, modo, exportacaoDisponivel]);
   useEffect(() => () => { if (pdfGerado) URL.revokeObjectURL(pdfGerado.url); }, [pdfGerado]);
   const pdfAtual = pdfGerado?.relatorio === relatorioTrato && pdfGerado?.destinatario === destinatarioRelatorio ? pdfGerado : null;
   const cargasDia = modo === "periodo"
@@ -5698,10 +5705,6 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
   }).sort((a, b) => b.real - a.real);
 
   async function exportarErrosTrato() {
-    if (!composicoesProntas) {
-      setErroPdf(composicoes.erro || "Aguarde o carregamento da composição das pré-misturas.");
-      return;
-    }
     if (!relatorioTrato || (!relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length) || exportandoPdf) return;
     setExportandoPdf(true);
     setErroPdf("");
@@ -5714,6 +5717,42 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
     } finally {
       setExportandoPdf(false);
     }
+  }
+
+  const contextoIngredientes = useMemo(() => ({ cargas, ingredientesMs, composicoes, clienteId: cliente?.id,
+    inicio: inicioRelatorio, fim: fimRelatorio }), [cargas, ingredientesMs, composicoes, cliente?.id, inicioRelatorio, fimRelatorio]);
+  const pdfIngredientesAtual = pdfIngredientes?.contexto === contextoIngredientes ? pdfIngredientes : null;
+  async function exportarIngredientes() {
+    if (exportandoIngredientes || !exportacaoDisponivel || !periodoValido || !ingredientes.length) return;
+    if (!composicoesProntas) {
+      setErroIngredientes(composicoes.erro || "Aguarde o carregamento da composição das pré-misturas.");
+      return;
+    }
+    setExportandoIngredientes(true);
+    setErroIngredientes("");
+    try {
+      const { exportarConsumoIngredientesPdf } = await import("@/lib/consumoIngredientesPdf.mjs");
+      const detalhado = montarConsumoIngredientes({ cargas, premisturas: composicoes.receitas, clienteId: cliente?.id,
+        inicio: inicioRelatorio, fim: fimRelatorio });
+      const resumo = ingredientes.map((item) => ({ ...item,
+        ms: msPorIngrediente.get(item.chave) ?? null, custo: custoPorIngrediente.get(item.chave) ?? null }));
+      const arquivo = await exportarConsumoIngredientesPdf({ resumo, detalhado, clienteNome: cliente?.nome });
+      setPdfIngredientes({ url: URL.createObjectURL(arquivo.blob), nome: arquivo.nomeArquivo, contexto: contextoIngredientes });
+    } catch (erro) {
+      setErroIngredientes(erro.message || "Não foi possível exportar os ingredientes. Tente novamente.");
+    } finally { setExportandoIngredientes(false); }
+  }
+  function exportarIngredientesCSV() {
+    const linhas = ingredientes.map((item) => {
+      const ms = msPorIngrediente.get(item.chave), custo = custoPorIngrediente.get(item.chave);
+      return [inicioRelatorio, fimRelatorio, item.nome, item.previsto, item.real, item.real - item.previsto,
+        item.previsto > 0 ? (item.real - item.previsto) / item.previsto * 100 : null,
+        ms, Number.isFinite(ms) ? item.real * ms / 100 : null, custo, Number.isFinite(custo) ? item.real * custo : null];
+    });
+    const csv = montarCSV(["Início", "Fim", "Ingrediente", "Previsto MN (kg)", "Realizado MN (kg)", "Saldo (kg)", "Saldo (%)", "MS (%)", "Realizado MS (kg)", "Custo (R$/kg MN)", "Custo total (R$)"], linhas);
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const link = document.createElement("a"); link.href = url; link.download = `consumo-ingredientes-${inicioRelatorio}-${fimRelatorio}.csv`;
+    document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   async function salvarConfiguracao(item, campo, valor) {
@@ -5923,6 +5962,18 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
           {mensagemSincronizacao && <div style={{ fontSize: 12, color: "#1F4D45", marginTop: 8 }}>{mensagemSincronizacao}</div>}
         </div>
       )}
+
+      <div style={{ ...styles.card, marginTop: 12, marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+          <div><strong>Consumo de ingredientes</strong><div style={{ fontSize: 12, color: "#5C5C58", marginTop: 5 }}>PDF com resumo original e segunda página com as pré-misturas detalhadas por ingrediente.</div></div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button type="button" onClick={exportarIngredientesCSV} disabled={!exportacaoDisponivel || !periodoValido || !ingredientes.length} style={styles.secondaryActionBtn}><Download size={14} /> Exportar consumo de ingredientes (CSV)</button>
+            <button type="button" onClick={exportarIngredientes} disabled={exportandoIngredientes || !exportacaoDisponivel || !periodoValido || !ingredientes.length} style={styles.secondaryActionBtn}><Download size={14} /> {exportandoIngredientes ? "Gerando PDF..." : "Exportar ingredientes em PDF"}</button>
+          </div>
+        </div>
+        {erroIngredientes && <div role="alert" style={{ color: "#B4473D", fontSize: 12, marginTop: 10 }}>{erroIngredientes}</div>}
+        {pdfIngredientesAtual && <div role="status" style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 10, fontSize: 13 }}><strong>PDF de ingredientes pronto</strong><a href={pdfIngredientesAtual.url} target="_blank" rel="noopener noreferrer">Abrir PDF</a><a href={pdfIngredientesAtual.url} download={pdfIngredientesAtual.nome}>Baixar PDF</a></div>}
+      </div>
 
       <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 930, fontSize: 12.5 }}>
