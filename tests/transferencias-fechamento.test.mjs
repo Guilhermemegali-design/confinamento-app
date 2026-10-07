@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 const fonte = await readFile(new URL('../lib/confinamento.js', import.meta.url), 'utf8');
 const { calcularIndicadoresLote, calcularFechamentoCusto, calcularPainelConfinamento,
-  obterHistoricoTransferencias, proporcaoConsumoEtapa, calcularCustoAcumulado } =
+  obterHistoricoTransferencias, proporcaoConsumoEtapa, calcularCustoAcumulado, calcularEvolucaoLote } =
   await import(`data:text/javascript;base64,${Buffer.from(fonte).toString('base64')}`);
 const perto = (a,b) => assert.ok(Math.abs(a-b) < 1e-7, `${a} != ${b}`);
 const origem = { id:'origem', cliente_id:'alterosa', nome:'Curral 8', num_cabecas:100,
@@ -111,4 +111,12 @@ test('custo herdado sem consumos permanece disponível; zero explícito não se 
   assert.equal(i.custoAlimentarProprioTotal,null);
   const zero = calcularCustoAcumulado(destino,[],vendas,[{...entrada,custo_acumulado_herdado:0}]);
   assert.equal(zero.custoHerdadoTotal,0);
+});
+
+test('histórico usa data e peso da transferência sem criar pesagem de venda no encerramento por trauma', () => {
+  const pontos = calcularEvolucaoLote(origem, [], [troca, trauma]);
+  assert.equal(pontos.at(-1).data, troca.data);
+  assert.equal(pontos.at(-1).tipo, 'transferencia');
+  assert.equal(pontos.at(-1).peso, 474.7);
+  assert.equal(pontos.some(p => p.tipo === 'saida'), false);
 });

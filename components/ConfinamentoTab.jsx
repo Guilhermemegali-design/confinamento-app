@@ -7,9 +7,10 @@ import {
   LayoutDashboard, Beef, ClipboardList, BarChart3, Map as MapIcon, Settings2, Truck, Wheat, Plus, AlertTriangle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
-import { montarConsumoIngredientes } from "@/lib/consumoIngredientes.mjs";
-import { montarCSV } from "@/lib/exportacaoConsumo.mjs";
 import { buscarTodasPaginas } from "@/lib/paginacao.mjs";
+import { criarPdfRelatorioTrato } from "@/lib/relatorioTratoPdf.mjs";
+import { resumirDescargasDiarias } from "@/lib/descargasDiarias.mjs";
+import { montarCSV, resumirConsumos } from "@/lib/exportacaoConsumo.mjs";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
 import { datasDisponiveisTrato, encontrarLoteDescarga, encontrarCurralDescarga, encontrarLoteDaDescarga, montarRelatorioTrato } from "@/lib/relatorioTrato.mjs";
@@ -72,6 +73,17 @@ async function carregarLeitorPdf() {
   pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
   leitorPdfCarregado = pdfjs;
   return pdfjs;
+}
+
+function baixarCSV(nome, cabecalho, linhas) {
+  const url = URL.createObjectURL(new Blob([montarCSV(cabecalho, linhas)], { type: "text/csv;charset=utf-8;" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = nome;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 const FASES_DIETA = [
@@ -699,7 +711,7 @@ export default function ConfinamentoTab({
     const saidasLote = saidasPorLote[lote.id] || [];
     const entradasLote = entradasPorLote[lote.id] || [];
     const indicadores = calcularIndicadoresLote(lote, pesagensLote, consumosLote, saidasLote, entradasLote, { lotes, pesagensPorLote, consumosPorLote, saidasPorLote, entradasPorLote });
-    const evolucao = calcularEvolucaoLote(lote, pesagensLote);
+    const evolucao = calcularEvolucaoLote(lote, pesagensLote, saidasLote);
     const evolucaoConsumo = calcularEvolucaoConsumo(lote, pesagensLote, consumosLote, saidasLote, entradasLote);
     return (
       <LoteDetalhe
@@ -855,6 +867,22 @@ export default function ConfinamentoTab({
     .map(([categoria, cabecas]) => ({ categoria, cabecas }))
     .sort((a, b) => b.cabecas - a.cabecas);
 
+  function exportarConsumosLotes() {
+    const selecionados = aba === "lotes-finalizados" ? finalizados : ativos;
+    const linhas = selecionados.map(({ lote, status }) => {
+      const historico = calcularEvolucaoConsumo(lote, pesagensPorLote[lote.id] || [], consumosPorLote[lote.id] || [], saidasPorLote[lote.id] || []);
+      const resumo = resumirConsumos(historico);
+      const atual = resumo.ultimo;
+      return [lote.nome, nomeCurralPorId.get(lote.curral_id), status, resumo.dias, historico[0]?.data, atual?.data,
+        resumo.mediaMN, atual?.consumoTotalLote, resumo.mediaMS, atual?.consumoMSCabeca,
+        resumo.mediaPV, atual?.percentualPV];
+    });
+    baixarCSV(`consumos-${aba}.csv`, ["Lote", "Curral", "Status", "Dias registrados", "Primeiro registro", "Último registro (consumo atual)",
+      "Consumo médio MN (kg/lote/dia)", "Consumo atual MN (kg/lote/dia)",
+      "Consumo médio MS (kg/cabeça/dia)", "Consumo atual MS (kg/cabeça/dia)",
+      "Consumo médio MS (% PV)", "Consumo atual MS (% PV)"], linhas);
+  }
+
   // Move um lote ativo para cima/baixo na lista. Na primeira vez que isso é
   // usado, dá uma "ordem" (10, 20, 30...) para todos os lotes ativos com
   // base na posição atual deles na tela — depois só troca a ordem dos dois
@@ -915,6 +943,11 @@ export default function ConfinamentoTab({
             {(aba === "cargas" || aba === "descargas") && onImportarCargas && (
               <button onClick={() => setTela({ modo: "importar-cargas", retornarPara: aba })} style={styles.secondaryActionBtn}>
                 Importar dados
+              </button>
+            )}
+            {(aba === "lotes-ativos" || aba === "lotes-finalizados") && (
+              <button onClick={exportarConsumosLotes} disabled={!exportacaoTratoDisponivel || !(aba === "lotes-finalizados" ? finalizados : ativos).length} style={styles.secondaryActionBtn}>
+                <Download size={14} /> Exportar consumos
               </button>
             )}
             {aba === "lotes-ativos" && onAdicionar && (
@@ -1025,7 +1058,7 @@ export default function ConfinamentoTab({
           onExcluirCarga={onExcluirCarga}
         />
       ) : aba === "descargas" ? (
-        <AbaDescargas cargas={cargasVagao} lotes={lotes} currais={currais} />
+        <AbaDescargas cargas={cargasVagao} lotes={lotes} currais={currais} leiturasCocho={leiturasCocho} curralOcupacoes={curralOcupacoes} />
       ) : aba === "dieta" ? (
         <AbaDietas dietas={dietas} ingredientesMs={ingredientesMs} onAbrir={(id) => setTela({ modo: "editar-dieta", id })} />
       ) : aba === "mapa" ? (
@@ -1637,7 +1670,7 @@ function LoteDetalhe({
       {(onNovaSaida || onNovaMorte || onNovaDoencaTrauma || onNovaTransferencia || onNovaEntrada || saidasOrdenadas.length > 0) && (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
-            <div style={{ ...styles.sectionTitle, margin: 0 }}>Saídas registradas</div>
+            <div style={{ ...styles.sectionTitle, margin: 0 }}>Movimentações registradas</div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 6 }}>
               {onNovaSaida && (
                 <button onClick={onNovaSaida} style={styles.editLinkBtn}>+ Saída</button>
@@ -1676,7 +1709,7 @@ function LoteDetalhe({
                     )}
                     {s.tipo === "transferencia" && (
                       <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#3E6B8A", background: "#E9F1F7", padding: "2px 7px", borderRadius: 999 }}>
-                        TROCA DE LOTE
+                        TRANSFERÊNCIA
                       </span>
                     )}
                   </div>
@@ -1744,7 +1777,7 @@ function LoteDetalhe({
                   {formatDataBR(e.data)}
                   {e.lote_origem_id && (
                     <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#3E6B8A", background: "#E9F1F7", padding: "2px 7px", borderRadius: 999 }}>
-                      TROCA DE LOTE
+                      TRANSFERÊNCIA
                     </span>
                   )}
                 </div>
@@ -1819,7 +1852,7 @@ function LoteDetalhe({
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 600, fontSize: 13.5 }}>{formatDataBR(p.data)}</div>
               <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
-                {p.tipo === "entrada" ? "Entrada" : p.tipo === "saida" ? "Saída" : "Pesagem"}
+                {p.tipo === "entrada" ? "Entrada" : p.tipo === "transferencia" ? "Transferência de lote" : p.tipo === "saida" ? "Saída por venda" : "Pesagem"}
                 {p.gmdIntervalo != null ? ` · GMD ${p.gmdIntervalo.toFixed(2)} kg/dia` : ""}
               </div>
             </div>
@@ -5186,8 +5219,9 @@ function BadgeErroDistribuicao({ percentual, assinado = false }) {
   );
 }
 
-function AbaDescargas({ cargas, lotes, currais = [] }) {
-  const lotePorId = new Map(lotes.map((lote) => [lote.id, lote]));
+function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralOcupacoes = [] }) {
+  const [exportandoPdf, setExportandoPdf] = useState(false);
+  const [erroPdf, setErroPdf] = useState(null);
   const curralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
   const eventos = [];
 
@@ -5199,7 +5233,7 @@ function AbaDescargas({ cargas, lotes, currais = [] }) {
       const erroInformado = numeroDistribuicao(descarga.erro_kg);
       const previstoInformado = numeroDistribuicao(descarga.peso_previsto);
       const previsto = previstoInformado ?? (erroInformado != null ? realizado - erroInformado : null);
-      const lote = descarga.lote_id ? lotePorId.get(descarga.lote_id) : encontrarLoteDescarga(descarga.lote_codigo, lotes);
+      const lote = encontrarLoteDaDescarga({ ...descarga, data: descarga.data || carga.data }, lotes, currais, curralOcupacoes);
       const nomeCurral = curralPorId.get(descarga.curral_id || lote?.curral_id) || descarga.lote_codigo || "Sem curral";
       const nomeLote = lote?.nome || descarga.lote_codigo || "Lote não identificado";
       const saldo = previsto != null ? realizado - previsto : null;
@@ -5236,19 +5270,35 @@ function AbaDescargas({ cargas, lotes, currais = [] }) {
   const eventosFiltrados = modo === "periodo"
     ? eventos.filter((evento) => evento.data >= inicio && evento.data <= fim)
     : eventos.filter((evento) => evento.data === data);
-  const analisados = eventosFiltrados.filter((evento) => evento.previsto > 0);
-  const totalPrevisto = analisados.reduce((soma, evento) => soma + evento.previsto, 0);
-  const totalRealizado = analisados.reduce((soma, evento) => soma + evento.realizado, 0);
-  const saldoGeral = totalRealizado - totalPrevisto;
-  const erroAbsoluto = analisados.reduce((soma, evento) => soma + evento.erroAbsoluto, 0);
-  const erroPercentual = totalPrevisto > 0 ? erroAbsoluto / totalPrevisto * 100 : null;
+  const porLote = resumirDescargasDiarias(eventosFiltrados, leiturasCocho);
+  const totalPrevisto = porLote.reduce((soma, grupo) => soma + (grupo.previsto ?? 0), 0);
+  const totalRealizado = porLote.reduce((soma, grupo) => soma + grupo.realizado, 0);
+  const referenciaCompleta = porLote.every((grupo) => grupo.previsto != null);
+  const saldoGeral = referenciaCompleta ? totalRealizado - totalPrevisto : null;
+  const erroPercentual = referenciaCompleta && totalPrevisto > 0 ? saldoGeral / totalPrevisto * 100 : null;
   const porTratador = agruparErros(eventosFiltrados, (evento) => evento.tratador, (evento) => evento.tratador);
-  const porLote = agruparErros(
-    eventosFiltrados,
-    (evento) => evento.loteId,
-    (evento) => `${evento.curralNome} — ${evento.loteNome}`
-  );
-  const semPrevisto = eventosFiltrados.length - analisados.length;
+  const semPrevisto = porLote.filter((grupo) => grupo.previsto == null).length;
+
+  async function exportarPdf() {
+    setExportandoPdf(true);
+    setErroPdf(null);
+    try {
+      const { criarPdfDescargas } = await import("@/lib/descargasPdf.mjs");
+      const pdf = await criarPdfDescargas({
+        periodo: modo === "periodo" ? `${formatDataBR(inicio)} a ${formatDataBR(fim)}` : formatDataBR(data),
+        resumo: [[modo === "periodo" ? "Tratos no período" : "Tratos no dia", String(eventosFiltrados.length)],
+          ["Lotes atendidos", String(porLote.length)], ["Previsto", textoPesoDistribuicao(referenciaCompleta ? totalPrevisto : null)],
+          ["Realizado", textoPesoDistribuicao(totalRealizado)], ["Saldo real - previsto", textoPesoDistribuicao(saldoGeral, true)],
+          ["Erro acumulado real", erroPercentual != null ? `${erroPercentual > 0 ? "+" : ""}${erroPercentual.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "Sem previsto"]],
+        porTratador, porLote, loteExpandido,
+      });
+      pdf.save(`descargas-${modo === "periodo" ? `${inicio}-a-${fim}` : data}.pdf`);
+    } catch (erro) {
+      setErroPdf("Não foi possível gerar o PDF. Tente novamente.");
+    } finally {
+      setExportandoPdf(false);
+    }
+  }
 
   if (!eventos.length) return <EmptyHint text="Nenhuma descarga detalhada encontrada nas cargas importadas." />;
 
@@ -5256,6 +5306,9 @@ function AbaDescargas({ cargas, lotes, currais = [] }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <SectionTitle>Análise das descargas</SectionTitle>
+        <button type="button" onClick={exportarPdf} disabled={exportandoPdf || !eventosFiltrados.length} style={styles.secondaryActionBtn}>
+          <Download size={14} /> {exportandoPdf ? "Gerando PDF..." : "Exportar PDF"}
+        </button>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid #D8D5CC" }}>
             <button type="button" onClick={() => setModo("dia")} style={{ padding: "6px 10px", fontSize: 12, border: 0, cursor: "pointer", background: modo === "dia" ? "#1F4D45" : "transparent", color: modo === "dia" ? "#fff" : "#5C5C58" }}>Dia</button>
@@ -5275,24 +5328,25 @@ function AbaDescargas({ cargas, lotes, currais = [] }) {
         </div>
       </div>
 
+      {erroPdf && <div role="alert" style={{ color: "#B4473D", marginBottom: 12 }}>{erroPdf}</div>}
       <div style={styles.gestaoGrid} className="desktop-summary-grid">
         <PainelCard label={modo === "periodo" ? "Tratos no período" : "Tratos no dia"} valor={eventosFiltrados.length} />
         <PainelCard label="Lotes atendidos" valor={porLote.length} />
-        <PainelCard label="Previsto" valor={textoPesoDistribuicao(totalPrevisto)} />
+        <PainelCard label="Previsto" valor={textoPesoDistribuicao(referenciaCompleta ? totalPrevisto : null)} />
         <PainelCard label="Realizado" valor={textoPesoDistribuicao(totalRealizado)} />
         <PainelCard label="Saldo real − previsto" valor={textoPesoDistribuicao(saldoGeral, true)} />
-        <PainelCard label="Erro absoluto acumulado" valor={erroPercentual != null ? `${erroPercentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : "—"} />
+        <PainelCard label="Erro acumulado real" valor={erroPercentual != null ? `${erroPercentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : "—"} />
       </div>
 
       {semPrevisto > 0 && (
         <div style={{ ...styles.card, padding: 12, marginBottom: 12, color: "#8A6420", background: "#FFF8E8", fontSize: 12.5 }}>
-          {semPrevisto} descarga(s) antiga(s) não possuem peso previsto e aparecem no histórico, mas não entram no cálculo do erro.
+          {semPrevisto} lote(s) sem previsto diário registrado. O realizado inclui todas as descargas; o saldo e o erro dependem do previsto diário.
         </div>
       )}
 
       <div style={{ ...styles.card, overflowX: "auto", padding: 0, marginBottom: 12 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Erro de descarga por tratador</div>
-        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O percentual usa a soma dos erros absolutos, evitando que sobra em um trato esconda falta em outro.</div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O erro é (realizado − previsto) / previsto: positivo quando passou do previsto e negativo quando faltou.</div>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620, fontSize: 12.5 }}>
           <thead><tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}><th style={{ padding: 10, textAlign: "left" }}>Tratador</th><th style={{ padding: 10 }}>Tratos</th><th style={{ padding: 10 }}>Previsto</th><th style={{ padding: 10 }}>Realizado</th><th style={{ padding: 10 }}>Saldo</th><th style={{ padding: 10 }}>Erro</th></tr></thead>
           <tbody>
@@ -5303,7 +5357,7 @@ function AbaDescargas({ cargas, lotes, currais = [] }) {
                 <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
                 <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
                 <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
-                <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} /></td>
+                <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.previsto > 0 ? grupo.saldo / grupo.previsto * 100 : null} assinado /></td>
               </tr>
             ))}
           </tbody>
@@ -5312,7 +5366,7 @@ function AbaDescargas({ cargas, lotes, currais = [] }) {
 
       <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Acumulado por lote</div>
-        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>Clique em um lote para visualizar o erro de cada trato.</div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O previsto usa a quantidade esperada do lote no dia, sem somar ajustes dos tratos. O erro é (realizado − previsto) / previsto. Clique em um lote para visualizar cada trato.</div>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720, fontSize: 12.5 }}>
           <thead><tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}><th style={{ padding: 10, textAlign: "left" }}>Curral / lote</th><th style={{ padding: 10 }}>Tratos</th><th style={{ padding: 10 }}>Previsto</th><th style={{ padding: 10 }}>Realizado</th><th style={{ padding: 10 }}>Saldo</th><th style={{ padding: 10 }}>Erro acumulado</th></tr></thead>
           <tbody>
@@ -5326,7 +5380,7 @@ function AbaDescargas({ cargas, lotes, currais = [] }) {
                     <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
                     <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
                     <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
-                    <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} /></td>
+                    <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} assinado /></td>
                   </tr>
                   {expandido && (
                     <tr><td colSpan={6} style={{ padding: 0, background: "#FAFAF7" }}>
@@ -5602,13 +5656,12 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
           .eq("cliente_id", cliente.id).eq("tipo_receita", "pre_mistura"));
         if (ativa) setComposicoes({ clienteId: cliente.id, receitas, erro: "" });
       } catch {
-        if (ativa) setComposicoes({ clienteId: cliente.id, receitas: [], erro: "Não foi possível carregar a composição das pré-misturas. Reconecte e reabra Cargas para exportar." });
+        if (ativa) setComposicoes({ clienteId: cliente.id, receitas: [], erro: "Não foi possível carregar a composição das pré-misturas. O PDF dos erros pode ser exportado; os componentes das pré-misturas não serão detalhados." });
       }
     };
     atualizar();
     return () => { ativa = false; };
   }, [cliente?.id]);
-  const composicoesProntas = composicoes.clienteId === cliente?.id && !composicoes.erro;
   const datas = datasDisponiveisTrato(cargas);
   const primeiraData = datas[datas.length - 1];
   const ultimaData = datas[0];
@@ -5625,11 +5678,6 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
   const [erroPdf, setErroPdf] = useState("");
   const [pdfGerado, setPdfGerado] = useState(null);
   const [destinatarioRelatorio, setDestinatarioRelatorio] = useState("");
-  const [exportandoIngredientes, setExportandoIngredientes] = useState(false);
-  const [erroIngredientes, setErroIngredientes] = useState("");
-  const [pdfIngredientes, setPdfIngredientes] = useState(null);
-  useEffect(() => () => { if (pdfIngredientes) URL.revokeObjectURL(pdfIngredientes.url); }, [pdfIngredientes]);
-
   const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
   const inicio = periodoInicio || primeiraData;
   const fim = periodoFim || ultimaData;
@@ -5637,8 +5685,8 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
   const fimRelatorio = modo === "dia" ? data : fim;
   const periodoValido = Boolean(inicioRelatorio && fimRelatorio && inicioRelatorio <= fimRelatorio);
   const relatorioTrato = useMemo(() => periodoValido && exportacaoDisponivel
-    ? montarRelatorioTrato({ cargas, lotes, leiturasCocho, currais, curralOcupacoes, inicio: inicioRelatorio, fim: fimRelatorio, modo }) : null,
-  [cargas, lotes, leiturasCocho, currais, curralOcupacoes, inicioRelatorio, fimRelatorio, periodoValido, modo, exportacaoDisponivel]);
+    ? montarRelatorioTrato({ cargas, lotes, leiturasCocho, currais, curralOcupacoes, premisturas: composicoes.receitas, clienteId: cliente?.id, inicio: inicioRelatorio, fim: fimRelatorio, modo }) : null,
+  [cargas, lotes, leiturasCocho, currais, curralOcupacoes, composicoes, cliente?.id, inicioRelatorio, fimRelatorio, periodoValido, modo, exportacaoDisponivel]);
   useEffect(() => () => { if (pdfGerado) URL.revokeObjectURL(pdfGerado.url); }, [pdfGerado]);
   const pdfAtual = pdfGerado?.relatorio === relatorioTrato && pdfGerado?.destinatario === destinatarioRelatorio ? pdfGerado : null;
   const cargasDia = modo === "periodo"
@@ -5755,50 +5803,21 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
     setExportandoPdf(true);
     setErroPdf("");
     try {
-      const { exportarRelatorioTratoPdf } = await import("@/lib/relatorioTratoPdf.mjs");
-      const arquivo = await exportarRelatorioTratoPdf(relatorioTrato, { clienteNome: cliente?.nome, destinatario: destinatarioRelatorio });
-      setPdfGerado({ url: URL.createObjectURL(arquivo.blob), nome: arquivo.nomeArquivo, relatorio: relatorioTrato, destinatario: destinatarioRelatorio });
+      const doc = await criarPdfRelatorioTrato(relatorioTrato, { clienteNome: cliente?.nome, destinatario: destinatarioRelatorio });
+      const periodo = inicioRelatorio === fimRelatorio ? inicioRelatorio : `${inicioRelatorio}-a-${fimRelatorio}`;
+      const nome = `erros-cargas-${periodo}.pdf`;
+      const blob = doc.output("blob");
+      setPdfGerado({ url: URL.createObjectURL(blob), nome, relatorio: relatorioTrato, destinatario: destinatarioRelatorio });
+      try {
+        await doc.save(nome, { returnPromise: true });
+      } catch {
+        setErroPdf("O PDF está pronto. Use Abrir PDF ou Baixar PDF abaixo.");
+      }
     } catch (erro) {
       setErroPdf(erro.message || "Não foi possível gerar o PDF. Tente novamente.");
     } finally {
       setExportandoPdf(false);
     }
-  }
-
-  const contextoIngredientes = useMemo(() => ({ cargas, ingredientesMs, composicoes, clienteId: cliente?.id,
-    inicio: inicioRelatorio, fim: fimRelatorio }), [cargas, ingredientesMs, composicoes, cliente?.id, inicioRelatorio, fimRelatorio]);
-  const pdfIngredientesAtual = pdfIngredientes?.contexto === contextoIngredientes ? pdfIngredientes : null;
-  async function exportarIngredientes() {
-    if (exportandoIngredientes || !exportacaoDisponivel || !periodoValido || !ingredientes.length) return;
-    if (!composicoesProntas) {
-      setErroIngredientes(composicoes.erro || "Aguarde o carregamento da composição das pré-misturas.");
-      return;
-    }
-    setExportandoIngredientes(true);
-    setErroIngredientes("");
-    try {
-      const { exportarConsumoIngredientesPdf } = await import("@/lib/consumoIngredientesPdf.mjs");
-      const detalhado = montarConsumoIngredientes({ cargas, premisturas: composicoes.receitas, clienteId: cliente?.id,
-        inicio: inicioRelatorio, fim: fimRelatorio });
-      const resumo = ingredientes.map((item) => ({ ...item,
-        ms: msPorIngrediente.get(item.chave) ?? null, custo: custoPorIngrediente.get(item.chave) ?? null }));
-      const arquivo = await exportarConsumoIngredientesPdf({ resumo, detalhado, clienteNome: cliente?.nome });
-      setPdfIngredientes({ url: URL.createObjectURL(arquivo.blob), nome: arquivo.nomeArquivo, contexto: contextoIngredientes });
-    } catch (erro) {
-      setErroIngredientes(erro.message || "Não foi possível exportar os ingredientes. Tente novamente.");
-    } finally { setExportandoIngredientes(false); }
-  }
-  function exportarIngredientesCSV() {
-    const linhas = ingredientes.map((item) => {
-      const ms = msPorIngrediente.get(item.chave), custo = custoPorIngrediente.get(item.chave);
-      return [inicioRelatorio, fimRelatorio, item.nome, item.previsto, item.real, item.real - item.previsto,
-        item.previsto > 0 ? (item.real - item.previsto) / item.previsto * 100 : null,
-        ms, Number.isFinite(ms) ? item.real * ms / 100 : null, custo, Number.isFinite(custo) ? item.real * custo : null];
-    });
-    const csv = montarCSV(["Início", "Fim", "Ingrediente", "Previsto MN (kg)", "Realizado MN (kg)", "Saldo (kg)", "Saldo (%)", "MS (%)", "Realizado MS (kg)", "Custo (R$/kg MN)", "Custo total (R$)"], linhas);
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
-    const link = document.createElement("a"); link.href = url; link.download = `consumo-ingredientes-${inicioRelatorio}-${fimRelatorio}.csv`;
-    document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   async function salvarConfiguracao(item, campo, valor) {
@@ -5939,6 +5958,8 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
         {!periodoValido && <div role="alert" style={{ fontSize: 12, color: "#B4473D", marginTop: 8 }}>Escolha um período válido: o início deve ser anterior ou igual ao fim.</div>}
         {relatorioTrato && !relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length &&
           <div role="status" style={{ fontSize: 12, marginTop: 8 }}>Nenhuma carga ou descarga no período selecionado.</div>}
+        {composicoes.erro && <div role="status" style={{ fontSize: 12, color: "#8A6420", marginTop: 8 }}>{composicoes.erro}</div>}
+        {cliente?.id && composicoes.clienteId !== cliente.id && !composicoes.erro && <div role="status" style={{ fontSize: 12, color: "#68736C", marginTop: 8 }}>Carregando a composição das pré-misturas. Você já pode exportar os erros das cargas.</div>}
         {erroPdf && <div role="alert" style={{ fontSize: 12, color: "#B4473D", marginTop: 8 }}>{erroPdf}</div>}
         {pdfAtual && <div role="status" style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12, fontSize: 13, alignItems: "center" }}>
           <strong style={{ color: "#1F4D45" }}>PDF pronto</strong>
@@ -6009,16 +6030,21 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
         </div>
       )}
 
-      <div style={{ ...styles.card, marginTop: 12, marginBottom: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
-          <div><strong>Consumo de ingredientes</strong><div style={{ fontSize: 12, color: "#5C5C58", marginTop: 5 }}>PDF com resumo original e segunda página com as pré-misturas detalhadas por ingrediente.</div></div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button type="button" onClick={exportarIngredientesCSV} disabled={!exportacaoDisponivel || !periodoValido || !ingredientes.length} style={styles.secondaryActionBtn}><Download size={14} /> Exportar consumo de ingredientes (CSV)</button>
-            <button type="button" onClick={exportarIngredientes} disabled={exportandoIngredientes || !exportacaoDisponivel || !periodoValido || !ingredientes.length} style={styles.secondaryActionBtn}><Download size={14} /> {exportandoIngredientes ? "Gerando PDF..." : "Exportar ingredientes em PDF"}</button>
-          </div>
-        </div>
-        {erroIngredientes && <div role="alert" style={{ color: "#B4473D", fontSize: 12, marginTop: 10 }}>{erroIngredientes}</div>}
-        {pdfIngredientesAtual && <div role="status" style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 10, fontSize: 13 }}><strong>PDF de ingredientes pronto</strong><a href={pdfIngredientesAtual.url} target="_blank" rel="noopener noreferrer">Abrir PDF</a><a href={pdfIngredientesAtual.url} download={pdfIngredientesAtual.nome}>Baixar PDF</a></div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+        <button type="button" disabled={!exportacaoDisponivel || !periodoValido || !ingredientes.length}
+          onClick={() => baixarCSV(`consumo-ingredientes-${inicioRelatorio}-${fimRelatorio}.csv`,
+            ["Início", "Fim", "Ingrediente", "Previsto MN (kg)", "Realizado MN (kg)", "Saldo (kg)", "Saldo (%)", "MS (%)", "Realizado MS (kg)", "Custo (R$/kg MN)", "Custo total (R$)"],
+            ingredientes.map((item) => {
+              const ms = msPorIngrediente.get(item.chave);
+              const custo = custoPorIngrediente.get(item.chave);
+              return [inicioRelatorio, fimRelatorio, item.nome, item.previsto, item.real, item.real - item.previsto,
+                item.previsto > 0 ? (item.real - item.previsto) / item.previsto * 100 : null,
+                ms, Number.isFinite(ms) ? item.real * ms / 100 : null,
+                custo, Number.isFinite(custo) ? item.real * custo : null];
+            }))}
+          style={styles.secondaryActionBtn}>
+          <Download size={14} /> Exportar consumo de ingredientes
+        </button>
       </div>
 
       <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>

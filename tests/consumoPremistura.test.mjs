@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { detalharConsumoPremisturas } from "../lib/consumoPremistura.mjs";
 import { montarRelatorioTrato } from "../lib/relatorioTrato.mjs";
-import { montarConsumoIngredientes } from "../lib/consumoIngredientes.mjs";
 const receita = { id: "p", cliente_id: "fazenda", tipo_receita: "pre_mistura", nome: "Núcleo", ingredientes: [
   { name: "Milho", percent: 70, dryMatter: 88 }, { name: "Farelo", percent: 30, dryMatter: 90 }] };
 
@@ -18,9 +17,7 @@ test("divide em MN, soma uso direto e conserva massa sem alterar pesagens", () =
 test("período filtra extremos e erros permanecem medidos na pré-mistura", () => {
   const cargas = ["2026-09-30", "2026-10-01", "2026-10-05", "2026-10-06"].map((data, id) => ({ id, data, itens: [{ ingrediente: "Núcleo", peso_previsto: 100, peso_real: 110 }] }));
   const relatorio = montarRelatorioTrato({ cargas, premisturas: [receita], clienteId: "fazenda", inicio: "2026-10-01", fim: "2026-10-05" });
-  const consumo = montarConsumoIngredientes({ cargas, premisturas: [receita], clienteId: "fazenda", inicio: "2026-10-01", fim: "2026-10-05" });
-  assert.equal(consumo.ingredientes[0].real, 154);
-  assert.equal(relatorio.consumoIngredientes, undefined);
+  assert.equal(relatorio.consumoIngredientes.ingredientes[0].real, 154);
   assert.equal(relatorio.cargas.excesso, 20);
   assert.equal(relatorio.ingredientes[0].nome, "Núcleo");
 });
