@@ -9,7 +9,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { buscarTodasPaginas } from "@/lib/paginacao.mjs";
 import { criarPdfRelatorioTrato } from "@/lib/relatorioTratoPdf.mjs";
-import { resumirDescargasDiarias } from "@/lib/descargasDiarias.mjs";
+import { resumirDescargasDiarias, nomeReferenciaDescargas } from "@/lib/descargasDiarias.mjs";
 import { montarCSV, resumirConsumos } from "@/lib/exportacaoConsumo.mjs";
 import { styles } from "@/lib/styles";
 import { formatDataBR, formatBRL } from "@/lib/format";
@@ -5247,7 +5247,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
         loteId: lote?.id || descarga.lote_id || `codigo:${descarga.lote_codigo || indice}`,
         loteNome: nomeLote,
         curralNome: nomeCurral,
-        previsto: previsto != null && previsto > 0 ? previsto : 0,
+        previsto: previsto != null && previsto >= 0 ? previsto : null,
         realizado,
         saldo: saldo || 0,
         erroAbsoluto: saldo != null ? Math.abs(saldo) : 0,
@@ -5278,6 +5278,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
   const erroPercentual = referenciaCompleta && totalPrevisto > 0 ? saldoGeral / totalPrevisto * 100 : null;
   const porTratador = agruparErros(eventosFiltrados, (evento) => evento.tratador, (evento) => evento.tratador);
   const semPrevisto = porLote.filter((grupo) => grupo.previsto == null).length;
+  const usaTratos = porLote.some((grupo) => ["tratos", "mista"].includes(grupo.referencia));
 
   async function exportarPdf() {
     setExportandoPdf(true);
@@ -5289,7 +5290,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
         resumo: [[modo === "periodo" ? "Tratos no período" : "Tratos no dia", String(eventosFiltrados.length)],
           ["Lotes atendidos", String(porLote.length)], ["Previsto", textoPesoDistribuicao(referenciaCompleta ? totalPrevisto : null)],
           ["Realizado", textoPesoDistribuicao(totalRealizado)], ["Saldo real - previsto", textoPesoDistribuicao(saldoGeral, true)],
-          ["Erro acumulado real", erroPercentual != null ? `${erroPercentual > 0 ? "+" : ""}${erroPercentual.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "Sem previsto"]],
+          ["Erro sobre o previsto", erroPercentual != null ? `${erroPercentual > 0 ? "+" : ""}${erroPercentual.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "Sem previsto"]],
         porTratador, porLote, loteExpandido,
       });
       pdf.save(`descargas-${modo === "periodo" ? `${inicio}-a-${fim}` : data}.pdf`);
@@ -5335,14 +5336,18 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
         <PainelCard label="Previsto" valor={textoPesoDistribuicao(referenciaCompleta ? totalPrevisto : null)} />
         <PainelCard label="Realizado" valor={textoPesoDistribuicao(totalRealizado)} />
         <PainelCard label="Saldo real − previsto" valor={textoPesoDistribuicao(saldoGeral, true)} />
-        <PainelCard label="Erro acumulado real" valor={erroPercentual != null ? `${erroPercentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : "—"} />
+        <PainelCard label="Erro sobre o previsto" valor={erroPercentual != null ? `${erroPercentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : "—"} />
       </div>
 
       {semPrevisto > 0 && (
         <div style={{ ...styles.card, padding: 12, marginBottom: 12, color: "#8A6420", background: "#FFF8E8", fontSize: 12.5 }}>
-          {semPrevisto} lote(s) sem previsto diário registrado. O realizado inclui todas as descargas; o saldo e o erro dependem do previsto diário.
+          {semPrevisto} lote(s) sem referência completa. Falta a meta diária ou o previsto de alguma descarga; o realizado continua sendo mostrado.
         </div>
       )}
+
+      {usaTratos && <div style={{ ...styles.card, padding: 12, marginBottom: 12, fontSize: 12.5 }}>
+        Sem meta diária na leitura de cocho, o previsto usa as descargas registradas no Android. Esse valor pode incluir ajustes e tratos parciais; não representa a meta do dia inteiro.
+      </div>}
 
       <div style={{ ...styles.card, overflowX: "auto", padding: 0, marginBottom: 12 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Erro de descarga por tratador</div>
@@ -5366,7 +5371,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
 
       <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Acumulado por lote</div>
-        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O previsto usa a quantidade esperada do lote no dia, sem somar ajustes dos tratos. O erro é (realizado − previsto) / previsto. Clique em um lote para visualizar cada trato.</div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O previsto usa a meta diária da leitura de cocho quando disponível. Caso contrário, soma o previsto das descargas registradas. A origem aparece abaixo do valor. Clique em um lote para visualizar cada trato.</div>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720, fontSize: 12.5 }}>
           <thead><tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}><th style={{ padding: 10, textAlign: "left" }}>Curral / lote</th><th style={{ padding: 10 }}>Tratos</th><th style={{ padding: 10 }}>Previsto</th><th style={{ padding: 10 }}>Realizado</th><th style={{ padding: 10 }}>Saldo</th><th style={{ padding: 10 }}>Erro acumulado</th></tr></thead>
           <tbody>
@@ -5377,7 +5382,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
                   <tr onClick={() => setLoteExpandido(expandido ? null : grupo.chave)} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right", cursor: "pointer" }}>
                     <td style={{ padding: 10, textAlign: "left", fontWeight: 700 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ChevronDown size={14} style={{ transform: expandido ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s" }} />{grupo.nome}</span></td>
                     <td style={{ padding: 10 }}>{grupo.registros.length}</td>
-                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
+                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}<div style={{ fontSize: 10.5, color: "#8A8A82" }}>{nomeReferenciaDescargas(grupo.referencia)}</div></td>
                     <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
                     <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
                     <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} assinado /></td>
@@ -5391,9 +5396,9 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
                             <td style={{ padding: "7px 10px 7px 34px", textAlign: "left" }}>{formatDataBR(evento.data)}{evento.hora ? ` · ${evento.hora}` : ""}</td>
                             <td style={{ padding: 7, textAlign: "left" }}>{evento.cargaCodigo}{evento.receita ? ` · ${evento.receita}` : ""}</td>
                             <td style={{ padding: 7, textAlign: "left" }}>{evento.tratador}</td>
-                            <td style={{ padding: 7 }}>{evento.previsto > 0 ? textoPesoDistribuicao(evento.previsto) : "—"}</td>
+                            <td style={{ padding: 7 }}>{evento.previsto != null ? textoPesoDistribuicao(evento.previsto) : "—"}</td>
                             <td style={{ padding: 7 }}>{textoPesoDistribuicao(evento.realizado)}</td>
-                            <td style={{ padding: 7 }}>{evento.previsto > 0 ? textoPesoDistribuicao(evento.saldo, true) : "—"}</td>
+                            <td style={{ padding: 7 }}>{evento.previsto != null ? textoPesoDistribuicao(evento.saldo, true) : "—"}</td>
                             <td style={{ padding: 7 }}><BadgeErroDistribuicao percentual={evento.percentual} assinado /></td>
                           </tr>
                         ))}</tbody>
