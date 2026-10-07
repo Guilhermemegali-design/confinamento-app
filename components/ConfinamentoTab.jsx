@@ -15,7 +15,7 @@ import { formatDataBR, formatBRL } from "@/lib/format";
 import { datasDisponiveisTrato, encontrarLoteDescarga, encontrarCurralDescarga, encontrarLoteDaDescarga, montarRelatorioTrato } from "@/lib/relatorioTrato.mjs";
 import {
   calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo,
-  calcularResumoSaidas, calcularCabecasNaData, calcularFechamentoCusto, calcularGmdSaidaParcial,
+  calcularResumoSaidas, calcularCabecasNaData, calcularFechamentoCusto, calcularGmdSaidaParcial, proporcaoConsumoEtapa,
   calcularRendimentoCarcaca, calcularPesoMorto, calcularPesoMedioSaida, calcularPesoTotalSaida,
   NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, obterConsumoReferenciaAntesDe,
   ajustePercentualDaNota, calcularHistoricoEsperadoRealizado, montarTabelaConsumoEsperado,
@@ -375,7 +375,7 @@ export default function ConfinamentoTab({
     const { cabecasRestantes } = calcularResumoSaidas(lote, saidasPorLote[lote.id] || []);
     const lotesDestino = lotes.filter((l) => l.id !== lote.id && !l.data_saida);
     const indicadoresOrigem = calcularIndicadoresLote(
-      lote, pesagensPorLote[lote.id] || [], consumosPorLote[lote.id] || [], saidasPorLote[lote.id] || [], entradasPorLote[lote.id] || []
+      lote, pesagensPorLote[lote.id] || [], consumosPorLote[lote.id] || [], saidasPorLote[lote.id] || [], entradasPorLote[lote.id] || [], { lotes, pesagensPorLote, consumosPorLote, saidasPorLote, entradasPorLote }
     );
     const fechamentoOrigem = calcularFechamentoCusto(lote, indicadoresOrigem, saidasPorLote[lote.id] || []);
     return (
@@ -698,7 +698,7 @@ export default function ConfinamentoTab({
     const consumosLote = consumosPorLote[lote.id] || [];
     const saidasLote = saidasPorLote[lote.id] || [];
     const entradasLote = entradasPorLote[lote.id] || [];
-    const indicadores = calcularIndicadoresLote(lote, pesagensLote, consumosLote, saidasLote, entradasLote);
+    const indicadores = calcularIndicadoresLote(lote, pesagensLote, consumosLote, saidasLote, entradasLote, { lotes, pesagensPorLote, consumosPorLote, saidasPorLote, entradasPorLote });
     const evolucao = calcularEvolucaoLote(lote, pesagensLote);
     const evolucaoConsumo = calcularEvolucaoConsumo(lote, pesagensLote, consumosLote, saidasLote, entradasLote);
     return (
@@ -789,12 +789,13 @@ export default function ConfinamentoTab({
   const painel = calcularPainelConfinamento(lotes, pesagensPorLote, consumosPorLote, saidasPorLote, entradasPorLote);
   const comIndicadores = lotes.map((l) => ({
     lote: l,
-    ...calcularIndicadoresLote(l, pesagensPorLote[l.id] || [], consumosPorLote[l.id] || [], saidasPorLote[l.id] || [], entradasPorLote[l.id] || []),
+    ...calcularIndicadoresLote(l, pesagensPorLote[l.id] || [], consumosPorLote[l.id] || [], saidasPorLote[l.id] || [], entradasPorLote[l.id] || [], { lotes, pesagensPorLote, consumosPorLote, saidasPorLote, entradasPorLote }),
   }));
   const nomeCurralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
   const ativos = comIndicadores
     .filter((i) => i.status === "Ativo")
     .sort(compararLotes(ordenacao, nomeCurralPorId));
+  const transferidos = comIndicadores.filter((i) => i.status === "Transferido");
   const finalizados = comIndicadores
     .filter((i) => i.status === "Finalizado")
     .sort((a, b) => (b.lote.data_saida || "").localeCompare(a.lote.data_saida || ""));
@@ -1210,7 +1211,7 @@ export default function ConfinamentoTab({
             // isso, esses animais só apareciam abrindo o lote ativo um por
             // um; aqui ficam visíveis junto com os finalizados.
             const saidasParciaisAtivos = ativos
-              .flatMap((item) => (saidasPorLote[item.lote.id] || []).map((s) => ({
+              .flatMap((item) => (saidasPorLote[item.lote.id] || []).filter((s) => s.tipo !== "transferencia").map((s) => ({
                 ...s,
                 loteNome: item.lote.nome,
                 loteId: item.lote.id,
@@ -1350,6 +1351,23 @@ export default function ConfinamentoTab({
             </button>
           );})}
           </div>
+          {transferidos.length > 0 && (
+            <>
+              <SectionTitle>Lotes encerrados por transferência</SectionTitle>
+              <div style={{ fontSize: 12, color: "#5C5C58", margin: "0 4px 10px" }}>
+                Etapas anteriores dos animais. A venda e o resultado ficam no lote de destino.
+              </div>
+              {transferidos.map(({ lote }) => (
+                <button key={lote.id} style={{ ...styles.rowCard, width: "100%", textAlign: "left", cursor: "pointer" }} onClick={() => setTela({ modo: "lote", id: lote.id })}>
+                  <div><strong>{lote.nome}</strong><div style={{ fontSize: 12, color: "#5C5C58", marginTop: 4 }}>
+                    {(saidasPorLote[lote.id] || []).filter((s) => s.tipo === "transferencia").map((s) =>
+                      `${s.num_cabecas} cab. → ${lotesMap[s.lote_destino_id] || "Destino não disponível"} em ${formatDataBR(s.data)}`
+                    ).join(" · ")}
+                  </div></div>
+                </button>
+              ))}
+            </>
+          )}
         </>
       ) : (
         <>
@@ -1516,7 +1534,7 @@ function LoteDetalhe({
   const saidasOrdenadas = [...saidas].sort((a, b) => b.data.localeCompare(a.data));
   const entradasOrdenadas = [...entradas].sort((a, b) => b.data.localeCompare(a.data));
   const fechamento = indicadores.status === "Finalizado" ? calcularFechamentoCusto(lote, indicadores, saidas) : null;
-  const consumoIngredientes = calcularConsumoIngredientesLote(lote, cargasVagao, ingredientesMs, currais, curralOcupacoes, lotes);
+  const consumoIngredientes = calcularConsumoIngredientesLote(lote, cargasVagao, ingredientesMs, currais, curralOcupacoes, lotes, indicadores.historicoTransferencias?.etapas || []);
   return (
     <div>
       <div style={styles.backHeaderRow}>
@@ -1606,6 +1624,12 @@ function LoteDetalhe({
         {lote.observacoes && <Field label="Observações" value={lote.observacoes} multiline />}
       </div>
 
+      {indicadores.status === "Transferido" && (
+        <div style={styles.card}>
+          <strong>Encerrado por transferência</strong>
+          <p style={{ fontSize: 13, marginBottom: 0 }}>Este lote conserva o histórico dos animais. A transferência não gera receita de venda; os custos e consumos anteriores acompanham os animais no lote de destino.</p>
+        </div>
+      )}
       {indicadores.status === "Finalizado" && (
         <FechamentoCustoCard cliente={cliente} lote={lote} indicadores={indicadores} saidas={saidas} consumoIngredientes={consumoIngredientes} />
       )}
@@ -2145,7 +2169,8 @@ function FechamentoCustoCard({ cliente, lote, indicadores, saidas, consumoIngred
         <ResultadoBloco titulo="Custo de produção" cor="#C47A3D">
           <ResultadoLinha label="Alimentação" value={f.custoAlimentarTotal != null ? formatBRL(f.custoAlimentarTotal) : "—"} />
           <ResultadoLinha label="Operacional" value={f.custoOperacionalTotal != null ? formatBRL(f.custoOperacionalTotal) : "—"} />
-          <ResultadoLinha label="Custo total (alimentação + operacional)" value={f.custoProducaoTotal != null ? formatBRL(f.custoProducaoTotal) : "—"} forte cor="#A85F2C" />
+          {f.custoHerdadoTotal > 0 && <ResultadoLinha label="Custos anteriores (transferências)" value={formatBRL(f.custoHerdadoTotal)} />}
+          <ResultadoLinha label="Custo total de produção" value={f.custoProducaoTotal != null ? formatBRL(f.custoProducaoTotal) : "—"} forte cor="#A85F2C" />
           <ResultadoLinha label="Custo total por animal" value={f.custoProducaoPorAnimal != null ? `${formatBRL(f.custoProducaoPorAnimal)}/cab` : "—"} />
           <ResultadoLinha label="Custo diário médio" value={f.custoDiarioMedioTotal != null ? `${formatBRL(f.custoDiarioMedioTotal)}/cab` : "—"} />
           <ResultadoLinha label="Custo da @ produzida - vivo" value={f.custoArrobaProduzidaVivo != null ? formatBRL(f.custoArrobaProduzidaVivo) : "—"} />
@@ -2172,6 +2197,12 @@ function FechamentoCustoCard({ cliente, lote, indicadores, saidas, consumoIngred
           </ResultadoBloco>
         )}
       </div>
+      {indicadores.historicoTransferencias?.etapas.length > 0 && (
+        <div className="resultado-nota">
+          Inclui o consumo anterior dos animais transferidos de {[...new Set(indicadores.historicoTransferencias.etapas.map((e) => e.lote.nome))].join(", ")}, rateado pelas cabeças transferidas: {indicadores.consumoAnteriorMN.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg de matéria natural e {indicadores.consumoAnteriorMS.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg de matéria seca. O custo herdado é incluído uma única vez no total de produção.
+        </div>
+      )}
+      {indicadores.historicoTransferencias?.pendencias.length > 0 && <div className="resultado-nota">Há transferências sem histórico de origem confirmado. O custo informado foi preservado; os consumos dessas origens não foram presumidos.</div>}
       {indicadores.estimativaConsumo && (
         <div className="resultado-nota">
           Inclui estimativa de alimentação de {formatDataBR(indicadores.estimativaConsumo.dataInicio)} a {formatDataBR(indicadores.estimativaConsumo.dataFim)}: {formatBRL(indicadores.estimativaConsumo.custoDiario)}/cab/dia e MS de {indicadores.estimativaConsumo.msPercentualPV.toLocaleString("pt-BR")}% do peso vivo, nos dias sem dados registrados. A MS em kg usa a projeção de peso do lote.
@@ -2337,7 +2368,8 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
   secao("Custos de produção", [
     ["Custo de alimentação", f.custoAlimentarTotal != null ? formatBRL(f.custoAlimentarTotal) : "-"],
     ["Custo operacional", f.custoOperacionalTotal != null ? formatBRL(f.custoOperacionalTotal) : "-"],
-    ["Custo total (alimentação + operacional)", f.custoProducaoTotal != null ? formatBRL(f.custoProducaoTotal) : "-"],
+    ...(f.custoHerdadoTotal > 0 ? [["Custos anteriores (transferências)", formatBRL(f.custoHerdadoTotal)]] : []),
+    ["Custo total de produção", f.custoProducaoTotal != null ? formatBRL(f.custoProducaoTotal) : "-"],
     ["Custo total por animal", f.custoProducaoPorAnimal != null ? `${formatBRL(f.custoProducaoPorAnimal)}/cab` : "-"],
     ["Custo diário médio total", f.custoDiarioMedioTotal != null ? `${formatBRL(f.custoDiarioMedioTotal)}/cab/dia` : "-"],
     ["Custo da @ produzida - peso vivo", f.custoArrobaProduzidaVivo != null ? formatBRL(f.custoArrobaProduzidaVivo) : "-"],
@@ -2355,6 +2387,14 @@ export async function exportarResultadoLotePDF(cliente, lote, indicadores, saida
     ["Margem mensal sobre o custo", f.margemMensalPercentual != null ? `${f.margemMensalPercentual.toFixed(2)}% ao mês` : "-", corResultado],
   ], corResultado);
 
+  if (indicadores.historicoTransferencias?.etapas.length > 0) {
+    secao("Consumo anterior às transferências", [
+      ["Lotes de origem", [...new Set(indicadores.historicoTransferencias.etapas.map((e) => e.lote.nome))].join(", ")],
+      ["Matéria natural rateada", `${indicadores.consumoAnteriorMN.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg`],
+      ["Matéria seca rateada", `${indicadores.consumoAnteriorMS.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg`],
+      ["Custos anteriores", "Incluídos uma única vez no total de produção"],
+    ], cinza);
+  }
   if (consumoIngredientes.length > 0) {
     const oliva = [107, 91, 62];
     secao("Consumo por ingrediente", consumoIngredientes.map((item) => {
@@ -3257,7 +3297,7 @@ function FormTransferencia({
           placeholder="Ex: 420"
         />
         <InputField
-          label="Custo médio já investido por cabeça (R$)"
+          label="Custo de produção acumulado por cabeça (R$)"
           type="number"
           value={custoAcumulado}
           onChange={setCustoAcumulado}
@@ -3265,8 +3305,8 @@ function FormTransferencia({
         />
         <div style={{ fontSize: 11.5, color: "#7C7C76", padding: "0 0 6px" }}>
           {custoSugerido != null
-            ? "Sugestão calculada a partir da compra rateada + alimentação acumulada deste lote até hoje — pode ajustar se preferir."
-            : "Some o valor de compra rateado por cabeça com o custo de alimentação acumulado até agora, se souber."}
+            ? "Sugestão de alimentação e custos operacionais acumulados até hoje. Pode ajustar o valor para a data da transferência."
+            : "Informe a alimentação e os custos operacionais acumulados por cabeça até a transferência, sem o valor de compra."}
           {" "}Esse valor soma ao custo acumulado do lote de destino, em vez de recomeçar do zero.
         </div>
       </div>
@@ -4628,7 +4668,7 @@ function processarCargasPlanilha(workbook, cargasExistentes) {
 // previsto — a base tanto pro consumo acumulado (ativo e finalizado)
 // quanto pro erro entre dieta proposta e realizada (só faz sentido pra
 // lote finalizado, onde o período fechou).
-function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = [], currais = [], curralOcupacoes = [], lotes = [lote]) {
+function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = [], currais = [], curralOcupacoes = [], lotes = [lote], etapasAnteriores = []) {
   const custoPorChave = new Map(
     ingredientesMs.map((item) => [item.ingrediente_chave, item.custo_kg_mn == null ? null : Number(item.custo_kg_mn)])
   );
@@ -4644,8 +4684,14 @@ function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = [],
     const pesoTotalCarga = itens.reduce((soma, item) => soma + Number(item.peso_real || 0), 0);
     if (!(pesoTotalCarga > 0)) continue;
     const pesoNoLote = (Array.isArray(carga.descargas) ? carga.descargas : [])
-      .filter((descarga) => encontrarLoteDaDescarga(descarga, lotes, currais, curralOcupacoes)?.id === lote.id)
-      .reduce((soma, descarga) => soma + Number(descarga.peso || 0), 0);
+      .reduce((soma, descarga) => {
+        const data = descarga.data || carga.data;
+        const loteDescarga = encontrarLoteDaDescarga({ ...descarga, data }, lotes, currais, curralOcupacoes);
+        const fator = loteDescarga?.id === lote.id ? 1 : etapasAnteriores
+          .filter((e) => e.lote.id === loteDescarga?.id)
+          .reduce((total, e) => total + proporcaoConsumoEtapa(e, data), 0);
+        return soma + Number(descarga.peso || 0) * Math.min(1, fator);
+      }, 0);
     if (!(pesoNoLote > 0)) continue;
     const proporcao = pesoNoLote / pesoTotalCarga;
     for (const item of itens) {
