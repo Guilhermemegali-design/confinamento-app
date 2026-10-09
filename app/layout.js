@@ -7,10 +7,10 @@ export const metadata = {
   manifest: "/manifest.json",
   icons: {
     icon: [
-      { url: "/rastro-icon-192.png?v=3", sizes: "192x192", type: "image/png" },
-      { url: "/rastro-icon-512.png?v=3", sizes: "512x512", type: "image/png" },
+      { url: "/rastro-icon-192.png?v=4", sizes: "192x192", type: "image/png" },
+      { url: "/rastro-icon-512.png?v=4", sizes: "512x512", type: "image/png" },
     ],
-    apple: "/rastro-apple-touch-icon.png?v=3",
+    apple: "/rastro-apple-touch-icon.png?v=4",
   },
 };
 
@@ -27,7 +27,7 @@ export default function RootLayout({ children }) {
       <head>
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-        <link rel="apple-touch-icon" href="/rastro-apple-touch-icon.png?v=3" />
+        <link rel="apple-touch-icon" href="/rastro-apple-touch-icon.png?v=4" />
       </head>
       <body>
         <RegistroServiceWorker />
