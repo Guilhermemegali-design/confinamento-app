@@ -5680,6 +5680,7 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
   const [sincronizando, setSincronizando] = useState(false);
   const [mensagemSincronizacao, setMensagemSincronizacao] = useState("");
   const [exportandoPdf, setExportandoPdf] = useState(false);
+  const [exportandoIngredientesPdf, setExportandoIngredientesPdf] = useState(false);
   const [erroPdf, setErroPdf] = useState("");
   const [pdfGerado, setPdfGerado] = useState(null);
   const [destinatarioRelatorio, setDestinatarioRelatorio] = useState("");
@@ -5822,6 +5823,35 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
       setErroPdf(erro.message || "Não foi possível gerar o PDF. Tente novamente.");
     } finally {
       setExportandoPdf(false);
+    }
+  }
+
+  async function exportarIngredientesPdf() {
+    if (!relatorioTrato || !ingredientes.length || exportandoIngredientesPdf) return;
+    if (cliente?.id && composicoes.clienteId !== cliente.id) {
+      setErroPdf(composicoes.erro || "Aguarde o carregamento da composição das pré-misturas antes de exportar os ingredientes.");
+      return;
+    }
+    setExportandoIngredientesPdf(true);
+    setErroPdf("");
+    try {
+      const { criarPdfConsumoIngredientes } = await import("@/lib/consumoIngredientesPdf.mjs");
+      const doc = await criarPdfConsumoIngredientes({
+        resumo: ingredientes.map((item) => ({ ...item, ms: msPorIngrediente.get(item.chave), custo: custoPorIngrediente.get(item.chave) })),
+        detalhado: { ...relatorioTrato.consumoIngredientes, inicio: inicioRelatorio, fim: fimRelatorio },
+        clienteNome: cliente?.nome,
+      });
+      const nome = `consumo-ingredientes-${inicioRelatorio}-${fimRelatorio}.pdf`;
+      setPdfGerado({ url: URL.createObjectURL(doc.output("blob")), nome, relatorio: relatorioTrato, destinatario: destinatarioRelatorio });
+      try {
+        await doc.save(nome, { returnPromise: true });
+      } catch {
+        setErroPdf("O PDF está pronto. Use Abrir PDF ou Baixar PDF abaixo.");
+      }
+    } catch (erro) {
+      setErroPdf(erro.message || "Não foi possível exportar os ingredientes em PDF.");
+    } finally {
+      setExportandoIngredientesPdf(false);
     }
   }
 
@@ -6035,7 +6065,11 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        <button type="button" onClick={exportarIngredientesPdf}
+          disabled={exportandoIngredientesPdf || !exportacaoDisponivel || !periodoValido || !ingredientes.length} style={styles.secondaryActionBtn}>
+          <Download size={14} /> {exportandoIngredientesPdf ? "Gerando PDF..." : "Consumo de ingredientes em PDF"}
+        </button>
         <button type="button" disabled={!exportacaoDisponivel || !periodoValido || !ingredientes.length}
           onClick={() => baixarCSV(`consumo-ingredientes-${inicioRelatorio}-${fimRelatorio}.csv`,
             ["Início", "Fim", "Ingrediente", "Previsto MN (kg)", "Realizado MN (kg)", "Saldo (kg)", "Saldo (%)", "MS (%)", "Realizado MS (kg)", "Custo (R$/kg MN)", "Custo total (R$)"],
