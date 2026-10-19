@@ -1058,7 +1058,7 @@ export default function ConfinamentoTab({
           onExcluirCarga={onExcluirCarga}
         />
       ) : aba === "descargas" ? (
-        <AbaDescargas cargas={cargasVagao} lotes={lotes} currais={currais} leiturasCocho={leiturasCocho} curralOcupacoes={curralOcupacoes} />
+        <AbaDescargas saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} cargas={cargasVagao} lotes={lotes} currais={currais} leiturasCocho={leiturasCocho} curralOcupacoes={curralOcupacoes} />
       ) : aba === "dieta" ? (
         <AbaDietas dietas={dietas} ingredientesMs={ingredientesMs} onAbrir={(id) => setTela({ modo: "editar-dieta", id })} />
       ) : aba === "mapa" ? (
@@ -5219,7 +5219,9 @@ function BadgeErroDistribuicao({ percentual, assinado = false }) {
   );
 }
 
-function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralOcupacoes = [] }) {
+function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralOcupacoes = [], saidasPorLote = {}, entradasPorLote = {} }) {
+  const [exportandoExcel, setExportandoExcel] = useState(false);
+  const [erroExcel, setErroExcel] = useState(null);
   const [exportandoPdf, setExportandoPdf] = useState(false);
   const [erroPdf, setErroPdf] = useState(null);
   const curralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
@@ -5280,6 +5282,37 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
   const semPrevisto = porLote.filter((grupo) => grupo.previsto == null).length;
   const usaTratos = porLote.some((grupo) => ["tratos", "mista"].includes(grupo.referencia));
 
+  async function exportarIngredientesExcel() {
+    setExportandoExcel(true);
+    setErroExcel(null);
+    try {
+      const XLSX = await carregarLeitorExcel();
+      const { montarConsumoIngredientesDescargas } = await import("@/lib/consumoIngredientesDescargas.mjs");
+      const linhas = montarConsumoIngredientesDescargas(cargas, {
+        lotes, currais, curralOcupacoes,
+        inicio: modo === "periodo" ? inicio : data,
+        fim: modo === "periodo" ? fim : data,
+        cabecasNaData: (lote, dia) => calcularCabecasNaData(lote, saidasPorLote[lote.id] || [], dia, entradasPorLote[lote.id] || []),
+      });
+      const tabela = [["Data", "Lote", "Curral", "Ingrediente", "Consumo total MN (kg)", "Cabeças no dia", "Consumo MN (kg/cabeça/dia)", "Observação"],
+        ...linhas.map((r) => [formatDataBR(r.data), r.lote, r.curral, r.ingrediente, r.total, r.cabecas, r.porCabeca, r.observacao])];
+      const planilha = XLSX.utils.aoa_to_sheet(tabela);
+      linhas.forEach((r, i) => {
+        planilha[`E${i + 2}`].z = "#,##0.00";
+        if (r.porCabeca != null) planilha[`G${i + 2}`] = { t: "n", f: `E${i + 2}/F${i + 2}`, v: r.porCabeca, z: "0.000" };
+      });
+      planilha["!cols"] = [12, 26, 22, 32, 25, 18, 30, 80].map((wch) => ({ wch }));
+      planilha["!autofilter"] = { ref: planilha["!ref"] };
+      const arquivo = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(arquivo, planilha, "Consumo por ingrediente");
+      XLSX.writeFile(arquivo, `consumo-ingredientes-lotes-${modo === "periodo" ? `${inicio}-a-${fim}` : data}.xlsx`);
+    } catch (erro) {
+      setErroExcel("Não foi possível gerar o Excel. Tente novamente.");
+    } finally {
+      setExportandoExcel(false);
+    }
+  }
+
   async function exportarPdf() {
     setExportandoPdf(true);
     setErroPdf(null);
@@ -5307,6 +5340,9 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <SectionTitle>Análise das descargas</SectionTitle>
+        <button type="button" onClick={exportarIngredientesExcel} disabled={exportandoExcel || !eventosFiltrados.length} style={styles.secondaryActionBtn}>
+          <Download size={14} /> {exportandoExcel ? "Gerando Excel..." : "Consumo por ingrediente em Excel"}
+        </button>
         <button type="button" onClick={exportarPdf} disabled={exportandoPdf || !eventosFiltrados.length} style={styles.secondaryActionBtn}>
           <Download size={14} /> {exportandoPdf ? "Gerando PDF..." : "Exportar PDF"}
         </button>
@@ -5329,6 +5365,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
         </div>
       </div>
 
+      {erroExcel && <div role="alert" style={{ color: "#B4473D", marginBottom: 12 }}>{erroExcel}</div>}
       {erroPdf && <div role="alert" style={{ color: "#B4473D", marginBottom: 12 }}>{erroPdf}</div>}
       <div style={styles.gestaoGrid} className="desktop-summary-grid">
         <PainelCard label={modo === "periodo" ? "Tratos no período" : "Tratos no dia"} valor={eventosFiltrados.length} />
