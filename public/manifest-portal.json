@@ -1,0 +1,14 @@
+{
+  "name": "Rastro Confinamento - Portal do Cliente",
+  "short_name": "Rastro",
+  "description": "Acompanhe o confinamento dos seus lotes: pesagens e consumo",
+  "start_url": "/portal",
+  "display": "standalone",
+  "background_color": "#F7F6F3",
+  "theme_color": "#1F4D45",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/rastro-icon-192.png?v=3", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/rastro-icon-512.png?v=3", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

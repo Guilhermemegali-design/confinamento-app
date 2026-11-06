@@ -1,0 +1,7233 @@
+"use client";
+
+import { useEffect, useMemo, useState, Fragment } from "react";
+import dynamic from "next/dynamic";
+import {
+  Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
+  LayoutDashboard, Beef, ClipboardList, BarChart3, Map as MapIcon, Settings2, Truck, Wheat, Plus, AlertTriangle,
+} from "lucide-react";
+import { supabase } from "@/lib/supabaseClient";
+import { buscarTodasPaginas } from "@/lib/paginacao.mjs";
+import { resumirSanidade, modalidadeSaida, observacaoMovimento, observacaoSemModalidade } from "@/lib/resumoSanitario.mjs";
+import { criarPdfErrosCargas } from "@/lib/errosCargasPdf.mjs";
+import { resumirDescargasDiarias } from "@/lib/descargasDiarias.mjs";
+import { montarCSV, resumirConsumos } from "@/lib/exportacaoConsumo.mjs";
+import { styles } from "@/lib/styles";
+import { resumirPesoEntradaCategorias } from "@/lib/pesoEntradaCategorias.mjs";
+import { useReferenciasCochoTrato } from "@/lib/useReferenciasCochoTrato";
+import { identificarDietaCochoTrato, avaliarFaixaCocho, faixaDaReceitaTrato, receitaAtualCochoTrato } from "@/lib/referenciaCochoTrato.mjs";
+import { formatDataBR, formatBRL } from "@/lib/format";
+import { datasDisponiveisTrato, encontrarLoteDescarga, encontrarCurralDescarga, encontrarLoteDaDescarga, montarRelatorioTrato } from "@/lib/relatorioTrato.mjs";
+import {
+  calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo, calcularEvolucaoConsumoAnalises,
+  calcularResumoSaidas, calcularCabecasNaData, calcularFechamentoCusto, calcularGmdSaidaParcial, proporcaoConsumoEtapa,
+  calcularRendimentoCarcaca, calcularPesoMorto, calcularPesoMedioSaida, calcularPesoTotalSaida,
+  NOTAS_LEITURA_COCHO, calcularQuantidadeEsperada, obterConsumoReferenciaCocho, obterConsumoReferenciaAntesDe,
+  ajustePercentualDaNota, calcularHistoricoEsperadoRealizado, montarTabelaConsumoEsperado,
+  obterConsumoOntemCocho, calcularConsumoEsperadoCocho, dataCochoLocal,
+} from "@/lib/confinamento";
+import { construirHistoricoDietasTrato } from "@/lib/historicoDietasTrato.mjs";
+import RegistrarGmdDietas from "./RegistrarGmdDietas";
+import ProjecaoPesoLote from "./ProjecaoPesoLote";
+import { calcularProjecaoPeso, dataLocalFazenda, numeroDecimal } from "@/lib/confinamento";
+import { TIPOS_DIETA, labelTipoDieta, ingredienteVazio, calcularDieta } from "@/lib/dieta";
+import { montarSincronizacoesConsumoCargas, completarCustosConsumosCargas } from "@/lib/custosTrato.mjs";
+import { BackHeader, SectionTitle, EmptyHint, Field, InputField, TextAreaField, SelectField, PrimaryButton } from "./UI";
+
+// Leaflet mexe com "window"/"document" ao criar o mapa — precisa ficar fora
+// do SSR do Next, senão quebra o build.
+const MapaCurrais = dynamic(() => import("./MapaCurrais"), { ssr: false });
+
+// O pacote ESM do SheetJS é transformado pelo bundler do Next e essa
+// transformação quebra construtores internos no Safari/PWA ("Object is not
+// a constructor"). Servimos a distribuição oficial de navegador sem
+// transformação e a carregamos somente quando o usuário escolhe um arquivo.
+let leitorExcelCarregado = null;
+let promessaLeitorExcel = null;
+let leitorPdfCarregado = null;
+function carregarLeitorExcel() {
+  if (leitorExcelCarregado) return Promise.resolve(leitorExcelCarregado);
+  if (typeof window === "undefined") return Promise.reject(new Error("O leitor Excel só pode ser usado no navegador."));
+  if (window.XLSX) {
+    leitorExcelCarregado = window.XLSX;
+    return Promise.resolve(leitorExcelCarregado);
+  }
+  if (!promessaLeitorExcel) {
+    promessaLeitorExcel = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/xlsx.full.min.js?v=0.20.3";
+      script.async = true;
+      script.onload = () => {
+        if (!window.XLSX) {
+          promessaLeitorExcel = null;
+          reject(new Error("O leitor Excel não iniciou corretamente. Feche e abra o aplicativo e tente novamente."));
+          return;
+        }
+        leitorExcelCarregado = window.XLSX;
+        resolve(leitorExcelCarregado);
+      };
+      script.onerror = () => {
+        promessaLeitorExcel = null;
+        reject(new Error("Não foi possível carregar o leitor Excel. Confira a conexão e tente novamente."));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return promessaLeitorExcel;
+}
+
+async function carregarLeitorPdf() {
+  if (leitorPdfCarregado) return leitorPdfCarregado;
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+  leitorPdfCarregado = pdfjs;
+  return pdfjs;
+}
+
+function baixarCSV(nome, cabecalho, linhas) {
+  const url = URL.createObjectURL(new Blob([montarCSV(cabecalho, linhas)], { type: "text/csv;charset=utf-8;" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = nome;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const FASES_DIETA = [
+  { value: "adaptacao", label: "Adaptação" },
+  { value: "recria", label: "Recria" },
+  { value: "crescimento", label: "Crescimento" },
+  { value: "terminacao", label: "Terminação" },
+];
+const FASE_LABEL = Object.fromEntries(FASES_DIETA.map((f) => [f.value, f.label]));
+
+const CATEGORIAS_LOTE = [
+  { value: "", label: "Não informada" },
+  { value: "vacas", label: "Vacas" },
+  { value: "novilhas", label: "Novilhas" },
+  { value: "boi_magro", label: "Boi magro" },
+  { value: "bezerro", label: "Bezerro" },
+];
+const CATEGORIA_LOTE_LABEL = Object.fromEntries(CATEGORIAS_LOTE.filter((c) => c.value).map((c) => [c.value, c.label]));
+
+const RACAS_LOTE = [
+  { value: "", label: "Não informada" },
+  { value: "nelore", label: "Nelore" },
+  { value: "nelorado", label: "Nelorado" },
+  { value: "guzera", label: "Guzerá" },
+  { value: "guzeratado", label: "Guzeratado" },
+  { value: "cruzado", label: "Cruzado" },
+  { value: "gir", label: "Gir" },
+  { value: "girolando", label: "Girolando" },
+  { value: "f1_angus", label: "F1 Angus" },
+  { value: "senepol", label: "Senepol" },
+  { value: "guzolando", label: "Guzolando" },
+  { value: "holandes", label: "Holandês" },
+];
+export const RACA_LOTE_LABEL = Object.fromEntries(RACAS_LOTE.filter((r) => r.value).map((r) => [r.value, r.label]));
+
+const OPCOES_ORDENACAO = [
+  { value: "manual", label: "Ordem manual" },
+  { value: "entrada_desc", label: "Mais recentes" },
+  { value: "entrada_asc", label: "Mais antigos" },
+  { value: "nome", label: "Lote (A-Z)" },
+  { value: "cabecas_desc", label: "Nº de cabeças" },
+];
+
+// Só a lista de lotes ativos tem o peso atual (estimado) calculado por
+// lote — por isso essa opção não entra no array acima, usado também em
+// telas (lançamento em massa, gráficos) que não carregam esse indicador.
+const OPCOES_ORDENACAO_ATIVOS = [
+  ...OPCOES_ORDENACAO,
+  { value: "curral", label: "Curral" },
+  { value: "peso_desc", label: "Peso atual (maior-menor)" },
+  { value: "peso_asc", label: "Peso atual (menor-maior)" },
+];
+
+const OPCOES_ORDENACAO_GRAFICOS = [
+  ...OPCOES_ORDENACAO,
+  { value: "curral", label: "Curral" },
+];
+
+// Lembra a ordenação escolhida pelo usuário (por cliente) entre uma
+// visita e outra — sem isso, toda vez que abre a tela teria que
+// escolher "Nome (A-Z)"/etc de novo.
+function usarOrdenacaoPersistida(clienteId) {
+  const chave = `confinamento_ordenacao_${clienteId || "geral"}`;
+  const [ordenacao, setOrdenacaoState] = useState(() => {
+    if (typeof window === "undefined") return "manual";
+    return window.localStorage.getItem(chave) || "manual";
+  });
+  function setOrdenacao(valor) {
+    setOrdenacaoState(valor);
+    if (typeof window !== "undefined") window.localStorage.setItem(chave, valor);
+  }
+  return [ordenacao, setOrdenacao];
+}
+
+function usarAbaPersistida(clienteId) {
+  const chave = `confinamento_aba_${clienteId || "geral"}`;
+  const abasValidas = ["painel", "lotes-ativos", "lotes-finalizados", "cocho", "esperado", "graficos", "graficos-finalizados", "cargas", "descargas", "mapa"];
+  const [aba, setAbaState] = useState(() => {
+    if (typeof window === "undefined") return "painel";
+    const salva = window.localStorage.getItem(chave);
+    return salva === "dieta" ? "lotes-ativos" : abasValidas.includes(salva) ? salva : "painel";
+  });
+  function setAba(valor) {
+    setAbaState(valor);
+    if (typeof window !== "undefined") window.localStorage.setItem(chave, valor);
+  }
+  return [aba, setAba];
+}
+
+function compararLotes(ordenacao, nomeCurralPorId = new Map()) {
+  return (a, b) => {
+    if (ordenacao === "manual") {
+      const oa = a.lote.ordem != null ? a.lote.ordem : Infinity;
+      const ob = b.lote.ordem != null ? b.lote.ordem : Infinity;
+      if (oa !== ob) return oa - ob;
+      return b.lote.data_entrada.localeCompare(a.lote.data_entrada);
+    }
+    // "numeric: true" faz "Curral 2" vir antes de "Curral 10".
+    if (ordenacao === "nome") return a.lote.nome.localeCompare(b.lote.nome, "pt-BR", { numeric: true });
+    if (ordenacao === "curral") {
+      const curralA = nomeCurralPorId.get(a.lote.curral_id);
+      const curralB = nomeCurralPorId.get(b.lote.curral_id);
+      if (!curralA && curralB) return 1;
+      if (curralA && !curralB) return -1;
+      const porCurral = String(curralA || "").localeCompare(String(curralB || ""), "pt-BR", { numeric: true });
+      return porCurral || a.lote.nome.localeCompare(b.lote.nome, "pt-BR", { numeric: true });
+    }
+    if (ordenacao === "cabecas_desc") return Number(b.lote.num_cabecas || 0) - Number(a.lote.num_cabecas || 0);
+    if (ordenacao === "entrada_asc") return a.lote.data_entrada.localeCompare(b.lote.data_entrada);
+    if (ordenacao === "peso_desc") return Number(b.pesoEsperadoHoje || 0) - Number(a.pesoEsperadoHoje || 0);
+    if (ordenacao === "peso_asc") return Number(a.pesoEsperadoHoje || 0) - Number(b.pesoEsperadoHoje || 0);
+    return b.lote.data_entrada.localeCompare(a.lote.data_entrada);
+  };
+}
+
+function identificacaoCurral(nomeCurral) {
+  if (!nomeCurral) return "—";
+  const numero = String(nomeCurral).match(/\d+[A-Za-z]?/);
+  return numero?.[0] || String(nomeCurral).slice(0, 3).toUpperCase();
+}
+
+function faixaConsumoMS(percentual) {
+  if (percentual == null) return null;
+  if (percentual >= 2.4) return { label: "Adequado", cor: "#247A52", fundo: "#E4F2EA" };
+  if (percentual >= 2) return { label: "Atenção", cor: "#8A6500", fundo: "#FFF3CC" };
+  return { label: "Baixo", cor: "#B43B32", fundo: "#FBE4E1" };
+}
+
+function custoKgMnDaFase(lote, fase) {
+  if (fase === "adaptacao") return lote.custo_kg_mn_adaptacao;
+  if (fase === "recria") return lote.custo_kg_mn_recria;
+  if (fase === "crescimento") return lote.custo_kg_mn_crescimento;
+  if (fase === "terminacao") return lote.custo_kg_mn_terminacao;
+  return null;
+}
+
+// A MS da dieta é a mesma para qualquer lote na mesma fase — fica
+// configurada uma vez no cliente (fazenda), não lote por lote.
+function msDaFase(cliente, fase) {
+  if (!cliente) return null;
+  if (fase === "adaptacao") return cliente.ms_adaptacao;
+  if (fase === "recria") return cliente.ms_recria;
+  if (fase === "crescimento") return cliente.ms_crescimento;
+  if (fase === "terminacao") return cliente.ms_terminacao;
+  return null;
+}
+
+// Módulo de confinamento de um cliente: Painel (resumo) + Lotes ativos/finalizados
+// + detalhe do lote (histórico de pesagens e de consumo/nutrição) + formulários.
+// Reaproveitado tanto na tela do consultor (com criar/excluir) quanto no portal
+// do cliente (ver e editar).
+export default function ConfinamentoTab({
+  cliente, lotes: lotesRecebidos, pesagens = [], consumos: consumosRegistrados = [], saidas = [], entradas = [], leiturasCocho = [], cargasVagao = [], ingredientesMs = [], dietas: dietasRecebidas = [], currais = [], curralOcupacoes = [],
+  onAdicionar, onAtualizar, onExcluir,
+  onAdicionarPesagem, onExcluirPesagem,
+  onAdicionarSaida, onAtualizarSaida, onExcluirSaida,
+  onAdicionarEntrada, onAtualizarEntrada, onExcluirEntrada,
+  onAdicionarConsumo, onAtualizarConsumo, onExcluirConsumo, onImportarConsumos,
+  onRegistrarLeituraCocho, onImportarLeiturasCocho,
+  onImportarCargas, onExcluirCarga, onSalvarMsIngrediente, onSincronizarCustosMs,
+  onAdicionarDieta, onAtualizarDieta, onExcluirDieta,
+  onAdicionarCurral, onAtualizarCurral, onExcluirCurral, onImportarCurrais, onMoverLoteParaCurral, onAtualizarCliente,
+  onBack, onGerenciarCliente, exportacaoTratoDisponivel = true,
+}) {
+  const dietas = useMemo(() => dietasRecebidas
+    .filter((d) => d.cliente_id === cliente?.id && (d.nome_receita_trato || d.trato_dieta_id))
+    .map((d) => ({...d,nome:d.nome_receita_trato || d.nome})), [dietasRecebidas,cliente?.id]);
+  const dataAtualProjecao = dataLocalFazenda(cliente?.fuso_horario || "America/Sao_Paulo");
+  const lotes = useMemo(() => (exportacaoTratoDisponivel
+    ? construirHistoricoDietasTrato(lotesRecebidos, dietas, cargasVagao, consumosRegistrados, currais, curralOcupacoes, {usarPrimeiraDietaDesdeEntrada: cliente?.projetar_dieta_inicial_desde_entrada === true, dataAtual: dataAtualProjecao})
+    : lotesRecebidos.map((l) => ({...l,projecao_trato_indisponivel:true})))
+    .map((l) => ({ ...l, fuso_horario: cliente?.fuso_horario || "America/Sao_Paulo" })),
+    [lotesRecebidos, dietas, cargasVagao, consumosRegistrados, currais, curralOcupacoes, cliente?.fuso_horario, cliente?.projetar_dieta_inicial_desde_entrada, dataAtualProjecao, exportacaoTratoDisponivel]);
+  const [, atualizarDia] = useState(0);
+  useEffect(() => {
+    let data = dataLocalFazenda(cliente?.fuso_horario || "America/Sao_Paulo");
+    const conferir = () => {
+      const nova = dataLocalFazenda(cliente?.fuso_horario || "America/Sao_Paulo");
+      if (nova !== data) { data = nova; atualizarDia((v) => v + 1); }
+    };
+    const timer = setInterval(conferir, 1000);
+    window.addEventListener("focus", conferir);
+    document.addEventListener("visibilitychange", conferir);
+    return () => { clearInterval(timer); window.removeEventListener("focus", conferir); document.removeEventListener("visibilitychange", conferir); };
+  }, [cliente?.fuso_horario]);
+  const [tela, setTela] = useState({ modo: "lista" });
+  const [aba, setAba] = usarAbaPersistida(cliente?.id);
+  const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(cliente?.id);
+  const [movendo, setMovendo] = useState(false);
+  const consumos = useMemo(() => exportacaoTratoDisponivel
+    ? completarCustosConsumosCargas(cargasVagao, lotes, consumosRegistrados, ingredientesMs, currais, curralOcupacoes)
+    : consumosRegistrados,
+  [exportacaoTratoDisponivel, cargasVagao, lotes, consumosRegistrados, ingredientesMs, currais, curralOcupacoes]);
+
+  const lotesMap = Object.fromEntries(lotes.map((l) => [l.id, l.nome]));
+
+  const pesagensPorLote = {};
+  for (const p of pesagens) {
+    (pesagensPorLote[p.lote_id] ||= []).push(p);
+  }
+  const consumosPorLote = {};
+  for (const c of consumos) {
+    (consumosPorLote[c.lote_id] ||= []).push(c);
+  }
+  const saidasPorLote = {};
+  for (const s of saidas) {
+    (saidasPorLote[s.lote_id] ||= []).push(s);
+  }
+  const entradasPorLote = {};
+  for (const e of entradas) {
+    (entradasPorLote[e.lote_id] ||= []).push(e);
+  }
+  const leiturasCochoPorLote = {};
+  for (const l of leiturasCocho) {
+    (leiturasCochoPorLote[l.lote_id] ||= []).push(l);
+  }
+
+  if (tela.modo === "novo") {
+    return (
+      <FormLote
+        fusoHorario={cliente?.fuso_horario || "America/Sao_Paulo"}
+        onCancel={() => setTela({ modo: "lista" })}
+        onSave={async (dados) => {
+          await onAdicionar(dados);
+          setTela({ modo: "lista" });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "editar") {
+    const lote = lotes.find((l) => l.id === tela.id);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    return (
+      <FormLote
+        fusoHorario={cliente?.fuso_horario || "America/Sao_Paulo"}
+        lote={lote}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAtualizar(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+        onDelete={
+          onExcluir &&
+          (async () => {
+            if (confirm(`Excluir o lote "${lote.nome}"? Essa ação não pode ser desfeita.`)) {
+              await onExcluir(lote.id);
+              setTela({ modo: "lista" });
+            }
+          })
+        }
+      />
+    );
+  }
+
+  if (tela.modo === "nova-pesagem") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    return (
+      <FormPesagem
+        lote={lote}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAdicionarPesagem(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "nova-saida" || tela.modo === "novo-abate") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    const { cabecasRestantes } = calcularResumoSaidas(lote, saidasPorLote[lote.id] || []);
+    return (
+      <FormSaida
+        cabecasRestantes={cabecasRestantes}
+        modalidadeInicial={tela.modo === "novo-abate" ? "abate" : "saida"}
+        titulo={tela.modo === "novo-abate" ? "Registrar abate" : "Registrar saída"}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAdicionarSaida(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "nova-doenca-trauma") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    const { cabecasRestantes } = calcularResumoSaidas(lote, saidasPorLote[lote.id] || []);
+    return (
+      <FormSaida
+        cabecasRestantes={cabecasRestantes}
+        tipo="doenca_trauma"
+        titulo="Registrar saída por doença ou trauma"
+        textoBotao="Salvar saída"
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAdicionarSaida(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "nova-morte") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    const { cabecasRestantes } = calcularResumoSaidas(lote, saidasPorLote[lote.id] || []);
+    return (
+      <FormMorte
+        cabecasRestantes={cabecasRestantes}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAdicionarSaida(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "nova-transferencia") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    const { cabecasRestantes } = calcularResumoSaidas(lote, saidasPorLote[lote.id] || []);
+    const lotesDestino = lotes.filter((l) => l.id !== lote.id && !l.data_saida);
+    const indicadoresOrigem = calcularIndicadoresLote(
+      lote, pesagensPorLote[lote.id] || [], consumosPorLote[lote.id] || [], saidasPorLote[lote.id] || [], entradasPorLote[lote.id] || [], { lotes, pesagensPorLote, consumosPorLote, saidasPorLote, entradasPorLote }
+    );
+    const fechamentoOrigem = calcularFechamentoCusto(lote, indicadoresOrigem, saidasPorLote[lote.id] || []);
+    return (
+      <FormTransferencia
+        cabecasRestantes={cabecasRestantes}
+        lotesDestino={lotesDestino}
+        currais={currais}
+        custoSugerido={fechamentoOrigem.custoProducaoPorAnimal ?? indicadoresOrigem.custoAcumuladoAnimal}
+        pesoSugerido={indicadoresOrigem.pesoEsperadoHoje}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async ({ loteDestinoId, data, num_cabecas, peso_vivo, custo_acumulado_herdado, observacoes }) => {
+          const loteDestino = lotes.find((l) => l.id === loteDestinoId);
+          const saidaCriada = await onAdicionarSaida(lote.id, {
+            tipo: "transferencia",
+            data,
+            num_cabecas,
+            peso_saida_vivo: peso_vivo,
+            lote_destino_id: loteDestinoId,
+            observacoes: observacoes || (loteDestino ? `Transferido para ${loteDestino.nome}` : null),
+          });
+          await onAdicionarEntrada(loteDestinoId, {
+            data,
+            num_cabecas,
+            peso_entrada: peso_vivo,
+            lote_origem_id: lote.id,
+            saida_origem_id: saidaCriada?.id || null,
+            custo_acumulado_herdado,
+            observacoes: observacoes || `Transferido de ${lote.nome}`,
+          });
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "editar-transferencia") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    const saidaExistente = (saidasPorLote[tela.loteId] || []).find((s) => s.id === tela.saidaId);
+    if (!lote || !saidaExistente) return <EmptyHint text="Troca de lote não encontrada." />;
+    const entradaVinculada = Object.values(entradasPorLote)
+      .flat()
+      .find((e) => e.saida_origem_id === saidaExistente.id);
+    const outrasSaidas = (saidasPorLote[lote.id] || []).filter((s) => s.id !== saidaExistente.id);
+    const { cabecasRestantes } = calcularResumoSaidas(lote, outrasSaidas);
+    // Garante que o lote de destino atual apareça na lista mesmo se, nesse
+    // meio tempo, ele tiver sido finalizado — senão o select ficaria sem
+    // opção correspondente ao valor já selecionado.
+    const lotesDestino = lotes.filter(
+      (l) => l.id !== lote.id && (!l.data_saida || l.id === entradaVinculada?.lote_id)
+    );
+    const onExcluir = onExcluirSaida && (() => {
+      if (confirm("Excluir esta troca de lote? Os animais somem do lote de destino também.")) {
+        onExcluirSaida(saidaExistente.id);
+        if (entradaVinculada && onExcluirEntrada) onExcluirEntrada(entradaVinculada.id);
+        setTela({ modo: "lote", id: lote.id });
+      }
+    });
+    return (
+      <FormTransferencia
+        cabecasRestantes={cabecasRestantes}
+        lotesDestino={lotesDestino}
+        currais={currais}
+        transferenciaExistente={{ saida: saidaExistente, entrada: entradaVinculada }}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onExcluir={onExcluir}
+        onSave={async ({ loteDestinoId, data, num_cabecas, peso_vivo, custo_acumulado_herdado, observacoes }) => {
+          const loteDestino = lotes.find((l) => l.id === loteDestinoId);
+          await onAtualizarSaida(saidaExistente.id, {
+            data,
+            num_cabecas,
+            peso_saida_vivo: peso_vivo,
+            lote_destino_id: loteDestinoId,
+            observacoes: observacoes || (loteDestino ? `Transferido para ${loteDestino.nome}` : null),
+          });
+          if (entradaVinculada && onAtualizarEntrada) {
+            await onAtualizarEntrada(entradaVinculada.id, {
+              lote_id: loteDestinoId,
+              data,
+              num_cabecas,
+              peso_entrada: peso_vivo,
+              custo_acumulado_herdado,
+              observacoes: observacoes || `Transferido de ${lote.nome}`,
+            });
+          }
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "editar-saida") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    const saidaExistente = (saidasPorLote[tela.loteId] || []).find((s) => s.id === tela.saidaId);
+    if (!lote || !saidaExistente) return <EmptyHint text="Saída não encontrada." />;
+    // cabecasRestantes exclui a própria saída sendo editada (o form
+    // devolve essas cabeças de volta ao teto máximo internamente).
+    const outrasSaidas = (saidasPorLote[lote.id] || []).filter((s) => s.id !== saidaExistente.id);
+    const { cabecasRestantes } = calcularResumoSaidas(lote, outrasSaidas);
+    const onSave = async (dados) => {
+      await onAtualizarSaida(saidaExistente.id, dados);
+      setTela({ modo: "lote", id: lote.id });
+    };
+    const onExcluir = onExcluirSaida && (() => {
+      if (confirm(saidaExistente.tipo === "morte" ? "Excluir este registro de morte?" : "Excluir esta saída?")) {
+        onExcluirSaida(saidaExistente.id);
+        setTela({ modo: "lote", id: lote.id });
+      }
+    });
+    if (saidaExistente.tipo === "morte") {
+      return (
+        <FormMorte
+          cabecasRestantes={cabecasRestantes}
+          saidaExistente={saidaExistente}
+          onCancel={() => setTela({ modo: "lote", id: lote.id })}
+          onSave={onSave}
+          onExcluir={onExcluir}
+        />
+      );
+    }
+    return (
+      <FormSaida
+        cabecasRestantes={cabecasRestantes}
+        tipo={saidaExistente.tipo === "doenca_trauma" ? "doenca_trauma" : "venda"}
+        saidaExistente={saidaExistente}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={onSave}
+        onExcluir={onExcluir}
+      />
+    );
+  }
+
+  if (tela.modo === "nova-entrada") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    return (
+      <FormEntrada
+        dataEntradaLote={lote.data_entrada}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAdicionarEntrada(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "editar-entrada") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    const entradaExistente = (entradasPorLote[tela.loteId] || []).find((e) => e.id === tela.entradaId);
+    if (!lote || !entradaExistente) return <EmptyHint text="Entrada não encontrada." />;
+    return (
+      <FormEntrada
+        dataEntradaLote={lote.data_entrada}
+        entradaExistente={entradaExistente}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAtualizarEntrada(entradaExistente.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+        onExcluir={
+          onExcluirEntrada &&
+          (() => {
+            if (confirm("Excluir esta entrada? O total de animais do lote será reduzido.")) {
+              onExcluirEntrada(entradaExistente.id);
+              setTela({ modo: "lote", id: lote.id });
+            }
+          })
+        }
+      />
+    );
+  }
+
+  if (tela.modo === "novo-consumo") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    return (
+      <FormConsumo
+        lote={lote}
+        cliente={cliente}
+        consumos={consumosPorLote[lote.id] || []}
+        saidas={saidasPorLote[lote.id] || []}
+        entradas={entradasPorLote[lote.id] || []}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAdicionarConsumo(lote.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "editar-consumo") {
+    const lote = lotes.find((l) => l.id === tela.loteId);
+    const consumo = (consumosPorLote[tela.loteId] || []).find((c) => c.id === tela.consumoId);
+    if (!lote || !consumo) return <EmptyHint text="Consumo não encontrado." />;
+    return (
+      <FormConsumo
+        lote={lote}
+        cliente={cliente}
+        consumo={consumo}
+        consumos={consumosPorLote[lote.id] || []}
+        saidas={saidasPorLote[lote.id] || []}
+        entradas={entradasPorLote[lote.id] || []}
+        onCancel={() => setTela({ modo: "lote", id: lote.id })}
+        onSave={async (dados) => {
+          await onAtualizarConsumo(consumo.id, dados);
+          setTela({ modo: "lote", id: lote.id });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "lancar-consumo") {
+    const lotesAtivos = lotes.filter((l) => !l.data_saida);
+    return (
+      <FormConsumoEmMassa
+        lotesAtivos={lotesAtivos}
+        saidasPorLote={saidasPorLote}
+        entradasPorLote={entradasPorLote}
+        cliente={cliente}
+        consumos={consumos}
+        onCancel={() => setTela({ modo: "lista" })}
+        onSalvarLote={onAdicionarConsumo}
+        onConcluido={() => setTela({ modo: "lista" })}
+      />
+    );
+  }
+
+  if (tela.modo === "importar-consumo") {
+    return (
+      <ImportarConsumoPlanilha
+        lotes={lotes}
+        cliente={cliente}
+        consumos={consumos}
+        onCancel={() => setTela({ modo: "lista" })}
+        onImportar={onImportarConsumos}
+        onConcluido={() => setTela({ modo: "lista" })}
+      />
+    );
+  }
+
+  if (tela.modo === "importar-cocho") {
+    return (
+      <ImportarLeituraCochoPlanilha
+        lotes={lotes}
+        leiturasCocho={leiturasCocho}
+        consumosPorLote={consumosPorLote}
+        onCancel={() => setTela({ modo: "lista" })}
+        onImportar={onImportarLeiturasCocho}
+        onConcluido={() => setTela({ modo: "lista" })}
+      />
+    );
+  }
+
+  if (tela.modo === "importar-cargas") {
+    return (
+      <ImportarCargasPlanilha
+        cargasExistentes={cargasVagao}
+        lotes={lotes}
+        consumos={consumos}
+        ingredientesMs={ingredientesMs}
+        currais={currais}
+        curralOcupacoes={curralOcupacoes}
+        onCancel={() => setTela({ modo: "lista" })}
+        onImportar={onImportarCargas}
+        onImportarConsumos={onImportarConsumos}
+        onSincronizar={onSincronizarCustosMs}
+        onConcluido={() => {
+          setTela({ modo: "lista" });
+          setAba(tela.retornarPara || "cargas");
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "registrar-gmd-dietas") {
+    return <RegistrarGmdDietas dietas={dietas} lotes={lotes} dietaInicialId={tela.dietaId} onSalvar={onAtualizarDieta}
+      onVoltar={() => setTela({ modo: "lista" })}
+      onAbrirLote={(id) => setTela({ modo: "lote", id })} />;
+  }
+
+  if (tela.modo === "nova-dieta") {
+    return (
+      <FormDieta
+        ingredientesMs={ingredientesMs}
+        onSalvarMs={onSalvarMsIngrediente}
+        onCancel={() => setTela({ modo: "lista" })}
+        onSave={async (dados) => {
+          await onAdicionarDieta(dados);
+          setTela({ modo: "lista" });
+        }}
+      />
+    );
+  }
+
+  if (tela.modo === "editar-dieta") {
+    const dieta = dietas.find((d) => d.id === tela.id);
+    if (!dieta) return <EmptyHint text="Dieta não encontrada." />;
+    return (
+      <FormDieta
+        dietaExistente={dieta}
+        ingredientesMs={ingredientesMs}
+        onSalvarMs={onSalvarMsIngrediente}
+        onCancel={() => setTela({ modo: "lista" })}
+        onSave={async (dados) => {
+          await onAtualizarDieta(dieta.id, dados);
+          setTela({ modo: "lista" });
+        }}
+        onDelete={
+          onExcluirDieta &&
+          (async () => {
+            if (confirm(`Excluir a dieta "${dieta.nome}"? Essa ação não pode ser desfeita.`)) {
+              await onExcluirDieta(dieta.id);
+              setTela({ modo: "lista" });
+            }
+          })
+        }
+      />
+    );
+  }
+
+  if (tela.modo === "lote") {
+    const lote = lotes.find((l) => l.id === tela.id);
+    if (!lote) return <EmptyHint text="Lote não encontrado." />;
+    const pesagensLote = pesagensPorLote[lote.id] || [];
+    const consumosLote = consumosPorLote[lote.id] || [];
+    const saidasLote = saidasPorLote[lote.id] || [];
+    const entradasLote = entradasPorLote[lote.id] || [];
+    const indicadores = calcularIndicadoresLote(lote, pesagensLote, consumosLote, saidasLote, entradasLote, { lotes, pesagensPorLote, consumosPorLote, saidasPorLote, entradasPorLote });
+    const evolucao = calcularEvolucaoLote(lote, pesagensLote, saidasLote);
+    const evolucaoConsumo = calcularEvolucaoConsumo(lote, pesagensLote, consumosLote, saidasLote, entradasLote);
+    return (
+      <LoteDetalhe
+        cliente={cliente}
+        lote={lote}
+        lotes={lotes}
+        lotesMap={lotesMap}
+        indicadores={indicadores}
+        dietas={dietas}
+        onSalvarHistorico={undefined}
+        saidas={saidasLote}
+        entradas={entradasLote}
+        evolucao={evolucao}
+        evolucaoConsumo={evolucaoConsumo}
+        cargasVagao={cargasVagao}
+        ingredientesMs={ingredientesMs}
+        currais={currais}
+        curralOcupacoes={curralOcupacoes}
+        onBack={() => setTela({ modo: "lista" })}
+        onEditar={() => setTela({ modo: "editar", id: lote.id })}
+        onNovaPesagem={onAdicionarPesagem && (() => setTela({ modo: "nova-pesagem", loteId: lote.id }))}
+        onExcluirPesagem={onExcluirPesagem}
+        onNovaSaida={
+          onAdicionarSaida &&
+          indicadores.status === "Ativo" &&
+          indicadores.cabecasRestantes > 0 &&
+          (() => setTela({ modo: "nova-saida", loteId: lote.id }))
+        }
+        onExcluirSaida={
+          onExcluirSaida &&
+          (async (saidaId) => {
+            const saida = saidasLote.find((s) => s.id === saidaId);
+            const entradaVinculada =
+              saida?.tipo === "transferencia" ? Object.values(entradasPorLote).flat().find((e) => e.saida_origem_id === saidaId) : null;
+            await onExcluirSaida(saidaId);
+            if (entradaVinculada && onExcluirEntrada) await onExcluirEntrada(entradaVinculada.id);
+          })
+        }
+        onEditarSaida={onAtualizarSaida && ((saidaId) => setTela({ modo: "editar-saida", loteId: lote.id, saidaId }))}
+        onEditarTransferencia={onAtualizarSaida && onAtualizarEntrada && ((saidaId) => setTela({ modo: "editar-transferencia", loteId: lote.id, saidaId }))}
+        onNovoAbate={onAdicionarSaida && indicadores.status === "Ativo" && indicadores.cabecasRestantes > 0
+          && (() => setTela({ modo: "novo-abate", loteId: lote.id }))}
+        onNovaMorte={
+          onAdicionarSaida &&
+          indicadores.status === "Ativo" &&
+          indicadores.cabecasRestantes > 0 &&
+          (() => setTela({ modo: "nova-morte", loteId: lote.id }))
+        }
+        onNovaDoencaTrauma={
+          onAdicionarSaida &&
+          indicadores.status === "Ativo" &&
+          indicadores.cabecasRestantes > 0 &&
+          (() => setTela({ modo: "nova-doenca-trauma", loteId: lote.id }))
+        }
+        onNovaTransferencia={
+          onAdicionarSaida &&
+          onAdicionarEntrada &&
+          indicadores.status === "Ativo" &&
+          indicadores.cabecasRestantes > 0 &&
+          lotes.some((l) => l.id !== lote.id && !l.data_saida) &&
+          (() => setTela({ modo: "nova-transferencia", loteId: lote.id }))
+        }
+        onNovaEntrada={
+          onAdicionarEntrada &&
+          indicadores.status === "Ativo" &&
+          (() => setTela({ modo: "nova-entrada", loteId: lote.id }))
+        }
+        onEditarEntrada={onAtualizarEntrada && ((entradaId) => setTela({ modo: "editar-entrada", loteId: lote.id, entradaId }))}
+        onEditarTransferenciaDaEntrada={
+          onAtualizarSaida && onAtualizarEntrada && ((loteOrigemId, saidaId) => setTela({ modo: "editar-transferencia", loteId: loteOrigemId, saidaId }))
+        }
+        onExcluirEntrada={
+          onExcluirEntrada &&
+          (async (entradaId) => {
+            const entrada = entradasLote.find((e) => e.id === entradaId);
+            await onExcluirEntrada(entradaId);
+            // Entrada nascida de uma troca de lote: a exclusão precisa
+            // desfazer a saída correspondente no lote de origem também,
+            // senão o lote de origem fica achando que ainda transferiu
+            // esses animais que na prática voltaram pro limbo.
+            if (entrada?.saida_origem_id && onExcluirSaida) await onExcluirSaida(entrada.saida_origem_id);
+          })
+        }
+        onNovoConsumo={onAdicionarConsumo && (() => setTela({ modo: "novo-consumo", loteId: lote.id }))}
+        onEditarConsumo={onAtualizarConsumo && ((consumoId) => setTela({ modo: "editar-consumo", loteId: lote.id, consumoId }))}
+        onExcluirConsumo={onExcluirConsumo}
+      />
+    );
+  }
+
+  const sanidade = resumirSanidade(lotes, saidasPorLote, entradasPorLote, calcularGmdSaidaParcial);
+  const painel = calcularPainelConfinamento(lotes, pesagensPorLote, consumosPorLote, saidasPorLote, entradasPorLote);
+  const comIndicadores = lotes.map((l) => ({
+    lote: l,
+    ...calcularIndicadoresLote(l, pesagensPorLote[l.id] || [], consumosPorLote[l.id] || [], saidasPorLote[l.id] || [], entradasPorLote[l.id] || [], { lotes, pesagensPorLote, consumosPorLote, saidasPorLote, entradasPorLote }),
+  }));
+  const nomeCurralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
+  const ativos = comIndicadores
+    .filter((i) => i.status === "Ativo")
+    .sort(compararLotes(ordenacao, nomeCurralPorId));
+  const transferidos = comIndicadores.filter((i) => i.status === "Transferido");
+  const finalizados = comIndicadores
+    .filter((i) => i.status === "Finalizado")
+    .sort((a, b) => (b.lote.data_saida || "").localeCompare(a.lote.data_saida || ""));
+
+  // GMD (finalizados) e consumo de MS (ativos) agrupados por raça — mesma
+  // fonte que os PainelCard de GMD/MS acima, só que quebrada por raça em vez
+  // de uma média única da fazenda inteira. Ponderado por cabeças, igual ao
+  // resto do painel.
+  const gmdPorRaca = new Map();
+  for (const item of finalizados) {
+    if (item.gmdVivoEntradaSaida == null) continue;
+    const chave = item.lote.raca || "outra";
+    const cab = Number(item.lote.num_cabecas || 0);
+    const atual = gmdPorRaca.get(chave) || { raca: item.lote.raca, somaXCab: 0, cab: 0 };
+    atual.somaXCab += item.gmdVivoEntradaSaida * cab;
+    atual.cab += cab;
+    gmdPorRaca.set(chave, atual);
+  }
+  const consumoMSPorRaca = new Map();
+  for (const item of ativos) {
+    if (item.consumoMS == null || Number(item.cabecasRestantes || 0) <= 0) continue;
+    const chave = item.lote.raca || "outra";
+    const cab = Number(item.cabecasRestantes || 0);
+    const atual = consumoMSPorRaca.get(chave) || { raca: item.lote.raca, somaXCab: 0, cab: 0, somaPercentualXCab: 0, cabPercentual: 0 };
+    atual.somaXCab += item.consumoMS * cab;
+    atual.cab += cab;
+    if (item.consumoMSPercentualPV != null) {
+      atual.somaPercentualXCab += item.consumoMSPercentualPV * cab;
+      atual.cabPercentual += cab;
+    }
+    consumoMSPorRaca.set(chave, atual);
+  }
+  const racasComDados = [...new Set([...gmdPorRaca.keys(), ...consumoMSPorRaca.keys()])];
+  const zootecniaPorRaca = racasComDados.map((chave) => {
+    const gmd = gmdPorRaca.get(chave);
+    const consumo = consumoMSPorRaca.get(chave);
+    return {
+      // A raça real (pode ser null = "não informada") vem do registro
+      // agregado, não da chave do Map — usar a chave ("outra") direto fazia
+      // RACA_LOTE_LABEL["outra"] voltar undefined e a linha aparecer em branco.
+      raca: (gmd || consumo)?.raca ?? null,
+      gmdMedio: gmd && gmd.cab > 0 ? gmd.somaXCab / gmd.cab : null,
+      consumoMSMedio: consumo && consumo.cab > 0 ? consumo.somaXCab / consumo.cab : null,
+      consumoMSPercentualPVMedio: consumo && consumo.cabPercentual > 0 ? consumo.somaPercentualXCab / consumo.cabPercentual : null,
+    };
+  }).sort((a, b) => (b.gmdMedio || 0) - (a.gmdMedio || 0));
+
+  const pesosEntradaPorCategoria = resumirPesoEntradaCategorias(ativos.map((item) => item.lote), entradasPorLote);
+
+  // Quantidade de animais ativos agora, por categoria.
+  const animaisPorCategoria = new Map();
+  for (const item of ativos) {
+    const cab = Number(item.cabecasRestantes || 0);
+    if (cab <= 0) continue;
+    const chave = item.lote.categoria || "outra";
+    animaisPorCategoria.set(chave, (animaisPorCategoria.get(chave) || 0) + cab);
+  }
+  const categoriasComDados = [...animaisPorCategoria.entries()]
+    .map(([categoria, cabecas]) => ({ categoria, cabecas }))
+    .sort((a, b) => b.cabecas - a.cabecas);
+
+  function exportarConsumosLotes() {
+    const selecionados = aba === "lotes-finalizados" ? finalizados : ativos;
+    const linhas = selecionados.map(({ lote, status }) => {
+      const historico = calcularEvolucaoConsumo(lote, pesagensPorLote[lote.id] || [], consumosPorLote[lote.id] || [], saidasPorLote[lote.id] || []);
+      const resumo = resumirConsumos(historico);
+      const atual = resumo.ultimo;
+      return [lote.nome, nomeCurralPorId.get(lote.curral_id), status, resumo.dias, historico[0]?.data, atual?.data,
+        resumo.mediaMN, atual?.consumoTotalLote, resumo.mediaMS, atual?.consumoMSCabeca,
+        resumo.mediaPV, atual?.percentualPV];
+    });
+    baixarCSV(`consumos-${aba}.csv`, ["Lote", "Curral", "Status", "Dias registrados", "Primeiro registro", "Último registro (consumo atual)",
+      "Consumo médio MN (kg/lote/dia)", "Consumo atual MN (kg/lote/dia)",
+      "Consumo médio MS (kg/cabeça/dia)", "Consumo atual MS (kg/cabeça/dia)",
+      "Consumo médio MS (% PV)", "Consumo atual MS (% PV)"], linhas);
+  }
+
+  // Move um lote ativo para cima/baixo na lista. Na primeira vez que isso é
+  // usado, dá uma "ordem" (10, 20, 30...) para todos os lotes ativos com
+  // base na posição atual deles na tela — depois só troca a ordem dos dois
+  // lotes envolvidos na troca.
+  async function moverLote(index, delta) {
+    // Trava contra cliques rápidos em sequência: sem isso, um segundo clique
+    // dispara antes do primeiro salvar, usando dados desatualizados e
+    // desfazendo a troca anterior (a ordem "voltava" sozinha).
+    if (movendo) return;
+    const novoIndex = index + delta;
+    if (novoIndex < 0 || novoIndex >= ativos.length) return;
+
+    setMovendo(true);
+    try {
+      const comOrdemAtual = ativos.map((item, i) => ({
+        lote: item.lote,
+        ordemAtual: item.lote.ordem != null ? item.lote.ordem : i * 10,
+      }));
+
+      const a = comOrdemAtual[index];
+      const b = comOrdemAtual[novoIndex];
+
+      await Promise.all([
+        onAtualizar(a.lote.id, { ordem: b.ordemAtual }),
+        onAtualizar(b.lote.id, { ordem: a.ordemAtual }),
+        ...comOrdemAtual
+          .filter((item) => item.lote.ordem == null && item.lote.id !== a.lote.id && item.lote.id !== b.lote.id)
+          .map((item) => onAtualizar(item.lote.id, { ordem: item.ordemAtual })),
+      ]);
+
+      if (ordenacao !== "manual") setOrdenacao("manual");
+    } finally {
+      setMovendo(false);
+    }
+  }
+
+  return (
+    <div className="confinamento-screen">
+      <div style={{ marginBottom: 14 }}>
+        <div style={styles.backHeaderRow}>
+          {onBack ? <BackHeader title={cliente.nome} onBack={onBack} semMargem /> : <h1 style={styles.h1}>{cliente.nome}</h1>}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {onGerenciarCliente && (
+              <button onClick={onGerenciarCliente} style={styles.iconActionBtn} title="Cadastro e acessos do cliente" aria-label="Cadastro e acessos do cliente">
+                <Settings2 size={17} />
+              </button>
+            )}
+            {(aba === "cocho" || aba === "esperado") && onAdicionarConsumo && (
+              <button onClick={() => setTela({ modo: "lancar-consumo" })} style={styles.editLinkBtn}>
+                + Consumo
+              </button>
+            )}
+            {(aba === "cocho" || aba === "esperado") && onImportarConsumos && (
+              <button onClick={() => setTela({ modo: "importar-consumo" })} style={styles.secondaryActionBtn}>
+                Importar
+              </button>
+            )}
+            {(aba === "cargas" || aba === "descargas") && onImportarCargas && (
+              <button onClick={() => setTela({ modo: "importar-cargas", retornarPara: aba })} style={styles.secondaryActionBtn}>
+                Importar dados
+              </button>
+            )}
+            {(aba === "lotes-ativos" || aba === "lotes-finalizados") && (
+              <button onClick={exportarConsumosLotes} disabled={!exportacaoTratoDisponivel || !(aba === "lotes-finalizados" ? finalizados : ativos).length} style={styles.secondaryActionBtn}>
+                <Download size={14} /> Exportar consumos
+              </button>
+            )}
+            {aba === "lotes-ativos" && onAdicionar && (
+              <button onClick={() => setTela({ modo: "novo" })} style={styles.editLinkBtn}>
+                + Novo lote
+              </button>
+            )}
+            {aba === "painel" && (
+              <button onClick={() => exportarResumoPainelPDF(cliente, painel, pesosEntradaPorCategoria)} style={styles.secondaryActionBtn}>
+                Exportar PDF
+              </button>
+            )}
+          </div>
+        </div>
+        <div style={styles.contextLabel}>
+          {aba === "painel" && "Resumo da operação"}
+          {(aba === "lotes-ativos" || aba === "lotes-finalizados") && "Gestão dos lotes"}
+          {(aba === "cocho" || aba === "esperado") && "Consumo e leitura diária"}
+          {aba === "graficos" && "Gráficos dos lotes ativos"}
+          {aba === "graficos-finalizados" && "Gráficos dos lotes finalizados"}
+          {aba === "mapa" && "Localização dos currais"}
+          {aba === "cargas" && "Precisão do abastecimento e matéria seca"}
+          {aba === "descargas" && "Precisão da distribuição por lote e tratador"}
+        </div>
+      </div>
+
+      <div className="desktop-workspace">
+        <nav style={{ ...styles.mainNav, gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }} className="main-navigation" aria-label="Áreas do confinamento">
+          <NavArea icon={LayoutDashboard} label="Resumo" active={aba === "painel"} onClick={() => setAba("painel")} />
+          <NavArea icon={Beef} label="Lotes" active={aba === "lotes-ativos" || aba === "lotes-finalizados"} onClick={() => setAba("lotes-ativos")} />
+          <NavArea icon={ClipboardList} label="Rotina" active={aba === "cocho" || aba === "esperado"} onClick={() => setAba(onRegistrarLeituraCocho ? "cocho" : "esperado")} />
+          <NavArea icon={BarChart3} label="Análises" active={aba === "graficos" || aba === "graficos-finalizados"} onClick={() => setAba("graficos")} />
+          <NavArea icon={Truck} label="Cargas" active={aba === "cargas"} onClick={() => setAba("cargas")} />
+          <NavArea icon={Download} label="Descargas" active={aba === "descargas"} onClick={() => setAba("descargas")} />
+          <NavArea icon={MapIcon} label="Mapa" active={aba === "mapa"} onClick={() => setAba("mapa")} />
+        </nav>
+
+        <main className="desktop-main-content">
+          {(aba === "lotes-ativos" || aba === "lotes-finalizados") && (
+            <SubNav
+              options={[
+                { value: "lotes-ativos", label: `Lotes ativos (${ativos.length})` },
+                { value: "lotes-finalizados", label: `Lotes finalizados (${finalizados.length})` },
+              ]}
+              value={aba}
+              onChange={setAba}
+            />
+          )}
+
+          {(aba === "graficos" || aba === "graficos-finalizados") && (
+            <SubNav
+              options={[
+                { value: "graficos", label: `Lotes ativos (${ativos.length})` },
+                { value: "graficos-finalizados", label: `Lotes finalizados (${finalizados.length})` },
+              ]}
+              value={aba}
+              onChange={setAba}
+            />
+          )}
+
+          {(aba === "cocho" || aba === "esperado") && (
+            <SubNav
+              options={[
+                ...(onRegistrarLeituraCocho ? [{ value: "cocho", label: "Leitura de cocho" }] : []),
+                { value: "esperado", label: "Consumo esperado" },
+              ]}
+              value={aba}
+              onChange={setAba}
+            />
+          )}
+
+      {aba === "graficos" ? (
+        <AbaGraficos lotesOriginais={lotesRecebidos} lotes={ativos.map((item) => item.lote)} currais={currais} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} clienteId={cliente?.id} />
+      ) : aba === "graficos-finalizados" ? (
+        <AbaGraficos lotesOriginais={lotesRecebidos} lotes={finalizados.map((item) => item.lote)} currais={currais} pesagensPorLote={pesagensPorLote} consumosPorLote={consumosPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} clienteId={cliente?.id} />
+      ) : aba === "cocho" && onRegistrarLeituraCocho ? (
+        <AbaLeituraCocho
+          clienteId={cliente?.id}
+          dietas={dietas}
+          cargas={cargasVagao}
+          ocupacoes={curralOcupacoes}
+          lotes={lotes}
+          currais={currais}
+          pesagensPorLote={pesagensPorLote}
+          saidasPorLote={saidasPorLote}
+          entradasPorLote={entradasPorLote}
+          consumosPorLote={consumosPorLote}
+          leiturasCochoPorLote={leiturasCochoPorLote}
+          onRegistrar={onRegistrarLeituraCocho}
+          onAbrirImportar={onImportarLeiturasCocho && (() => setTela({ modo: "importar-cocho" }))}
+        />
+      ) : aba === "esperado" ? (
+        <AbaConsumoEsperado lotes={lotes} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} />
+      ) : aba === "cargas" ? (
+        <AbaCargas
+          cliente={cliente}
+          exportacaoDisponivel={exportacaoTratoDisponivel}
+          cargas={cargasVagao}
+          leiturasCocho={leiturasCocho}
+          ingredientesMs={ingredientesMs}
+          lotes={lotes}
+          consumos={consumos}
+          currais={currais}
+          curralOcupacoes={curralOcupacoes}
+          onSalvarMs={onSalvarMsIngrediente}
+          onSincronizar={onSincronizarCustosMs}
+          onImportar={onImportarCargas && (() => setTela({ modo: "importar-cargas", retornarPara: "cargas" }))}
+          onExcluirCarga={onExcluirCarga}
+        />
+      ) : aba === "descargas" ? (
+        <AbaDescargas saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} cargas={cargasVagao} lotes={lotes} currais={currais} leiturasCocho={leiturasCocho} curralOcupacoes={curralOcupacoes} />
+      ) : aba === "mapa" ? (
+        <MapaCurrais
+          cliente={cliente}
+          lotes={lotes}
+          currais={currais}
+          curralOcupacoes={curralOcupacoes}
+          onAdicionarCurral={onAdicionarCurral}
+          onAtualizarCurral={onAtualizarCurral}
+          onExcluirCurral={onExcluirCurral}
+          onImportarCurrais={onImportarCurrais}
+          onAtualizarLote={onAtualizar}
+          onMoverLoteParaCurral={onMoverLoteParaCurral}
+          onAtualizarCliente={onAtualizarCliente}
+        />
+      ) : aba === "lotes-ativos" ? (
+        <>
+          {onAtualizarDieta && <div style={{marginBottom:14}}>
+            <PrimaryButton onClick={() => setTela({ modo: "registrar-gmd-dietas" })}>Registrar GMD por dieta</PrimaryButton>
+          </div>}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 4px 8px" }}>
+            <div style={{ ...styles.sectionTitle, margin: 0 }}>Lotes ativos</div>
+            <select
+              value={ordenacao}
+              onChange={(e) => setOrdenacao(e.target.value)}
+              style={{ fontSize: 12, color: "#5C5C58", background: "#F1EFE8", border: "none", borderRadius: 8, padding: "5px 8px", fontFamily: "inherit" }}
+            >
+              {OPCOES_ORDENACAO_ATIVOS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+          {ativos.length === 0 && <EmptyHint text="Nenhum lote ativo." />}
+          <div className="desktop-lotes-grid">
+          {ativos.map((item, index) => {
+            const {
+              lote, diasConfinamento, gmdAcumulado, pesoEsperadoHoje,
+              consumoMS, consumoMSMedio, consumoMSPercentualPV, consumoMSPercentualPVMedio,
+              custoAcumuladoAnimal, custoMedioDiarioAnimal, cabecasRestantes, cabecasSaidas, dataProvavelAbate,
+            } = item;
+            const nomeCurral = nomeCurralPorId.get(lote.curral_id);
+            const faixaMSUltimo = faixaConsumoMS(consumoMSPercentualPV);
+            const faixaMSMedio = faixaConsumoMS(consumoMSPercentualPVMedio);
+            const saidasLoteAtivo = saidasPorLote[lote.id] || [];
+            const composicaoSaidasAtivo = saidasLoteAtivo.length > 1
+              ? saidasLoteAtivo.reduce((acc, s) => {
+                  const tipo = s.tipo || "venda";
+                  acc[tipo] = (acc[tipo] || 0) + Number(s.num_cabecas || 0);
+                  return acc;
+                }, {})
+              : null;
+            const gmdsSaidasAtivo = composicaoSaidasAtivo
+              ? saidasLoteAtivo.map((s) => calcularGmdSaidaParcial(lote, s)).filter((v) => v != null)
+              : [];
+            const gmdMedioSaidasAtivo = gmdsSaidasAtivo.length
+              ? gmdsSaidasAtivo.reduce((s, v) => s + v, 0) / gmdsSaidasAtivo.length
+              : null;
+            return (
+              <div key={lote.id} style={styles.listItem} className="desktop-lote-card">
+                {ordenacao === "manual" && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <button
+                      onClick={() => moverLote(index, -1)}
+                      disabled={index === 0 || movendo}
+                      style={{ background: "transparent", border: "none", color: index === 0 || movendo ? "#D8D6CD" : "#5C5C58", cursor: index === 0 || movendo ? "default" : "pointer", padding: 2, display: "flex" }}
+                    >
+                      <ChevronUp size={16} />
+                    </button>
+                    <button
+                      onClick={() => moverLote(index, 1)}
+                      disabled={index === ativos.length - 1 || movendo}
+                      style={{ background: "transparent", border: "none", color: index === ativos.length - 1 || movendo ? "#D8D6CD" : "#5C5C58", cursor: index === ativos.length - 1 || movendo ? "default" : "pointer", padding: 2, display: "flex" }}
+                    >
+                      <ChevronDown size={16} />
+                    </button>
+                  </div>
+                )}
+                <button
+                  onClick={() => setTela({ modo: "lote", id: lote.id })}
+                  style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0, background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}
+                >
+                  <div
+                    style={{
+                      ...styles.avatar,
+                      ...(!nomeCurral ? { background: "#F1EFE8", color: "#8A8A84" } : {}),
+                      fontSize: identificacaoCurral(nomeCurral).length > 2 ? 11 : 14,
+                    }}
+                    title={nomeCurral || "Lote sem curral"}
+                  >
+                    {identificacaoCurral(nomeCurral)}
+                  </div>
+                  <div style={{ flex: 1, textAlign: "left" }}>
+                    <div style={styles.listItemTitle}>{lote.nome}{lote.categoria ? ` · ${CATEGORIA_LOTE_LABEL[lote.categoria]}` : ""}{lote.raca ? ` · ${RACA_LOTE_LABEL[lote.raca]}` : ""}</div>
+                    <div style={styles.listItemSub}>
+                      {cabecasSaidas > 0 ? `${cabecasRestantes} de ${lote.num_cabecas} cab.` : `${lote.num_cabecas} cab.`} · entrada {formatDataBR(lote.data_entrada)} · {diasConfinamento}d
+                    </div>
+                    {composicaoSaidasAtivo && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#5C5C58", background: "#F1EFE8", padding: "2px 7px", borderRadius: 999 }}>
+                          {saidasLoteAtivo.length} saídas parciais
+                        </span>
+                        {composicaoSaidasAtivo.venda > 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#247A52", background: "#E8F3EC", padding: "2px 7px", borderRadius: 999 }}>
+                            {composicaoSaidasAtivo.venda} venda
+                          </span>
+                        )}
+                        {composicaoSaidasAtivo.doenca_trauma > 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#9A6036", background: "#FFF5ED", padding: "2px 7px", borderRadius: 999 }}>
+                            {composicaoSaidasAtivo.doenca_trauma} doença/trauma
+                          </span>
+                        )}
+                        {composicaoSaidasAtivo.morte > 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
+                            {composicaoSaidasAtivo.morte} morte
+                          </span>
+                        )}
+                        {gmdMedioSaidasAtivo != null && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#1F4D45", background: "#E7F1EE", padding: "2px 7px", borderRadius: 999 }}>
+                            GMD médio {gmdMedioSaidasAtivo.toFixed(2)}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {consumoMS != null && (
+                      <div style={{ fontSize: 11.5, color: "#1F4D45", fontWeight: 600, marginTop: 3 }}>
+                        MS {consumoMS.toFixed(2)} kg/cab/dia
+                      </div>
+                    )}
+                    {consumoMSMedio != null && (
+                      <div style={{ fontSize: 11.5, color: "#5C5C58", marginTop: 2 }}>
+                        MS média {consumoMSMedio.toFixed(2)} kg/cab/dia
+                      </div>
+                    )}
+                    {(faixaMSUltimo || faixaMSMedio) && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, flexWrap: "wrap" }}>
+                        {faixaMSUltimo && (
+                          <span style={{ ...styles.msStatusPill, color: faixaMSUltimo.cor, background: faixaMSUltimo.fundo }}>
+                            <span style={{ ...styles.msStatusDot, background: faixaMSUltimo.cor }} />
+                            Último {consumoMSPercentualPV.toFixed(2)}%
+                          </span>
+                        )}
+                        {faixaMSMedio && (
+                          <span style={{ ...styles.msStatusPill, color: faixaMSMedio.cor, background: faixaMSMedio.fundo }}>
+                            <span style={{ ...styles.msStatusDot, background: faixaMSMedio.cor }} />
+                            Média {consumoMSPercentualPVMedio.toFixed(2)}%
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {custoAcumuladoAnimal != null && (
+                      <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
+                        Custo acum. {formatBRL(custoAcumuladoAnimal)}/animal
+                      </div>
+                    )}
+                    {custoMedioDiarioAnimal != null && (
+                      <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
+                        Diária média {formatBRL(custoMedioDiarioAnimal)}/animal
+                      </div>
+                    )}
+                    {dataProvavelAbate != null && (
+                      <div style={{ fontSize: 11.5, color: "#1F4D45", marginTop: 2 }}>
+                        Abate previsto: {formatDataBR(dataProvavelAbate)}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: "#1F4D45" }}>
+                      {pesoEsperadoHoje != null ? `${pesoEsperadoHoje.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg` : "Projeção incompleta"}
+                    </div>
+                    <div style={{ fontSize: 11.5, lineHeight: 1.4, color: "#5C5C58", marginTop: 4 }} title="Média ponderada pelos dias em cada dieta desde a entrada">
+                      <span style={{display:"block"}}>GMD previsto médio</span>
+                      <strong>{item.gmdPrevistoMedio != null ? `${item.gmdPrevistoMedio.toLocaleString("pt-BR", {minimumFractionDigits:3,maximumFractionDigits:3})} kg/cabeça/dia` : "—"}</strong>
+                    </div>
+                    {gmdAcumulado != null && <div style={{fontSize:11.5,color:"#9A9A94",marginTop:3}}>GMD realizado {gmdAcumulado.toLocaleString("pt-BR", {maximumFractionDigits:2})}</div>}
+                  </div>
+                </button>
+              </div>
+            );
+          })}
+          </div>
+        </>
+      ) : aba === "lotes-finalizados" ? (
+        <>
+          {onAtualizarDieta && <div style={{marginBottom:14}}>
+            <PrimaryButton onClick={() => setTela({ modo: "registrar-gmd-dietas" })}>Registrar GMD por dieta</PrimaryButton>
+          </div>}
+          {(() => {
+            // Saídas parciais lançadas em lotes que ainda estão ativos (o
+            // lote em si não fechou, mas parte dos animais já saiu) — sem
+            // isso, esses animais só apareciam abrindo o lote ativo um por
+            // um; aqui ficam visíveis junto com os finalizados.
+            const saidasParciaisAtivos = ativos
+              .flatMap((item) => (saidasPorLote[item.lote.id] || []).filter((s) => s.tipo !== "transferencia").map((s) => ({
+                ...s,
+                loteNome: item.lote.nome,
+                loteId: item.lote.id,
+                gmd: calcularGmdSaidaParcial(item.lote, s),
+              })))
+              .sort((a, b) => b.data.localeCompare(a.data));
+            if (saidasParciaisAtivos.length === 0) return null;
+            return (
+              <>
+                <SectionTitle>Saídas parciais (lotes ainda ativos)</SectionTitle>
+                {saidasParciaisAtivos.map((s) => (
+                  <button
+                    key={s.id}
+                    style={{ ...styles.rowCard, width: "100%", cursor: "pointer" }}
+                    onClick={() => setTela({ modo: "lote", id: s.loteId })}
+                  >
+                    <div style={{ flex: 1, textAlign: "left" }}>
+                      <div style={{ fontWeight: 600, fontSize: 13.5 }}>
+                        {s.loteNome}
+                        {(!s.tipo || s.tipo === "venda") && <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#1F4D45" }}>{modalidadeSaida(s) === "abate" ? "ABATE" : "SAÍDA"}</span>}
+                    {s.tipo === "morte" && (
+                          <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
+                            MORTE
+                          </span>
+                        )}
+                        {s.tipo === "doenca_trauma" && (
+                          <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#9A6036", background: "#FFF5ED", padding: "2px 7px", borderRadius: 999 }}>
+                            DOENÇA/TRAUMA
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
+                        {formatDataBR(s.data)} · {s.num_cabecas} cab.{s.peso_saida_vivo != null ? ` · ${s.peso_saida_vivo} kg vivo/cab.` : ""}
+                        {s.observacoes ? ` · ${observacaoSemModalidade(s.observacoes)}` : ""}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#1F4D45" }}>
+                        {s.gmd != null ? `GMD ${s.gmd.toFixed(2)}` : "—"}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#9A9A94" }}>kg/dia</div>
+                    </div>
+                  </button>
+                ))}
+              </>
+            );
+          })()}
+
+          <SectionTitle>Lotes finalizados</SectionTitle>
+          {finalizados.length === 0 && <EmptyHint text="Nenhum lote finalizado ainda." />}
+          <div className="desktop-lotes-grid">
+          {finalizados.map((item) => {
+            const { lote, diasConfinamento, gmdVivoEntradaSaida, consumoMS, consumoMSMedio, consumoMSPercentualPVMedio } = item;
+            const saidasLote = saidasPorLote[lote.id] || [];
+            const fechamento = calcularFechamentoCusto(lote, item, saidasLote);
+            // Lote fechado com mais de uma saída lançada (não foi tudo de
+            // uma vez) — mostra a composição (venda/morte/doença ou trauma)
+            // pra facilitar ver de relance o que aconteceu com o lote.
+            const composicaoSaidas = saidasLote.length > 1
+              ? saidasLote.reduce((acc, s) => {
+                  const tipo = s.tipo || "venda";
+                  acc[tipo] = (acc[tipo] || 0) + Number(s.num_cabecas || 0);
+                  return acc;
+                }, {})
+              : null;
+            const gmdsSaidasLote = composicaoSaidas
+              ? saidasLote.map((s) => calcularGmdSaidaParcial(lote, s)).filter((v) => v != null)
+              : [];
+            const gmdMedioSaidasLote = gmdsSaidasLote.length
+              ? gmdsSaidasLote.reduce((s, v) => s + v, 0) / gmdsSaidasLote.length
+              : null;
+            return (
+            <button key={lote.id} style={styles.listItem} className="desktop-lote-card" onClick={() => setTela({ modo: "lote", id: lote.id })}>
+              <div style={{ ...styles.avatar, background: "#F1EFE8", color: "#5C5C58" }}>{lote.nome.charAt(0)}</div>
+              <div style={{ flex: 1, textAlign: "left" }}>
+                <div style={styles.listItemTitle}>{lote.nome}{lote.categoria ? ` · ${CATEGORIA_LOTE_LABEL[lote.categoria]}` : ""}{lote.raca ? ` · ${RACA_LOTE_LABEL[lote.raca]}` : ""}</div>
+                <div style={styles.listItemSub}>
+                  {lote.num_cabecas} cab. · saída {formatDataBR(lote.data_saida)} · {diasConfinamento}d
+                </div>
+                {composicaoSaidas && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#5C5C58", background: "#F1EFE8", padding: "2px 7px", borderRadius: 999 }}>
+                      {saidasLote.length} saídas parciais
+                    </span>
+                    {composicaoSaidas.venda > 0 && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#247A52", background: "#E8F3EC", padding: "2px 7px", borderRadius: 999 }}>
+                        {composicaoSaidas.venda} venda
+                      </span>
+                    )}
+                    {composicaoSaidas.doenca_trauma > 0 && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#9A6036", background: "#FFF5ED", padding: "2px 7px", borderRadius: 999 }}>
+                        {composicaoSaidas.doenca_trauma} doença/trauma
+                      </span>
+                    )}
+                    {composicaoSaidas.morte > 0 && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
+                        {composicaoSaidas.morte} morte
+                      </span>
+                    )}
+                    {gmdMedioSaidasLote != null && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#1F4D45", background: "#E7F1EE", padding: "2px 7px", borderRadius: 999 }}>
+                        GMD médio {gmdMedioSaidasLote.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#22231F" }}>
+                  {lote.peso_saida_vivo != null ? `${lote.peso_saida_vivo} kg` : "—"}
+                </div>
+                <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
+                  {gmdVivoEntradaSaida != null ? `GMD ${gmdVivoEntradaSaida.toFixed(2)}` : "—"}
+                </div>
+                {consumoMS != null && (
+                  <div style={{ fontSize: 11.5, color: "#1F4D45", marginTop: 2 }}>
+                    MS {consumoMS.toFixed(2)} kg/cab/dia
+                  </div>
+                )}
+                {consumoMSMedio != null && (
+                  <div style={{ fontSize: 11.5, color: "#5C5C58", marginTop: 2 }}>
+                    MS média {consumoMSMedio.toFixed(2)} kg/cab/dia
+                  </div>
+                )}
+                {consumoMSPercentualPVMedio != null && (
+                  <div style={{ fontSize: 11.5, color: faixaConsumoMS(consumoMSPercentualPVMedio)?.cor || "#5C5C58", marginTop: 2 }}>
+                    MS média {consumoMSPercentualPVMedio.toFixed(2)}% do PV
+                  </div>
+                )}
+                {fechamento.custoDiarioMedioTotal != null && (
+                  <div style={{ fontSize: 11.5, color: "#A85A2A", marginTop: 2 }}>
+                    Custo diário médio {formatBRL(fechamento.custoDiarioMedioTotal)}/cab
+                  </div>
+                )}
+                {fechamento.gmc != null && <div style={{ fontSize: 11.5, color: "#5C5C58", marginTop: 2 }}>GMC {fechamento.gmc.toFixed(3)} kg/dia</div>}
+                {fechamento.resultadoPorCabeca != null && <div style={{ fontSize: 11.5, color: fechamento.resultadoPorCabeca >= 0 ? "#247A52" : "#B34F42", marginTop: 2 }}>Lucro {formatBRL(fechamento.resultadoPorCabeca)}/animal</div>}
+              </div>
+            </button>
+          );})}
+          </div>
+          {transferidos.length > 0 && (
+            <>
+              <SectionTitle>Lotes encerrados por transferência</SectionTitle>
+              <div style={{ fontSize: 12, color: "#5C5C58", margin: "0 4px 10px" }}>
+                Etapas anteriores dos animais. A venda e o resultado ficam no lote de destino.
+              </div>
+              {transferidos.map(({ lote }) => (
+                <button key={lote.id} style={{ ...styles.rowCard, width: "100%", textAlign: "left", cursor: "pointer" }} onClick={() => setTela({ modo: "lote", id: lote.id })}>
+                  <div><strong>{lote.nome}</strong><div style={{ fontSize: 12, color: "#5C5C58", marginTop: 4 }}>
+                    {(saidasPorLote[lote.id] || []).filter((s) => s.tipo === "transferencia").map((s) =>
+                      `${s.num_cabecas} cab. → ${lotesMap[s.lote_destino_id] || "Destino não disponível"} em ${formatDataBR(s.data)}`
+                    ).join(" · ")}
+                  </div></div>
+                </button>
+              ))}
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          <SectionTitle>Painel</SectionTitle>
+
+          <div style={styles.gestaoGrid} className="desktop-summary-grid">
+            <PainelCard label="Total de lotes" valor={painel.totalLotes} />
+            <PainelCard label="Lotes ativos" valor={painel.lotesAtivos} />
+            <PainelCard label="Lotes finalizados" valor={painel.lotesFinalizados} />
+            <PainelCard label="Cabeças ativas" valor={painel.cabecasAtivas} />
+            <PainelCard label="Machos abatidos" valor={sanidade.abatesPorSexo.machos.quantidade} />
+            <PainelCard label="Fêmeas abatidas" valor={sanidade.abatesPorSexo.femeas.quantidade} />
+            {sanidade.abatesPorSexo.naoInformado.quantidade > 0 && <PainelCard label="Abatidos sem categoria informada" valor={sanidade.abatesPorSexo.naoInformado.quantidade} />}
+            <PainelCard label="Animais com doença/trauma" valor={sanidade.percentualDoenca != null ? `${sanidade.percentualDoenca.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "—"}
+              faixa={{ label: `${sanidade.animaisDoenca} saídas por doença/trauma / ${sanidade.totalAnimais} animais`, cor: "#5C5C58", fundo: "#F4F2ED" }} />
+            {[["machos", "GMD dos machos abatidos"], ["femeas", "GMD das fêmeas abatidas"]].map(([sexo, label]) => <PainelCard key={sexo} label={label}
+              valor={sanidade.abatesPorSexo[sexo].gmd != null ? `${sanidade.abatesPorSexo[sexo].gmd.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kg/dia` : "—"}
+              faixa={{ label: `${sanidade.abatesPorSexo[sexo].comGmd} animais com peso informado`, cor: "#5C5C58", fundo: "#F4F2ED" }} />)}
+            <PainelCard
+              label="GMD esperado médio"
+              valor={painel.gmdEsperadoMedio != null ? `${painel.gmdEsperadoMedio.toFixed(2)} kg/dia` : "—"}
+            />
+            <PainelCard
+              label="Peso médio geral"
+              valor={painel.pesoMedioGeral != null ? `${painel.pesoMedioGeral.toFixed(1)} kg` : "—"}
+            />
+            <PainelCard
+              label="Consumo médio de MS (ativos)"
+              valor={painel.consumoMSMedioAtivos != null ? `${painel.consumoMSMedioAtivos.toFixed(2)} kg/cab/dia` : "—"}
+            />
+            <PainelCard
+              label="MS sobre PV — último lançamento"
+              valor={painel.consumoMSPercentualPVMedioAtivos != null ? `${painel.consumoMSPercentualPVMedioAtivos.toFixed(2)}% do PV` : "—"}
+              faixa={faixaConsumoMS(painel.consumoMSPercentualPVMedioAtivos)}
+            />
+            <PainelCard
+              label="MS média histórica sobre PV"
+              valor={painel.consumoMSPercentualPVHistoricoAtivos != null ? `${painel.consumoMSPercentualPVHistoricoAtivos.toFixed(2)}% do PV` : "—"}
+              detalhe={painel.consumoMSHistoricoMedioAtivos != null ? `${painel.consumoMSHistoricoMedioAtivos.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kg de MS/cab/dia` : null}
+              faixa={faixaConsumoMS(painel.consumoMSPercentualPVHistoricoAtivos)}
+            />
+            <PainelCard
+              label="Custo acumulado (ativos)"
+              valor={painel.custoAcumuladoAtivosMedio != null ? `${formatBRL(painel.custoAcumuladoAtivosMedio)}/animal` : "—"}
+            />
+            <PainelCard
+              label="Custo médio diário (ativos)"
+              valor={painel.custoMedioDiarioAtivosMedio != null ? `${formatBRL(painel.custoMedioDiarioAtivosMedio)}/animal` : "—"}
+            />
+            <PainelCard
+              label="Custo total (finalizados)"
+              valor={painel.custoTotalFinalizadosMedio != null ? `${formatBRL(painel.custoTotalFinalizadosMedio)}/animal` : "—"}
+            />
+            <PainelCard
+              label="Custo médio diário (finalizados)"
+              valor={painel.custoMedioDiarioFinalizadosMedio != null ? `${formatBRL(painel.custoMedioDiarioFinalizadosMedio)}/animal` : "—"}
+            />
+          </div>
+
+          {zootecniaPorRaca.length > 0 && (
+            <div style={{ ...styles.card, marginTop: 12, maxWidth: 440 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>GMD e consumo de MS por raça</div>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(80px, 1fr) 84px 76px 66px", gap: 6, padding: "0 0 4px" }}>
+                <span />
+                <span style={{ fontSize: 8.5, fontWeight: 700, color: "#9A9A94", textTransform: "uppercase", letterSpacing: .3, textAlign: "right" }} title="GMD médio dos lotes já finalizados dessa raça">GMD</span>
+                <span style={{ fontSize: 8.5, fontWeight: 700, color: "#9A9A94", textTransform: "uppercase", letterSpacing: .3, textAlign: "right" }} title="Consumo médio de matéria seca por cabeça, último lançamento dos lotes ativos">MS kg/cab</span>
+                <span style={{ fontSize: 8.5, fontWeight: 700, color: "#9A9A94", textTransform: "uppercase", letterSpacing: .3, textAlign: "right" }} title="Consumo de MS em relação ao peso vivo estimado, lotes ativos">MS % PV</span>
+              </div>
+              {zootecniaPorRaca.map((item, i) => (
+                <div
+                  key={item.raca || "sem-raca"}
+                  style={{ display: "grid", gridTemplateColumns: "minmax(80px, 1fr) 84px 76px 66px", alignItems: "center", gap: 6, padding: "7px 0", borderTop: i > 0 ? "1px solid #EFEEE9" : "none" }}
+                >
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "#2D3E39" }}>
+                    {item.raca ? RACA_LOTE_LABEL[item.raca] : "Não informada"}
+                  </span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1F4D45", textAlign: "right" }}>{item.gmdMedio != null ? `${item.gmdMedio.toFixed(2)} kg/dia` : "—"}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1F4D45", textAlign: "right" }}>{item.consumoMSMedio != null ? item.consumoMSMedio.toFixed(2) : "—"}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1F4D45", textAlign: "right" }}>{item.consumoMSPercentualPVMedio != null ? `${item.consumoMSPercentualPVMedio.toFixed(2)}%` : "—"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {pesosEntradaPorCategoria.length > 0 && (
+            <div style={{ ...styles.card, marginTop: 12, maxWidth: 440 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>Peso médio de entrada por categoria</div>
+              <div style={{ fontSize: 11, color: "#5C5C58", marginBottom: 6 }}>Lotes ativos · ponderado pelas cabeças de entrada</div>
+              {pesosEntradaPorCategoria.map((item, i) => (
+                <div key={item.categoria || "sem-categoria"} style={{ padding: "8px 0", borderTop: i > 0 ? "1px solid #EFEEE9" : "none" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12.5, fontWeight: 700 }}>
+                    <span>{CATEGORIA_LOTE_LABEL[item.categoria] || item.categoria || "Não informada"}</span>
+                    <span style={{ color: "#1F4D45", whiteSpace: "nowrap" }}>{item.pesoMedio != null ? `${item.pesoMedio.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kg` : "—"}</span>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: "#5C5C58", marginTop: 3 }}>{item.cabecasComPeso.toLocaleString("pt-BR")} animais com peso informado{item.cabecasSemPeso > 0 ? ` · ${item.cabecasSemPeso.toLocaleString("pt-BR")} sem peso` : ""}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {categoriasComDados.length > 0 && (
+            <div style={{ ...styles.card, marginTop: 12, overflowX: "auto", padding: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Animais ativos por categoria</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 320, fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ color: "#5C5C58", textAlign: "right" }}>
+                    <th style={{ padding: 10, textAlign: "left" }}>Categoria</th>
+                    <th style={{ padding: 10 }}>Cabeças</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {categoriasComDados.map((item) => (
+                    <tr key={item.categoria} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                      <td style={{ padding: 10, textAlign: "left", fontWeight: 600 }}>
+                        {item.categoria !== "outra" ? CATEGORIA_LOTE_LABEL[item.categoria] : "Não informada"}
+                      </td>
+                      <td style={{ padding: 10 }}>{item.cabecas.toLocaleString("pt-BR")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function NavArea({ icon: Icon, label, active, onClick }) {
+  return (
+    <button onClick={onClick} className="main-navigation-button" style={{ ...styles.mainNavBtn, ...(active ? styles.mainNavBtnActive : {}) }}>
+      <Icon size={18} strokeWidth={active ? 2.4 : 1.9} />
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function SubNav({ options, value, onChange }) {
+  return (
+    <div style={styles.subNav}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          style={{ ...styles.subNavBtn, ...(value === option.value ? styles.subNavBtnActive : {}) }}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PainelCard({ label, valor, faixa, detalhe }) {
+  return (
+    <div style={{ ...styles.gestaoCard, ...(faixa ? { borderColor: faixa.cor } : {}) }}>
+      <div style={styles.gestaoCardHeader}>
+        <span>{label}</span>
+      </div>
+      <div style={styles.gestaoCardValor}>{valor}</div>
+      {detalhe && <div style={{ fontSize: 11, color: "#5C5C58", marginTop: 4 }}>{detalhe}</div>}
+      {faixa && (
+        <div style={{ ...styles.msStatusPill, color: faixa.cor, background: faixa.fundo, marginTop: 7 }}>
+          <span style={{ ...styles.msStatusDot, background: faixa.cor }} />
+          {faixa.label}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LoteDetalhe({
+  cliente, lote, lotes = [], lotesMap = {}, indicadores, dietas = [], onSalvarHistorico, saidas = [], entradas = [], evolucao, evolucaoConsumo,
+  cargasVagao = [], ingredientesMs = [], currais = [], curralOcupacoes = [],
+  onBack, onEditar,
+  onNovaPesagem, onExcluirPesagem,
+  onNovaSaida, onNovoAbate, onExcluirSaida, onEditarSaida,
+  onNovaMorte,
+  onNovaDoencaTrauma,
+  onNovaTransferencia, onEditarTransferencia, onEditarTransferenciaDaEntrada,
+  onNovaEntrada, onEditarEntrada, onExcluirEntrada,
+  onNovoConsumo, onEditarConsumo, onExcluirConsumo,
+}) {
+  const saidasOrdenadas = [...saidas].sort((a, b) => b.data.localeCompare(a.data));
+  const entradasOrdenadas = [...entradas].sort((a, b) => b.data.localeCompare(a.data));
+  const fechamento = indicadores.status === "Finalizado" ? calcularFechamentoCusto(lote, indicadores, saidas) : null;
+  const consumoIngredientes = calcularConsumoIngredientesLote(lote, cargasVagao, ingredientesMs, currais, curralOcupacoes, lotes, indicadores.historicoTransferencias?.etapas || []);
+  return (
+    <div>
+      <div style={styles.backHeaderRow}>
+        <BackHeader title={lote.nome} onBack={onBack} semMargem />
+        {onEditar && (
+          <button onClick={onEditar} style={styles.editLinkBtn}>
+            Editar lote
+          </button>
+        )}
+      </div>
+
+      <ProjecaoPesoLote key={lote.id} lote={lote} projecao={indicadores.projecaoPeso} gmdPrevistoMedio={indicadores.gmdPrevistoMedio} dietas={dietas} onSalvar={onSalvarHistorico} />
+      <div style={styles.card}>
+        <Field label="Status" value={indicadores.status} highlight />
+        {lote.categoria && <Field label="Categoria" value={CATEGORIA_LOTE_LABEL[lote.categoria]} />}
+        {lote.raca && <Field label="Raça" value={RACA_LOTE_LABEL[lote.raca]} />}
+        <Field
+          label="Nº de cabeças"
+          value={indicadores.cabecasSaidas > 0 ? `${indicadores.cabecasRestantes} restantes de ${lote.num_cabecas}` : lote.num_cabecas}
+        />
+        <Field label="Data de entrada" value={formatDataBR(lote.data_entrada)} />
+        <Field label="Peso de entrada" value={`${lote.peso_entrada} kg`} />
+        {lote.rendimento_entrada != null && <Field label="Rendimento de entrada" value={`${lote.rendimento_entrada}%`} />}
+        {lote.preco_arroba_entrada != null && <Field label="Preço da arroba na entrada" value={formatBRL(lote.preco_arroba_entrada)} />}
+
+        {lote.peso_esperado_abate != null && <Field label="Peso esperado de abate" value={`${lote.peso_esperado_abate} kg`} />}
+        {lote.custo_kg_mn_adaptacao != null && (
+          <Field label="Custo MN — Adaptação (atual)" value={formatBRL(lote.custo_kg_mn_adaptacao)} />
+        )}
+        {lote.custo_kg_mn_recria != null && (
+          <Field label="Custo MN — Recria (atual)" value={formatBRL(lote.custo_kg_mn_recria)} />
+        )}
+        {lote.custo_kg_mn_crescimento != null && (
+          <Field label="Custo MN — Crescimento (atual)" value={formatBRL(lote.custo_kg_mn_crescimento)} />
+        )}
+        {lote.custo_kg_mn_terminacao != null && (
+          <Field label="Custo MN — Terminação (atual)" value={formatBRL(lote.custo_kg_mn_terminacao)} />
+        )}
+        <Field label="Dias de confinamento" value={indicadores.diasConfinamento} />
+        {indicadores.status === "Ativo" ? (
+          <>
+            <Field
+              label="GMD realizado acumulado"
+              value={indicadores.gmdAcumulado != null ? `${indicadores.gmdAcumulado.toFixed(2)} kg/dia` : "—"}
+            />
+            {indicadores.dataProvavelAbate != null && (
+              <Field label="Data provável de abate" value={formatDataBR(indicadores.dataProvavelAbate)} />
+            )}
+          </>
+        ) : (
+          <>
+            <Field label="Data de saída" value={formatDataBR(lote.data_saida)} />
+            {lote.peso_saida_vivo != null && <Field label="Peso de saída vivo" value={`${lote.peso_saida_vivo} kg`} />}
+            {lote.peso_saida_vivo_total != null && <Field label="Peso vivo total" value={`${lote.peso_saida_vivo_total} kg`} />}
+            {lote.peso_saida_morto != null && <Field label="Peso morto" value={`${lote.peso_saida_morto} kg/cab.`} />}
+            {lote.peso_saida_morto_total != null && <Field label="Peso morto total" value={`${lote.peso_saida_morto_total} kg`} />}
+            <Field
+              label="GMD entrada-saída"
+              value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(2)} kg/dia` : "—"}
+            />
+            {indicadores.consumoMSMedio != null && (
+              <Field
+                label="Consumo médio de MS por cabeça"
+                value={`${indicadores.consumoMSMedio.toFixed(2)} kg/dia`}
+              />
+            )}
+            {indicadores.consumoMSPercentualPVMedio != null && (
+              <Field
+                label="Consumo médio de MS em relação ao peso vivo"
+                value={`${indicadores.consumoMSPercentualPVMedio.toFixed(2)}% do PV`}
+              />
+            )}
+            {lote.rendimento_carcaca != null && (
+              <Field label="Rendimento de carcaça" value={`${lote.rendimento_carcaca}%`} />
+            )}
+            {fechamento?.gmc != null && <Field label="GMC (ganho médio de carcaça)" value={`${fechamento.gmc.toFixed(3)} kg/cab/dia`} />}
+            {lote.preco_venda_arroba != null && <Field label="Preço de venda da arroba" value={formatBRL(lote.preco_venda_arroba)} />}
+            {lote.custo_operacional != null && (
+              <Field label="Custo operacional" value={`${formatBRL(lote.custo_operacional)}/cab/dia`} />
+            )}
+            {fechamento?.custoDiarioMedioTotal != null && <Field label="Custo diário médio total" value={`${formatBRL(fechamento.custoDiarioMedioTotal)}/cab/dia`} />}
+          </>
+        )}
+        {lote.observacoes && <Field label="Observações" value={lote.observacoes} multiline />}
+      </div>
+
+      {indicadores.status === "Transferido" && (
+        <div style={styles.card}>
+          <strong>Encerrado por transferência</strong>
+          <p style={{ fontSize: 13, marginBottom: 0 }}>Este lote conserva o histórico dos animais. A transferência não gera receita de venda; os custos e consumos anteriores acompanham os animais no lote de destino.</p>
+        </div>
+      )}
+      {indicadores.status === "Finalizado" && (
+        <FechamentoCustoCard cliente={cliente} lote={lote} indicadores={indicadores} saidas={saidas} consumoIngredientes={consumoIngredientes} />
+      )}
+
+      {(onNovaSaida || onNovaMorte || onNovaDoencaTrauma || onNovaTransferencia || onNovaEntrada || saidasOrdenadas.length > 0) && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
+            <div style={{ ...styles.sectionTitle, margin: 0 }}>Movimentações registradas</div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+              {onNovaSaida && (
+                <button onClick={onNovaSaida} style={styles.editLinkBtn}>+ Saída</button>
+              )}
+              {onNovoAbate && <button onClick={onNovoAbate} style={styles.editLinkBtn}>+ Abate</button>}
+              {onNovaTransferencia && (
+                <button onClick={onNovaTransferencia} style={{ ...styles.editLinkBtn, background: "#3E6B8A" }}>Trocar de lote</button>
+              )}
+              {onNovaDoencaTrauma && (
+                <button onClick={onNovaDoencaTrauma} style={{ ...styles.editLinkBtn, background: "#9A6036" }}>+ Doença/Trauma</button>
+              )}
+              {onNovaMorte && (
+                <button onClick={onNovaMorte} style={{ ...styles.editLinkBtn, background: "#8A3B2F" }}>+ Morte</button>
+              )}
+              {onNovaEntrada && (
+                <button onClick={onNovaEntrada} style={styles.editLinkBtn}>+ Entrada</button>
+              )}
+            </div>
+          </div>
+          {saidasOrdenadas.length === 0 ? (
+            <EmptyHint text="Nenhuma saída lançada ainda — vá registrando conforme for tirando boi do lote." />
+          ) : (
+            saidasOrdenadas.map((s) => (
+              <div key={s.id} style={styles.rowCard}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13.5 }}>
+                    {formatDataBR(s.data)}
+                    {(!s.tipo || s.tipo === "venda") && <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#1F4D45" }}>{modalidadeSaida(s) === "abate" ? "ABATE" : "SAÍDA"}</span>}
+                    {s.tipo === "morte" && (
+                      <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#8A3B2F", background: "#F7E8E4", padding: "2px 7px", borderRadius: 999 }}>
+                        MORTE
+                      </span>
+                    )}
+                    {s.tipo === "doenca_trauma" && (
+                      <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#9A6036", background: "#FFF5ED", padding: "2px 7px", borderRadius: 999 }}>
+                        DOENÇA/TRAUMA
+                      </span>
+                    )}
+                    {s.tipo === "transferencia" && (
+                      <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#3E6B8A", background: "#E9F1F7", padding: "2px 7px", borderRadius: 999 }}>
+                        TRANSFERÊNCIA
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
+                    {s.num_cabecas} cab.{s.peso_saida_vivo != null ? ` · ${s.peso_saida_vivo} kg vivo/cab.` : ""}
+                    {s.peso_saida_vivo_total != null ? ` · ${s.peso_saida_vivo_total} kg vivo total` : ""}
+                    {s.peso_saida_morto != null ? ` · ${s.peso_saida_morto} kg morto/cab.` : ""}
+                    {s.peso_saida_morto_total != null ? ` · ${s.peso_saida_morto_total} kg morto total` : ""}
+                    {s.rendimento_carcaca != null ? ` · ${s.rendimento_carcaca}% carcaça` : ""}
+                    {s.tipo === "transferencia" && s.lote_destino_id ? ` · → ${lotesMap[s.lote_destino_id] || "lote excluído"}` : ""}
+                    {s.observacoes ? ` · ${observacaoSemModalidade(s.observacoes)}` : ""}
+                  </div>
+                </div>
+                {s.tipo === "transferencia"
+                  ? onEditarTransferencia && (
+                      <button
+                        onClick={() => onEditarTransferencia(s.id)}
+                        style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
+                        title="Editar"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )
+                  : onEditarSaida && (
+                      <button
+                        onClick={() => onEditarSaida(s.id)}
+                        style={{ ...styles.editLinkBtn, display: "flex", alignItems: "center", gap: 5 }}
+                        title={(!s.tipo || s.tipo === "venda") ? "Editar saída/abate" : "Editar movimentação"}
+                      >
+                        <Pencil size={14} />
+                        {(!s.tipo || s.tipo === "venda") ? "Editar saída/abate" : "Editar movimentação"}
+                      </button>
+                    )}
+                {onExcluirSaida && (
+                  <button
+                    onClick={() => {
+                      if (
+                        confirm(
+                          s.tipo === "morte"
+                            ? "Excluir este registro de morte?"
+                            : s.tipo === "transferencia"
+                              ? "Excluir esta troca de lote? A entrada correspondente no lote de destino também será removida."
+                              : "Excluir esta saída?"
+                        )
+                      )
+                        onExcluirSaida(s.id);
+                    }}
+                    style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex" }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            ))
+          )}
+        </>
+      )}
+
+      {entradasOrdenadas.length > 0 && (
+        <>
+          <div style={{ ...styles.sectionTitle, margin: "20px 4px 8px" }}>Entradas adicionais</div>
+          {entradasOrdenadas.map((e) => (
+            <div key={e.id} style={styles.rowCard}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: 13.5 }}>
+                  {formatDataBR(e.data)}
+                  {e.lote_origem_id && (
+                    <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#3E6B8A", background: "#E9F1F7", padding: "2px 7px", borderRadius: 999 }}>
+                      TRANSFERÊNCIA
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
+                  +{e.num_cabecas} cab.{e.peso_entrada != null ? ` · ${e.peso_entrada} kg/cab.` : ""}
+                  {e.rendimento_entrada != null ? ` · ${e.rendimento_entrada}% rendimento` : ""}
+                  {e.preco_arroba_entrada != null ? ` · ${formatBRL(e.preco_arroba_entrada)}/@` : ""}
+                  {e.custo_acumulado_herdado != null ? ` · custo herdado ${formatBRL(e.custo_acumulado_herdado)}/cab.` : ""}
+                  {e.lote_origem_id ? ` · ← ${lotesMap[e.lote_origem_id] || "lote excluído"}` : ""}
+                  {e.observacoes ? ` · ${e.observacoes}` : ""}
+                </div>
+              </div>
+              {e.lote_origem_id && e.saida_origem_id
+                ? onEditarTransferenciaDaEntrada && (
+                    <button
+                      onClick={() => onEditarTransferenciaDaEntrada(e.lote_origem_id, e.saida_origem_id)}
+                      style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
+                      title="Editar"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  )
+                : onEditarEntrada && (
+                    <button
+                      onClick={() => onEditarEntrada(e.id)}
+                      style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
+                      title="Editar"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  )}
+              {onExcluirEntrada && (
+                <button
+                  onClick={() => {
+                    if (
+                      confirm(
+                        e.lote_origem_id
+                          ? "Excluir esta troca de lote? A saída correspondente no lote de origem também será removida."
+                          : "Excluir esta entrada? O total de animais do lote será reduzido."
+                      )
+                    )
+                      onExcluirEntrada(e.id);
+                  }}
+                  style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex" }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
+        <div style={{ ...styles.sectionTitle, margin: 0 }}>Histórico de pesagens</div>
+        {onNovaPesagem && (
+          <button onClick={onNovaPesagem} style={styles.editLinkBtn}>
+            + Pesagem
+          </button>
+        )}
+      </div>
+
+      {evolucao.length > 1 ? (
+        <GraficoLinha pontos={evolucao} valueKey="peso" unidade="kg" />
+      ) : (
+        <EmptyHint text="Ainda só há o peso de entrada — registre uma pesagem para ver a evolução." />
+      )}
+
+      <div style={{ marginTop: 10 }}>
+        {[...evolucao].reverse().map((p, i) => (
+          <div key={`${p.data}-${i}`} style={styles.rowCard}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 13.5 }}>{formatDataBR(p.data)}</div>
+              <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
+                {p.tipo === "entrada" ? "Entrada" : p.tipo === "transferencia" ? "Transferência de lote" : p.tipo === "saida" ? "Saída por venda" : "Pesagem"}
+                {p.gmdIntervalo != null ? ` · GMD ${p.gmdIntervalo.toFixed(2)} kg/dia` : ""}
+              </div>
+            </div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>{p.peso} kg</div>
+            {onExcluirPesagem && p.tipo === "pesagem" && (
+              <button
+                onClick={() => {
+                  if (confirm("Excluir esta pesagem?")) onExcluirPesagem(p.id);
+                }}
+                style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex" }}
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 4px 8px" }}>
+        <div style={{ ...styles.sectionTitle, margin: 0 }}>Nutrição</div>
+        {onNovoConsumo && (
+          <button onClick={onNovoConsumo} style={styles.editLinkBtn}>
+            + Consumo
+          </button>
+        )}
+      </div>
+
+      {indicadores.estimativaConsumo && (
+        <div style={{ ...styles.card, fontSize: 13, color: "#7A4B26" }}>
+          <strong>Período com estimativa de alimentação</strong>
+          <div>{formatDataBR(indicadores.estimativaConsumo.dataInicio)} a {formatDataBR(indicadores.estimativaConsumo.dataFim)}: {formatBRL(indicadores.estimativaConsumo.custoDiario)}/cab/dia e MS de {indicadores.estimativaConsumo.msPercentualPV.toLocaleString("pt-BR")}% do peso vivo.</div>
+          <div>As médias incluem {indicadores.diasConsumoEstimado} dias de MS estimada, usando a projeção de peso do lote. Os lançamentos existentes têm prioridade. O histórico abaixo mostra os consumos registrados.</div>
+        </div>
+      )}
+      {indicadores.consumoMS != null && (
+        <div style={{ margin: "-4px 4px 4px", fontSize: 13, color: "#A85A2A", fontWeight: 700 }}>
+          Consumo de MS por cabeça (mais recente): {indicadores.consumoMS.toFixed(2)} kg/dia
+        </div>
+      )}
+      {indicadores.consumoMSMedio != null && (
+        <div style={{ margin: "0 4px 4px", fontSize: 13, color: "#7A4B26" }}>
+          Consumo médio de MS por cabeça: {indicadores.consumoMSMedio.toFixed(2)} kg/dia
+        </div>
+      )}
+      {(indicadores.custoMedioDiarioAnimal != null || indicadores.custoAcumuladoAnimal != null) && (
+        <div style={{ margin: "0 4px 10px", fontSize: 13, color: "#7A4B26" }}>
+          {indicadores.custoMedioDiarioAnimal != null && (
+            <div>Custo médio diário: {formatBRL(indicadores.custoMedioDiarioAnimal)}/animal</div>
+          )}
+          {indicadores.custoAcumuladoAnimal != null && (
+            <div style={{ fontWeight: 700 }}>
+              Custo acumulado: {formatBRL(indicadores.custoAcumuladoAnimal)}/animal
+            </div>
+          )}
+        </div>
+      )}
+
+      {evolucaoConsumo.length > 0 ? (
+        <>
+          {evolucaoConsumo.length > 1 && (
+            <GraficoLinha pontos={evolucaoConsumo} valueKey="consumoTotalLote" unidade="kg/dia" cor="#A85A2A" />
+          )}
+          <div style={{ marginTop: evolucaoConsumo.length > 1 ? 10 : 0 }}>
+            {[...evolucaoConsumo].reverse().map((c, i) => (
+              <div key={`${c.data}-${i}`} style={styles.rowCard}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13.5 }}>{formatDataBR(c.data)}</div>
+                  <div style={{ fontSize: 11.5, color: "#9A9A94" }}>
+                    {c.consumoTotalLote} kg/dia (matéria natural)
+                    {c.msDieta != null ? ` · MS ${c.msDieta}%` : ""}
+                    {c.consumoMSCabeca != null ? ` · ${c.consumoMSCabeca.toFixed(2)} kg MS/cab/dia` : ""}
+                    {c.dietaFase ? ` · ${FASE_LABEL[c.dietaFase]}` : ""}
+                    {c.custoDiarioAnimal != null ? ` · ${formatBRL(c.custoDiarioAnimal)}/animal` : ""}
+                  </div>
+                </div>
+                {onEditarConsumo && (
+                  <button
+                    onClick={() => onEditarConsumo(c.id)}
+                    style={{ background: "transparent", border: "none", color: "#5C5C58", cursor: "pointer", padding: 4, display: "flex" }}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                )}
+                {onExcluirConsumo && (
+                  <button
+                    onClick={() => {
+                      if (confirm("Excluir este registro de consumo?")) onExcluirConsumo(c.id);
+                    }}
+                    style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex" }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <EmptyHint text="Nenhum consumo registrado ainda — lance o consumo do dia para acompanhar a nutrição do lote." />
+      )}
+
+      {indicadores.status === "Ativo" && <QuadroConsumoIngredientes consumoIngredientes={consumoIngredientes} />}
+    </div>
+  );
+}
+
+// Quadro de consumo acumulado por ingrediente no mesmo estilo visual dos
+// quadros de custo (ResultadoBloco/ResultadoLinha) — em lote ativo aparece
+// como card próprio aqui na aba Nutrição; em lote finalizado é embutido
+// direto no grid do FechamentoCustoCard (ver mais abaixo).
+function QuadroConsumoIngredientes({ consumoIngredientes, titulo = "Consumo acumulado por ingrediente" }) {
+  if (!consumoIngredientes.length) return null;
+  return (
+    <section className="resultado-lote" style={{ marginTop: 20 }}>
+      <div className="resultado-lote-header">
+        <div>
+          <span>NUTRIÇÃO</span>
+          <h2>{titulo}</h2>
+          <p>Total de cada ingrediente já consumido pelo lote.</p>
+        </div>
+      </div>
+      <div className="resultado-blocos" style={{ gridTemplateColumns: "1fr" }}>
+        <ResultadoBloco titulo="Ingredientes" cor="#6B5B3E">
+          {consumoIngredientes.map((item) => (
+            <ResultadoLinha
+              key={item.chave}
+              label={item.nome}
+              value={`${item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`}
+            />
+          ))}
+        </ResultadoBloco>
+      </div>
+    </section>
+  );
+}
+
+// Gráfico de linha simples e genérico (valor x data). Marca única série —
+// sem legenda — com pontos ≥8px, linha fina de 2px e o rótulo exato
+// disponível na lista logo abaixo (que já funciona como "tabela" acessível
+// dos mesmos dados).
+// Regressão linear simples (mínimos quadrados) usando o índice do ponto
+// como eixo x — serve para traçar uma linha de tendência mesmo com datas
+// espaçadas de forma irregular.
+function calcularRegressaoLinear(valores) {
+  const n = valores.length;
+  if (n < 2) return null;
+  let somaX = 0, somaY = 0, somaXY = 0, somaX2 = 0;
+  for (let i = 0; i < n; i++) {
+    somaX += i;
+    somaY += valores[i];
+    somaXY += i * valores[i];
+    somaX2 += i * i;
+  }
+  const denominador = n * somaX2 - somaX * somaX;
+  if (denominador === 0) return null;
+  const b = (n * somaXY - somaX * somaY) / denominador;
+  const a = (somaY - b * somaX) / n;
+  return { a, b }; // valor previsto no índice i = a + b*i
+}
+
+function GraficoLinha({
+  pontos, valueKey, unidade = "", cor = "#1F4D45", tendencia = false, id,
+  gradeDetalhada = false, consultaPorDia = false,
+}) {
+  const largura = 320;
+  const altura = gradeDetalhada ? 170 : 120;
+  const paddingEsquerda = 34;
+  const paddingDireita = 10;
+  const paddingY = 16;
+  const [dataConsultada, setDataConsultada] = useState(pontos[pontos.length - 1]?.data || "");
+
+  const valores = pontos.map((p) => p[valueKey]);
+  const menorValor = Math.min(...valores);
+  const maiorValor = Math.max(...valores);
+  let min = menorValor;
+  let max = maiorValor;
+  let marcasEixo = [];
+  if (gradeDetalhada) {
+    const amplitude = maiorValor - menorValor;
+    const passo = amplitude <= 0.8 ? 0.1 : amplitude <= 1.6 ? 0.2 : amplitude <= 3 ? 0.5 : 1;
+    min = Math.floor(menorValor / passo) * passo;
+    max = Math.ceil(maiorValor / passo) * passo;
+    if (max === min) max = min + passo;
+    for (let valor = max; valor >= min - passo / 10; valor -= passo) {
+      marcasEixo.push(Number(valor.toFixed(3)));
+    }
+  } else {
+    marcasEixo = [max, (min + max) / 2, min];
+  }
+  const meio = (min + max) / 2;
+  const span = max - min || 1;
+
+  const coords = pontos.map((p, i) => {
+    const x =
+      pontos.length > 1
+        ? paddingEsquerda + (i / (pontos.length - 1)) * (largura - paddingEsquerda - paddingDireita)
+        : (paddingEsquerda + largura - paddingDireita) / 2;
+    const y = altura - paddingY - ((p[valueKey] - min) / span) * (altura - paddingY * 2);
+    return { ...p, x, y };
+  });
+
+  const linha = coords.map((c) => `${c.x},${c.y}`).join(" ");
+  const formatEixo = (v) => `${Number.isInteger(v) ? v : v.toFixed(gradeDetalhada ? 2 : 1)} ${unidade}`;
+  const yDe = (valor) => altura - paddingY - ((valor - min) / span) * (altura - paddingY * 2);
+  const pontoConsultado = pontos.find((p) => p.data === dataConsultada) || pontos[pontos.length - 1];
+
+  const regressao = tendencia ? calcularRegressaoLinear(valores) : null;
+  const linhaTendencia =
+    regressao &&
+    (() => {
+      const yInicio = regressao.a;
+      const yFim = regressao.a + regressao.b * (valores.length - 1);
+      return {
+        x1: coords[0].x,
+        y1: altura - paddingY - ((yInicio - min) / span) * (altura - paddingY * 2),
+        x2: coords[coords.length - 1].x,
+        y2: altura - paddingY - ((yFim - min) / span) * (altura - paddingY * 2),
+      };
+    })();
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #ECEAE3", padding: "14px 10px 10px" }}>
+      <svg id={id} viewBox={`0 0 ${largura} ${altura}`} style={{ width: "100%", height: altura, display: "block" }}>
+        {marcasEixo.map((marca) => {
+          const y = yDe(marca);
+          return (
+            <g key={marca}>
+              <line x1={paddingEsquerda} y1={y} x2={largura - paddingDireita} y2={y} stroke="#E8E6DF" strokeWidth="1" />
+              <text x={0} y={y + 3} fontSize="8.5" fill="#8F8D84">{formatEixo(marca)}</text>
+            </g>
+          );
+        })}
+        {gradeDetalhada && [2, 2.4].map((limite) => (
+          limite >= min && limite <= max ? (
+            <line
+              key={`limite-${limite}`}
+              x1={paddingEsquerda}
+              y1={yDe(limite)}
+              x2={largura - paddingDireita}
+              y2={yDe(limite)}
+              stroke={limite === 2.4 ? "#247A52" : "#B43B32"}
+              strokeWidth="1.2"
+              strokeDasharray="3 3"
+              opacity="0.8"
+            />
+          ) : null
+        ))}
+        {linhaTendencia && (
+          <line
+            x1={linhaTendencia.x1}
+            y1={linhaTendencia.y1}
+            x2={linhaTendencia.x2}
+            y2={linhaTendencia.y2}
+            stroke={cor}
+            strokeWidth="1.5"
+            strokeDasharray="5 4"
+            opacity="0.55"
+          />
+        )}
+        <polyline points={linha} fill="none" stroke={cor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        {coords.map((c, i) => (
+          <circle key={i} cx={c.x} cy={c.y} r="4" fill={cor}>
+            <title>{`${formatDataBR(c.data)}: ${c[valueKey]} ${unidade}`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#9A9A94", padding: "2px 6px 0 34px" }}>
+        <span>{formatDataBR(pontos[0].data)}</span>
+        <span>{formatDataBR(pontos[pontos.length - 1].data)}</span>
+      </div>
+      {linhaTendencia && (
+        <div style={{ fontSize: 10.5, color: "#9A9A94", padding: "4px 6px 0 34px" }}>- - - linha de tendência</div>
+      )}
+      {consultaPorDia && pontoConsultado && (
+        <label style={styles.chartDayPicker}>
+          <span style={{ fontSize: 11.5, color: "#7A7A75" }}>Consultar dia</span>
+          <select
+            value={pontoConsultado.data}
+            onChange={(e) => setDataConsultada(e.target.value)}
+            style={styles.chartDaySelect}
+          >
+            {[...pontos].reverse().map((ponto) => (
+              <option key={ponto.data} value={ponto.data}>
+                {formatDataBR(ponto.data)} — {Number(ponto[valueKey]).toFixed(2)}{unidade}
+              </option>
+            ))}
+          </select>
+          <strong style={{ color: faixaConsumoMS(pontoConsultado[valueKey])?.cor || cor }}>
+            {Number(pontoConsultado[valueKey]).toFixed(2)}{unidade}
+          </strong>
+        </label>
+      )}
+    </div>
+  );
+}
+
+function FechamentoCustoCard({ cliente, lote, indicadores, saidas, consumoIngredientes = [] }) {
+  const f = calcularFechamentoCusto(lote, indicadores, saidas);
+  const [exportando, setExportando] = useState(false);
+  const semDados =
+    f.valorCompraTotal == null && f.custoAlimentarTotal == null && f.receitaTotal == null && f.custoOperacionalTotal == null;
+  if (semDados) return null;
+
+  const resultadoPositivo = f.resultadoPorCabeca == null || f.resultadoPorCabeca >= 0;
+  const projecaoEntrada = calcularProjecaoPeso(lote, [], lote.data_saida || dataLocalFazenda(lote.fuso_horario || "America/Sao_Paulo"));
+  const gmdEsperado = projecaoEntrada.completa && projecaoEntrada.diasDesdeReferencia > 0
+    ? projecaoEntrada.ganhoPrevisto / projecaoEntrada.diasDesdeReferencia : null;
+  const gmdDiferencaPercentual =
+    gmdEsperado != null && gmdEsperado > 0 && indicadores.gmdVivoEntradaSaida != null
+      ? ((indicadores.gmdVivoEntradaSaida - gmdEsperado) / gmdEsperado) * 100
+      : null;
+
+  return (
+    <section className="resultado-lote">
+      <div className="resultado-lote-header">
+        <div><span>RELATÓRIO FINAL DO LOTE</span><h2>Resultado zootécnico e econômico</h2><p>Indicadores consolidados do período de confinamento.</p></div>
+        <button
+          onClick={async () => {
+            setExportando(true);
+            try { await exportarResultadoLotePDF(cliente, lote, indicadores, saidas, consumoIngredientes); }
+            finally { setExportando(false); }
+          }}
+          disabled={exportando}
+          className="resultado-pdf-btn"
+        ><Download size={15} /> {exportando ? "Gerando..." : "Exportar resultado em PDF"}</button>
+      </div>
+      <div className="resultado-destaques">
+        <ResultadoDestaque label="Lucro por animal" value={f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "—"} tom={resultadoPositivo ? "verde" : "vermelho"} detalhe={f.resultadoTotal != null ? `${formatBRL(f.resultadoTotal)} no lote` : "Resultado total indisponível"} />
+        <ResultadoDestaque label="Margem mensal" value={f.margemMensalPercentual != null ? `${f.margemMensalPercentual.toFixed(2)}%` : "—"} tom={resultadoPositivo ? "verde" : "vermelho"} detalhe="Retorno sobre o custo a cada 30 dias" />
+        <ResultadoDestaque label="GMC" value={f.gmc != null ? `${f.gmc.toFixed(3)} kg` : "—"} tom="azul" detalhe="Ganho de carcaça por cabeça/dia" />
+        <ResultadoDestaque label="MS média / peso vivo" value={indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}%` : "—"} tom="laranja" detalhe={indicadores.consumoMSMedio != null ? `${indicadores.consumoMSMedio.toFixed(2)} kg/cab/dia` : "Média do período"} />
+      </div>
+      <div className="resultado-blocos">
+        <ResultadoBloco titulo="Desempenho do lote" cor="#3B7C70">
+          <ResultadoLinha label="Período confinado" value={`${indicadores.diasConfinamento || 0} dias`} />
+          <ResultadoLinha label="GMD vivo (realizado)" value={indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(3)} kg/cab/dia` : "—"} />
+          {gmdEsperado != null && <ResultadoLinha label="GMD esperado" value={`${gmdEsperado.toFixed(2)} kg/cab/dia`} />}
+          {gmdDiferencaPercentual != null && (
+            <ResultadoLinha
+              label="Realizado x esperado"
+              value={`${gmdDiferencaPercentual >= 0 ? "+" : ""}${gmdDiferencaPercentual.toFixed(1)}%`}
+              forte
+              cor={gmdDiferencaPercentual >= 0 ? "#2E8060" : "#B34F42"}
+            />
+          )}
+          <ResultadoLinha label="GMC de carcaça" value={f.gmc != null ? `${f.gmc.toFixed(3)} kg/cab/dia` : "—"} />
+          <ResultadoLinha label="Arrobas produzidas com rendimento" value={f.arrobasProduzidas != null ? `${f.arrobasProduzidas.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} @` : "—"} />
+        </ResultadoBloco>
+        <ResultadoBloco titulo="Custo de produção" cor="#C47A3D">
+          <ResultadoLinha label="Alimentação" value={f.custoAlimentarTotal != null ? formatBRL(f.custoAlimentarTotal) : "—"} />
+          <ResultadoLinha label="Operacional" value={f.custoOperacionalTotal != null ? formatBRL(f.custoOperacionalTotal) : "—"} />
+          {f.custoHerdadoTotal > 0 && <ResultadoLinha label="Custos anteriores (transferências)" value={formatBRL(f.custoHerdadoTotal)} />}
+          <ResultadoLinha label="Custo total de produção" value={f.custoProducaoTotal != null ? formatBRL(f.custoProducaoTotal) : "—"} forte cor="#A85F2C" />
+          <ResultadoLinha label="Custo total por animal" value={f.custoProducaoPorAnimal != null ? `${formatBRL(f.custoProducaoPorAnimal)}/cab` : "—"} />
+          <ResultadoLinha label="Custo diário médio" value={f.custoDiarioMedioTotal != null ? `${formatBRL(f.custoDiarioMedioTotal)}/cab` : "—"} />
+          <ResultadoLinha label="Custo da @ produzida - vivo" value={f.custoArrobaProduzidaVivo != null ? formatBRL(f.custoArrobaProduzidaVivo) : "—"} />
+          <ResultadoLinha label="Custo da @ com rendimento (abatido)" value={f.custoArrobaProduzidaRendimento != null ? formatBRL(f.custoArrobaProduzidaRendimento) : "—"} />
+        </ResultadoBloco>
+        <ResultadoBloco titulo="Resultado financeiro" cor={resultadoPositivo ? "#2E8060" : "#B34F42"}>
+          <ResultadoLinha label="Valor de compra" value={f.valorCompraTotal != null ? formatBRL(f.valorCompraTotal) : "—"} />
+          <ResultadoLinha label="Custo total" value={f.custoTotalGeral != null ? formatBRL(f.custoTotalGeral) : "—"} />
+          <ResultadoLinha label="Receita de venda" value={f.receitaTotal != null ? formatBRL(f.receitaTotal) : "—"} />
+          <ResultadoLinha label="Resultado por @ produzida" value={f.resultadoPorArroba != null ? formatBRL(f.resultadoPorArroba) : "—"} forte cor={resultadoPositivo ? "#247A52" : "#B34F42"} />
+          <ResultadoLinha label="Lucro total" value={f.resultadoTotal != null ? formatBRL(f.resultadoTotal) : "—"} forte cor={resultadoPositivo ? "#247A52" : "#B34F42"} />
+          <ResultadoLinha label="Lucro por animal" value={f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "—"} forte cor={resultadoPositivo ? "#247A52" : "#B34F42"} />
+        </ResultadoBloco>
+        {consumoIngredientes.length > 0 && (
+          <ResultadoBloco titulo="Consumo por ingrediente" cor="#6B5B3E">
+            {consumoIngredientes.map((item) => (
+              <ResultadoLinha
+                key={item.chave}
+                label={item.nome}
+                value={`${item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg${item.custo != null ? ` · ${formatBRL(item.custo)}` : ""}${item.erroPercentual != null ? ` · ${item.erroPercentual > 0 ? "+" : ""}${item.erroPercentual.toFixed(1)}%` : ""}`}
+                cor={item.erroPercentual != null && Math.abs(item.erroPercentual) > 5 ? "#B34F42" : undefined}
+              />
+            ))}
+          </ResultadoBloco>
+        )}
+      </div>
+      {indicadores.historicoTransferencias?.etapas.length > 0 && (
+        <div className="resultado-nota">
+          Inclui o consumo anterior dos animais transferidos de {[...new Set(indicadores.historicoTransferencias.etapas.map((e) => e.lote.nome))].join(", ")}, rateado pelas cabeças transferidas: {indicadores.consumoAnteriorMN.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg de matéria natural e {indicadores.consumoAnteriorMS.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg de matéria seca. O custo herdado é incluído uma única vez no total de produção.
+        </div>
+      )}
+      {indicadores.historicoTransferencias?.pendencias.length > 0 && <div className="resultado-nota">Há transferências sem histórico de origem confirmado. O custo informado foi preservado; os consumos dessas origens não foram presumidos.</div>}
+      {indicadores.estimativaConsumo && (
+        <div className="resultado-nota">
+          Inclui estimativa de alimentação de {formatDataBR(indicadores.estimativaConsumo.dataInicio)} a {formatDataBR(indicadores.estimativaConsumo.dataFim)}: {formatBRL(indicadores.estimativaConsumo.custoDiario)}/cab/dia e MS de {indicadores.estimativaConsumo.msPercentualPV.toLocaleString("pt-BR")}% do peso vivo, nos dias sem dados registrados. A MS em kg usa a projeção de peso do lote.
+        </div>
+      )}
+      <div className="resultado-nota">A margem mensal representa o retorno sobre o custo total, proporcionalizado para períodos de 30 dias.</div>
+    </section>
+  );
+}
+
+function ResultadoDestaque({ label, value, detalhe, tom }) {
+  return <div className={`resultado-destaque ${tom}`}><span>{label}</span><strong>{value}</strong><small>{detalhe}</small></div>;
+}
+
+function ResultadoBloco({ titulo, cor, children }) {
+  return <div className="resultado-bloco" style={{ "--resultado-cor": cor }}><h3>{titulo}</h3>{children}</div>;
+}
+
+function ResultadoLinha({ label, value, forte = false, cor }) {
+  return <div className="resultado-linha"><span>{label}</span><strong style={{ color: cor || undefined, fontSize: forte ? 13.5 : undefined }}>{value}</strong></div>;
+}
+
+// Carrega um PNG estático do /public como data URL — jsPDF (addImage) não
+// aceita uma URL comum no navegador, só base64 ou elemento já decodificado.
+async function carregarImagemComoDataUrl(url) {
+  const resposta = await fetch(url);
+  const blob = await resposta.blob();
+  return new Promise((resolve, reject) => {
+    const leitor = new FileReader();
+    leitor.onload = () => resolve(leitor.result);
+    leitor.onerror = reject;
+    leitor.readAsDataURL(blob);
+  });
+}
+
+export async function exportarResultadoLotePDF(cliente, lote, indicadores, saidas, consumoIngredientes = []) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const f = calcularFechamentoCusto(lote, indicadores, saidas);
+  const largura = doc.internal.pageSize.getWidth();
+  const altura = doc.internal.pageSize.getHeight();
+  const margem = 40;
+  const verde = [31, 77, 69];
+  const verdeClaro = [231, 242, 238];
+  const laranja = [196, 122, 61];
+  const cinza = [92, 92, 88];
+  const cinzaClaro = [246, 245, 241];
+  const resultadoPositivo = f.resultadoPorCabeca == null || f.resultadoPorCabeca >= 0;
+  const projecaoEntrada = calcularProjecaoPeso(lote, [], lote.data_saida || dataLocalFazenda(lote.fuso_horario || "America/Sao_Paulo"));
+  const gmdEsperado = projecaoEntrada.completa && projecaoEntrada.diasDesdeReferencia > 0
+    ? projecaoEntrada.ganhoPrevisto / projecaoEntrada.diasDesdeReferencia : null;
+  const gmdDiferencaPercentual =
+    gmdEsperado != null && gmdEsperado > 0 && indicadores.gmdVivoEntradaSaida != null
+      ? ((indicadores.gmdVivoEntradaSaida - gmdEsperado) / gmdEsperado) * 100
+      : null;
+
+  doc.setFillColor(...verde);
+  doc.roundedRect(0, 0, largura, 116, 0, 0, "F");
+
+  // Logo do consultor num selo branco no canto superior direito do
+  // cabeçalho — o PNG é preto sobre fundo opaco (sem alpha), por isso
+  // precisa desse fundo branco pra não desaparecer no verde.
+  try {
+    const logoDataUrl = await carregarImagemComoDataUrl("/gmegali-logo.png");
+    const logoLado = 72;
+    const logoX = largura - margem - logoLado;
+    const logoY = (116 - logoLado) / 2;
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(logoX, logoY, logoLado, logoLado, 8, 8, "F");
+    const inset = 6;
+    doc.addImage(logoDataUrl, "PNG", logoX + inset, logoY + inset, logoLado - inset * 2, logoLado - inset * 2);
+  } catch {
+    // Sem internet/logo indisponível: segue sem o selo, não trava o PDF.
+  }
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text("RASTRO CONFINAMENTO", margem, 31);
+  doc.setFontSize(22);
+  doc.text("Resultado final do lote", margem, 62);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(205, 226, 220);
+  doc.text(`${cliente?.nome || "Cliente"}  |  ${lote.nome}`, margem, 82);
+  doc.text(`Período: ${formatDataBR(lote.data_entrada)} a ${formatDataBR(lote.data_saida)}  |  ${lote.num_cabecas} cabeças`, margem, 99);
+
+  let y = 140;
+  const cardGap = 8;
+  const cardLargura = (largura - margem * 2 - cardGap * 3) / 4;
+  const destaques = [
+    ["Lucro por animal", f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "-", resultadoPositivo ? verdeClaro : [250, 232, 229], resultadoPositivo ? verde : [179, 79, 66]],
+    ["Margem mensal", f.margemMensalPercentual != null ? `${f.margemMensalPercentual.toFixed(2)}%` : "-", verdeClaro, verde],
+    ["GMC", f.gmc != null ? `${f.gmc.toFixed(3)} kg/d` : "-", [232, 240, 247], [54, 103, 139]],
+    ["MS média / PV", indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}%` : "-", [252, 239, 227], laranja],
+  ];
+  destaques.forEach(([label, valor, fundo, cor], i) => {
+    const x = margem + i * (cardLargura + cardGap);
+    doc.setFillColor(...fundo);
+    doc.roundedRect(x, y, cardLargura, 67, 7, 7, "F");
+    doc.setTextColor(...cinza);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.text(label, x + 10, y + 17);
+    doc.setTextColor(...cor);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.text(String(valor), x + 10, y + 40, { maxWidth: cardLargura - 18 });
+  });
+  y += 88;
+
+  function secao(titulo, linhas, cor) {
+    const altoNecessario = 27 + linhas.length * 24;
+    if (y + altoNecessario > altura - 60) {
+      doc.addPage();
+      y = margem;
+    }
+    doc.setFillColor(...cinzaClaro);
+    doc.roundedRect(margem, y, largura - margem * 2, 27 + linhas.length * 24, 8, 8, "F");
+    doc.setFillColor(...cor);
+    doc.roundedRect(margem, y, 5, 27 + linhas.length * 24, 3, 3, "F");
+    doc.setTextColor(...cor);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text(titulo, margem + 16, y + 19);
+    let linhaY = y + 39;
+    linhas.forEach(([label, valor, destaque]) => {
+      doc.setDrawColor(226, 225, 219);
+      doc.line(margem + 16, linhaY + 7, largura - margem - 14, linhaY + 7);
+      doc.setTextColor(...cinza);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.text(label, margem + 16, linhaY);
+      doc.setTextColor(...(destaque || [45, 62, 57]));
+      doc.setFont("helvetica", "bold");
+      doc.text(String(valor), largura - margem - 16, linhaY, { align: "right" });
+      linhaY += 24;
+    });
+    y += 39 + linhas.length * 24;
+  }
+
+  secao("Desempenho zootécnico", [
+    ["Dias de confinamento", `${indicadores.diasConfinamento || 0} dias`],
+    ["GMD vivo (realizado)", indicadores.gmdVivoEntradaSaida != null ? `${indicadores.gmdVivoEntradaSaida.toFixed(3)} kg/cab/dia` : "-"],
+    ...(gmdEsperado != null ? [["GMD esperado", `${gmdEsperado.toFixed(2)} kg/cab/dia`]] : []),
+    ...(gmdDiferencaPercentual != null
+      ? [["Realizado x esperado", `${gmdDiferencaPercentual >= 0 ? "+" : ""}${gmdDiferencaPercentual.toFixed(1)}%`, gmdDiferencaPercentual >= 0 ? verde : [179, 79, 66]]]
+      : []),
+    ["GMC de carcaça", f.gmc != null ? `${f.gmc.toFixed(3)} kg/cab/dia` : "-"],
+    ["Consumo médio de MS por cabeça", indicadores.consumoMSMedio != null ? `${indicadores.consumoMSMedio.toFixed(2)} kg/cab/dia` : "-"],
+    ["Consumo médio de MS / peso vivo", indicadores.consumoMSPercentualPVMedio != null ? `${indicadores.consumoMSPercentualPVMedio.toFixed(2)}% do PV` : "-"],
+    ["Arrobas produzidas com rendimento", f.arrobasProduzidas != null ? `${f.arrobasProduzidas.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} @` : "-"],
+  ], verde);
+
+  if (indicadores.estimativaConsumo) {
+    const e = indicadores.estimativaConsumo;
+    secao("Estimativa de alimentação nos dias sem dados", [
+      ["Período", `${formatDataBR(e.dataInicio)} a ${formatDataBR(e.dataFim)}`],
+      ["Custo diário estimado", `${formatBRL(e.custoDiario)}/cab/dia`],
+      ["Consumo estimado de MS / peso vivo", `${e.msPercentualPV.toLocaleString("pt-BR")}% do PV`],
+      ["Base para MS em kg", "Projeção de peso do lote"],
+    ], laranja);
+  }
+
+  secao("Custos de produção", [
+    ["Custo de alimentação", f.custoAlimentarTotal != null ? formatBRL(f.custoAlimentarTotal) : "-"],
+    ["Custo operacional", f.custoOperacionalTotal != null ? formatBRL(f.custoOperacionalTotal) : "-"],
+    ...(f.custoHerdadoTotal > 0 ? [["Custos anteriores (transferências)", formatBRL(f.custoHerdadoTotal)]] : []),
+    ["Custo total de produção", f.custoProducaoTotal != null ? formatBRL(f.custoProducaoTotal) : "-"],
+    ["Custo total por animal", f.custoProducaoPorAnimal != null ? `${formatBRL(f.custoProducaoPorAnimal)}/cab` : "-"],
+    ["Custo diário médio total", f.custoDiarioMedioTotal != null ? `${formatBRL(f.custoDiarioMedioTotal)}/cab/dia` : "-"],
+    ["Custo da @ produzida - peso vivo", f.custoArrobaProduzidaVivo != null ? formatBRL(f.custoArrobaProduzidaVivo) : "-"],
+    ["Custo da @ com rendimento (abatido)", f.custoArrobaProduzidaRendimento != null ? formatBRL(f.custoArrobaProduzidaRendimento) : "-"],
+  ], laranja);
+
+  const corResultado = resultadoPositivo ? verde : [179, 79, 66];
+  secao("Resultado econômico", [
+    ["Valor de compra", f.valorCompraTotal != null ? formatBRL(f.valorCompraTotal) : "-"],
+    ["Custo total", f.custoTotalGeral != null ? formatBRL(f.custoTotalGeral) : "-"],
+    ["Receita de venda", f.receitaTotal != null ? formatBRL(f.receitaTotal) : "-"],
+    ["Resultado por @ produzida", f.resultadoPorArroba != null ? formatBRL(f.resultadoPorArroba) : "-", corResultado],
+    ["Lucro total", f.resultadoTotal != null ? formatBRL(f.resultadoTotal) : "-", corResultado],
+    ["Lucro por animal", f.resultadoPorCabeca != null ? formatBRL(f.resultadoPorCabeca) : "-", corResultado],
+    ["Margem mensal sobre o custo", f.margemMensalPercentual != null ? `${f.margemMensalPercentual.toFixed(2)}% ao mês` : "-", corResultado],
+  ], corResultado);
+
+  if (indicadores.historicoTransferencias?.etapas.length > 0) {
+    secao("Consumo anterior às transferências", [
+      ["Lotes de origem", [...new Set(indicadores.historicoTransferencias.etapas.map((e) => e.lote.nome))].join(", ")],
+      ["Matéria natural rateada", `${indicadores.consumoAnteriorMN.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg`],
+      ["Matéria seca rateada", `${indicadores.consumoAnteriorMS.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg`],
+      ["Custos anteriores", "Incluídos uma única vez no total de produção"],
+    ], cinza);
+  }
+  if (consumoIngredientes.length > 0) {
+    const oliva = [107, 91, 62];
+    secao("Consumo por ingrediente", consumoIngredientes.map((item) => {
+      const erroAlto = item.erroPercentual != null && Math.abs(item.erroPercentual) > 5;
+      const partes = [`${item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`];
+      if (item.custo != null) partes.push(formatBRL(item.custo));
+      if (item.erroPercentual != null) partes.push(`${item.erroPercentual > 0 ? "+" : ""}${item.erroPercentual.toFixed(1)}%`);
+      return [item.nome, partes.join(" · "), erroAlto ? [179, 79, 66] : undefined];
+    }), oliva);
+  }
+
+  doc.setDrawColor(220, 219, 213);
+  doc.line(margem, altura - 46, largura - margem, altura - 46);
+  doc.setTextColor(130, 130, 125);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.text("Margem mensal: retorno sobre o custo total proporcionalizado para 30 dias.", margem, altura - 29);
+  doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")} - Rastro Confinamento`, largura - margem, altura - 29, { align: "right" });
+
+  const nomeSeguro = String(lote.nome || "lote").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+  doc.save(`resultado-${nomeSeguro || "lote"}.pdf`);
+}
+
+// Exporta o resumo da aba "Painel" de um cliente (mesmos n\u00fameros dos
+// PainelCard da tela) \u2014 mesmo padr\u00e3o visual de exportarResultadoLotePDF.
+export async function exportarResumoPainelPDF(cliente, painel, pesosEntradaPorCategoria = []) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const largura = doc.internal.pageSize.getWidth();
+  const altura = doc.internal.pageSize.getHeight();
+  const margem = 40;
+  const verde = [31, 77, 69];
+  const laranja = [196, 122, 61];
+  const azul = [54, 103, 139];
+  const cinza = [92, 92, 88];
+  const cinzaClaro = [246, 245, 241];
+
+  doc.setFillColor(...verde);
+  doc.roundedRect(0, 0, largura, 100, 0, 0, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text("RASTRO CONFINAMENTO", margem, 31);
+  doc.setFontSize(22);
+  doc.text("Resumo da opera\u00e7\u00e3o", margem, 62);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(205, 226, 220);
+  doc.text(`${cliente?.nome || "Cliente"}  |  Gerado em ${new Date().toLocaleDateString("pt-BR")}`, margem, 82);
+
+  let y = 124;
+
+  function secao(titulo, linhas, cor) {
+    const altoNecessario = 27 + linhas.length * 24;
+    if (y + altoNecessario > altura - 60) {
+      doc.addPage();
+      y = margem;
+    }
+    doc.setFillColor(...cinzaClaro);
+    doc.roundedRect(margem, y, largura - margem * 2, 27 + linhas.length * 24, 8, 8, "F");
+    doc.setFillColor(...cor);
+    doc.roundedRect(margem, y, 5, 27 + linhas.length * 24, 3, 3, "F");
+    doc.setTextColor(...cor);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text(titulo, margem + 16, y + 19);
+    let linhaY = y + 39;
+    linhas.forEach(([label, valor]) => {
+      doc.setDrawColor(226, 225, 219);
+      doc.line(margem + 16, linhaY + 7, largura - margem - 14, linhaY + 7);
+      doc.setTextColor(...cinza);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.text(label, margem + 16, linhaY);
+      doc.setTextColor(45, 62, 57);
+      doc.setFont("helvetica", "bold");
+      doc.text(String(valor), largura - margem - 16, linhaY, { align: "right" });
+      linhaY += 24;
+    });
+    y += 39 + linhas.length * 24;
+  }
+
+  secao("Lotes", [
+    ["Total de lotes", painel.totalLotes],
+    ["Lotes ativos", painel.lotesAtivos],
+    ["Lotes finalizados", painel.lotesFinalizados],
+    ["Cabe\u00e7as ativas", painel.cabecasAtivas],
+  ], verde);
+
+  secao("Desempenho zoot\u00e9cnico", [
+    ["GMD m\u00e9dio (finalizados)", painel.gmdMedioFinalizados != null ? `${painel.gmdMedioFinalizados.toFixed(2)} kg/dia` : "-"],
+    ["GMD esperado m\u00e9dio", painel.gmdEsperadoMedio != null ? `${painel.gmdEsperadoMedio.toFixed(2)} kg/dia` : "-"],
+    ["Peso m\u00e9dio geral", painel.pesoMedioGeral != null ? `${painel.pesoMedioGeral.toFixed(1)} kg` : "-"],
+  ], azul);
+
+  secao("Consumo de mat\u00e9ria seca", [
+    ["Consumo m\u00e9dio de MS (ativos)", painel.consumoMSMedioAtivos != null ? `${painel.consumoMSMedioAtivos.toFixed(2)} kg/cab/dia` : "-"],
+    ["MS sobre PV \u2014 \u00faltimo lan\u00e7amento", painel.consumoMSPercentualPVMedioAtivos != null ? `${painel.consumoMSPercentualPVMedioAtivos.toFixed(2)}% do PV` : "-"],
+    ["MS m\u00e9dia hist\u00f3rica sobre PV", painel.consumoMSPercentualPVHistoricoAtivos != null ? `${painel.consumoMSPercentualPVHistoricoAtivos.toFixed(2)}% do PV` : "-"],
+  ], laranja);
+
+  if (pesosEntradaPorCategoria.length > 0) {
+    secao("Peso médio de entrada por categoria — lotes ativos", pesosEntradaPorCategoria.map((item) => [
+      `${CATEGORIA_LOTE_LABEL[item.categoria] || item.categoria || "Não informada"} (${item.cabecasComPeso.toLocaleString("pt-BR")} com peso${item.cabecasSemPeso > 0 ? `; ${item.cabecasSemPeso.toLocaleString("pt-BR")} sem peso` : ""})`,
+      item.pesoMedio != null ? `${item.pesoMedio.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kg` : "—",
+    ]), azul);
+  }
+
+  secao("Custos", [
+    ["Custo acumulado (ativos)", painel.custoAcumuladoAtivosMedio != null ? `${formatBRL(painel.custoAcumuladoAtivosMedio)}/animal` : "-"],
+    ["Custo m\u00e9dio di\u00e1rio (ativos)", painel.custoMedioDiarioAtivosMedio != null ? `${formatBRL(painel.custoMedioDiarioAtivosMedio)}/animal` : "-"],
+    ["Custo total (finalizados)", painel.custoTotalFinalizadosMedio != null ? `${formatBRL(painel.custoTotalFinalizadosMedio)}/animal` : "-"],
+    ["Custo m\u00e9dio di\u00e1rio (finalizados)", painel.custoMedioDiarioFinalizadosMedio != null ? `${formatBRL(painel.custoMedioDiarioFinalizadosMedio)}/animal` : "-"],
+  ], [179, 79, 66]);
+
+  doc.setDrawColor(220, 219, 213);
+  doc.line(margem, altura - 40, largura - margem, altura - 40);
+  doc.setTextColor(130, 130, 125);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")} - Rastro Confinamento`, largura - margem, altura - 24, { align: "right" });
+
+  const nomeSeguro = String(cliente?.nome || "cliente").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+  doc.save(`resumo-${nomeSeguro || "cliente"}.pdf`);
+}
+
+function FormLote({ lote, fusoHorario = "America/Sao_Paulo", onCancel, onSave, onDelete }) {
+  const editando = Boolean(lote);
+  const [nome, setNome] = useState(lote?.nome || "");
+  const [categoria, setCategoria] = useState(lote?.categoria || "");
+  const [raca, setRaca] = useState(lote?.raca || "");
+  const [dataEntrada, setDataEntrada] = useState(lote?.data_entrada || dataLocalFazenda(fusoHorario));
+  const [pesoEntrada, setPesoEntrada] = useState(lote?.peso_entrada != null ? String(lote.peso_entrada) : "");
+  const [pesoEsperadoAbate, setPesoEsperadoAbate] = useState(lote?.peso_esperado_abate != null ? String(lote.peso_esperado_abate) : "");
+  const [precoArrobaEntrada, setPrecoArrobaEntrada] = useState(lote?.preco_arroba_entrada != null ? String(lote.preco_arroba_entrada) : "");
+  const [rendimentoEntrada, setRendimentoEntrada] = useState(lote?.rendimento_entrada != null ? String(lote.rendimento_entrada) : "");
+  const [custoAdaptacao, setCustoAdaptacao] = useState(lote?.custo_kg_mn_adaptacao != null ? String(lote.custo_kg_mn_adaptacao) : "");
+  const [custoRecria, setCustoRecria] = useState(lote?.custo_kg_mn_recria != null ? String(lote.custo_kg_mn_recria) : "");
+  const [custoCrescimento, setCustoCrescimento] = useState(lote?.custo_kg_mn_crescimento != null ? String(lote.custo_kg_mn_crescimento) : "");
+  const [custoTerminacao, setCustoTerminacao] = useState(lote?.custo_kg_mn_terminacao != null ? String(lote.custo_kg_mn_terminacao) : "");
+  const [dataSaida, setDataSaida] = useState(lote?.data_saida || "");
+  const {
+    numCabecas,
+    pesoSaidaVivo,
+    pesoSaidaVivoTotal,
+    pesoSaidaMorto,
+    pesoSaidaMortoTotal,
+    rendimentoCarcaca,
+    alterarNumCabecas,
+    alterarPesoSaidaVivo,
+    alterarPesoSaidaVivoTotal,
+    alterarPesoSaidaMorto,
+    alterarPesoSaidaMortoTotal,
+    alterarRendimentoCarcaca,
+  } = useCalculoCarcaca({
+    numCabecasInicial: lote?.num_cabecas,
+    pesoVivoMedioInicial: lote?.peso_saida_vivo,
+    pesoVivoTotalInicial: lote?.peso_saida_vivo_total,
+    pesoMortoMedioInicial: lote?.peso_saida_morto,
+    pesoMortoTotalInicial: lote?.peso_saida_morto_total,
+    rendimentoInicial: lote?.rendimento_carcaca,
+  });
+  const [precoVendaArroba, setPrecoVendaArroba] = useState(lote?.preco_venda_arroba != null ? String(lote.preco_venda_arroba) : "");
+  const [custoOperacional, setCustoOperacional] = useState(lote?.custo_operacional != null ? String(lote.custo_operacional) : "");
+  const [observacoes, setObservacoes] = useState(lote?.observacoes || "");
+  const [salvando, setSalvando] = useState(false);
+
+  const valido = nome.trim().length > 0 && dataEntrada && dataEntrada <= dataLocalFazenda(fusoHorario) && numCabecas !== "" && pesoEntrada !== "";
+
+  async function handleSave() {
+    setSalvando(true);
+    try {
+      await onSave({
+        nome: nome.trim(),
+        categoria: categoria || null,
+        raca: raca || null,
+        data_entrada: dataEntrada,
+        num_cabecas: Number(numCabecas),
+        peso_entrada: Number(pesoEntrada),
+        peso_esperado_abate: pesoEsperadoAbate !== "" ? Number(pesoEsperadoAbate) : null,
+        preco_arroba_entrada: precoArrobaEntrada !== "" ? Number(precoArrobaEntrada) : null,
+        rendimento_entrada: rendimentoEntrada !== "" ? Number(rendimentoEntrada) : null,
+        custo_kg_mn_adaptacao: custoAdaptacao !== "" ? Number(custoAdaptacao) : null,
+        custo_kg_mn_recria: custoRecria !== "" ? Number(custoRecria) : null,
+        custo_kg_mn_crescimento: custoCrescimento !== "" ? Number(custoCrescimento) : null,
+        custo_kg_mn_terminacao: custoTerminacao !== "" ? Number(custoTerminacao) : null,
+        data_saida: dataSaida || null,
+        peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
+        peso_saida_vivo_total: pesoSaidaVivoTotal !== "" ? Number(pesoSaidaVivoTotal) : null,
+        peso_saida_morto: pesoSaidaMorto !== "" ? Number(pesoSaidaMorto) : null,
+        peso_saida_morto_total: pesoSaidaMortoTotal !== "" ? Number(pesoSaidaMortoTotal) : null,
+        rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
+        preco_venda_arroba: precoVendaArroba !== "" ? Number(precoVendaArroba) : null,
+        custo_operacional: custoOperacional !== "" ? Number(custoOperacional) : null,
+        observacoes: observacoes || null,
+      });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title={editando ? "Editar lote" : "Novo lote"} onBack={onCancel} />
+      <div style={styles.card}>
+        <InputField label="Nome do lote *" value={nome} onChange={setNome} placeholder="Ex: Bois 1" />
+        <SelectField label="Categoria dos animais" value={categoria} onChange={setCategoria} options={CATEGORIAS_LOTE} />
+        <SelectField label="Raça" value={raca} onChange={setRaca} options={RACAS_LOTE} />
+        <InputField label="Data de entrada *" type="date" max={dataLocalFazenda(fusoHorario)} value={dataEntrada} onChange={setDataEntrada} />
+        <InputField label="Nº de cabeças *" type="number" value={numCabecas} onChange={alterarNumCabecas} placeholder="Ex: 130" />
+        <InputField label="Peso de entrada (kg) *" type="number" value={pesoEntrada} onChange={setPesoEntrada} placeholder="Ex: 410" />
+        <p style={{fontSize:12}}>O GMD previsto é definido por dieta. Registre os períodos no detalhe do lote após salvar.</p>
+        <InputField
+          label="Peso esperado de abate (kg)"
+          type="number"
+          value={pesoEsperadoAbate}
+          onChange={setPesoEsperadoAbate}
+          placeholder="Ex: 550"
+        />
+        <InputField
+          label="Preço da arroba na entrada (R$/@)"
+          type="number"
+          value={precoArrobaEntrada}
+          onChange={setPrecoArrobaEntrada}
+          placeholder="Ex: 280"
+        />
+        <InputField
+          label="Rendimento de entrada (%)"
+          type="number"
+          value={rendimentoEntrada}
+          onChange={setRendimentoEntrada}
+          placeholder="Ex: 50"
+        />
+      </div>
+
+      <SectionTitle>Custo do kg de MN por fase</SectionTitle>
+      <div style={styles.card}>
+        <InputField label="Adaptação (R$/kg)" type="number" value={custoAdaptacao} onChange={setCustoAdaptacao} placeholder="Ex: 1.10" />
+        <InputField label="Recria (R$/kg)" type="number" value={custoRecria} onChange={setCustoRecria} placeholder="Ex: 1.15" />
+        <InputField label="Crescimento (R$/kg)" type="number" value={custoCrescimento} onChange={setCustoCrescimento} placeholder="Ex: 1.20" />
+        <InputField label="Terminação (R$/kg)" type="number" value={custoTerminacao} onChange={setCustoTerminacao} placeholder="Ex: 1.35" />
+        <div style={{ fontSize: 11.5, color: "#9A9A94", padding: "0 0 10px" }}>
+          Ao lançar o consumo do dia, basta escolher a dieta — o custo é preenchido automaticamente.
+        </div>
+      </div>
+
+      <SectionTitle>Saída</SectionTitle>
+      <div style={styles.card}>
+        <InputField label="Data de saída" type="date" value={dataSaida} onChange={setDataSaida} />
+        <InputField label="Peso vivo médio (kg/cab.)" type="number" value={pesoSaidaVivo} onChange={alterarPesoSaidaVivo} min="0" step="0.01" />
+        <InputField
+          label="Peso vivo total (kg)"
+          type="number"
+          value={pesoSaidaVivoTotal}
+          onChange={alterarPesoSaidaVivoTotal}
+          min="0"
+          step="0.01"
+        />
+        <InputField
+          label="Peso morto médio (kg/cab.)"
+          type="number"
+          value={pesoSaidaMorto}
+          onChange={alterarPesoSaidaMorto}
+          placeholder="Ex: 295"
+          min="0"
+          step="0.01"
+        />
+        <InputField
+          label="Peso morto total (kg)"
+          type="number"
+          value={pesoSaidaMortoTotal}
+          onChange={alterarPesoSaidaMortoTotal}
+          min="0"
+          step="0.01"
+        />
+        <InputField
+          label="Rendimento de carcaça (%)"
+          type="number"
+          value={rendimentoCarcaca}
+          onChange={alterarRendimentoCarcaca}
+          placeholder="Ex: 54.5"
+          min="0"
+          max="100"
+          step="0.01"
+        />
+        <InputField
+          label="Preço de venda da arroba (R$/@)"
+          type="number"
+          value={precoVendaArroba}
+          onChange={setPrecoVendaArroba}
+          placeholder="Ex: 310"
+        />
+        <InputField
+          label="Custo operacional (R$/cab/dia)"
+          type="number"
+          value={custoOperacional}
+          onChange={setCustoOperacional}
+          placeholder="Ex: 0.50"
+        />
+      </div>
+
+      <div style={styles.card}>
+        <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Notas gerais sobre o lote" />
+      </div>
+
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Salvar lote"}
+      </PrimaryButton>
+
+      {editando && onDelete && (
+        <button onClick={onDelete} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir lote
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FormPesagem({ lote, onCancel, onSave }) {
+  const hoje = dataLocalFazenda(lote?.fuso_horario || "America/Sao_Paulo");
+  const [data, setData] = useState(hoje);
+  const [peso, setPeso] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const valido = data && data <= hoje && data >= lote.data_entrada && (!lote.data_saida || data <= lote.data_saida) && numeroDecimal(peso) > 0;
+
+  async function handleSave() {
+    setSalvando(true);
+    try {
+      await onSave({ data, peso: Number(peso) });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title="Nova pesagem" onBack={onCancel} />
+      <div style={styles.card}>
+        <InputField label="Data *" type="date" min={lote.data_entrada} max={lote.data_saida && lote.data_saida < hoje ? lote.data_saida : hoje} value={data} onChange={setData} />
+        <InputField label="Peso (kg) *" type="number" value={peso} onChange={setPeso} placeholder="Ex: 480" />
+      </div>
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : "Salvar pesagem"}
+      </PrimaryButton>
+    </div>
+  );
+}
+
+function mensagemErroMovimentacao(erro) {
+  const mensagem = String(erro?.message || "");
+  if (erro?.status === 401 || /jwt expired|invalid jwt|sessão expirou/i.test(mensagem)) {
+    return "Sua sessão expirou. Entre novamente para continuar o lançamento.";
+  }
+  if (erro?.code === "42501" || /row.level security|permission denied/i.test(mensagem)) {
+    return "Seu acesso não permite concluir este lançamento. Peça ao responsável pela fazenda para conferir sua permissão.";
+  }
+  if (/entrada adicional não pode ser anterior/i.test(mensagem)) {
+    return "A data desta entrada deve ser igual ou posterior à entrada inicial do lote.";
+  }
+  if (/adicionar animais a um lote finalizado/i.test(mensagem)) {
+    return "Este lote já está finalizado. Confira o lote escolhido antes de registrar a entrada.";
+  }
+  if (/fetch|network|load failed|timeout|timed out/i.test(mensagem)) {
+    return "A conexão falhou durante o lançamento. Os campos foram mantidos. Quando a conexão voltar, confira o histórico do lote antes de tentar novamente.";
+  }
+  return "Não foi possível concluir o lançamento. Os campos foram mantidos. Confira o histórico do lote antes de tentar novamente. Se o problema continuar, avise o responsável pela fazenda.";
+}
+
+// Acrescenta animais a um lote que ainda está em formação.
+function FormEntrada({ dataEntradaLote, onCancel, onSave, entradaExistente = null, onExcluir }) {
+  const editando = Boolean(entradaExistente);
+  const hoje = new Date().toISOString().slice(0, 10);
+  const [data, setData] = useState(entradaExistente?.data || hoje);
+  const [numCabecas, setNumCabecas] = useState(entradaExistente?.num_cabecas != null ? String(entradaExistente.num_cabecas) : "");
+  const [pesoEntrada, setPesoEntrada] = useState(entradaExistente?.peso_entrada != null ? String(entradaExistente.peso_entrada) : "");
+  const [gmdEsperado, setGmdEsperado] = useState(entradaExistente?.gmd_esperado != null ? String(entradaExistente.gmd_esperado) : "");
+  const [pesoEsperadoAbate, setPesoEsperadoAbate] = useState(
+    entradaExistente?.peso_esperado_abate != null ? String(entradaExistente.peso_esperado_abate) : ""
+  );
+  const [precoArrobaEntrada, setPrecoArrobaEntrada] = useState(
+    entradaExistente?.preco_arroba_entrada != null ? String(entradaExistente.preco_arroba_entrada) : ""
+  );
+  const [rendimentoEntrada, setRendimentoEntrada] = useState(
+    entradaExistente?.rendimento_entrada != null ? String(entradaExistente.rendimento_entrada) : ""
+  );
+  const [observacoes, setObservacoes] = useState(entradaExistente?.observacoes || "");
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
+  const quantidade = Number(numCabecas);
+  const peso = Number(pesoEntrada);
+  const valido = data && data >= dataEntradaLote && data <= hoje && Number.isInteger(quantidade) && quantidade > 0 && peso > 0;
+
+  async function handleSave() {
+    if (!valido) return;
+    setErro("");
+    setSalvando(true);
+    try {
+      await onSave({
+        data,
+        num_cabecas: quantidade,
+        peso_entrada: peso,
+        gmd_esperado: gmdEsperado !== "" ? Number(gmdEsperado) : null,
+        peso_esperado_abate: pesoEsperadoAbate !== "" ? Number(pesoEsperadoAbate) : null,
+        preco_arroba_entrada: precoArrobaEntrada !== "" ? Number(precoArrobaEntrada) : null,
+        rendimento_entrada: rendimentoEntrada !== "" ? Number(rendimentoEntrada) : null,
+        observacoes: observacoes.trim() || null,
+      });
+    } catch (error) {
+      setErro(mensagemErroMovimentacao(error));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title={editando ? "Editar entrada" : "Adicionar animais ao lote"} onBack={onCancel} />
+      <div style={styles.card}>
+        <InputField label="Data da entrada *" type="date" value={data} onChange={setData} min={dataEntradaLote} max={hoje} />
+        <InputField label="Nº de cabeças *" type="number" value={numCabecas} onChange={setNumCabecas} placeholder="Ex: 25" min="1" step="1" />
+        <InputField label="Peso de entrada (kg) *" type="number" value={pesoEntrada} onChange={setPesoEntrada} placeholder="Ex: 410" min="1" />
+        <p style={{fontSize:12}}>O GMD previsto é definido por dieta. Registre os períodos no detalhe do lote após salvar.</p>
+        <InputField label="Peso esperado de abate (kg)" type="number" value={pesoEsperadoAbate} onChange={setPesoEsperadoAbate} placeholder="Ex: 550" />
+        <InputField label="Preço da arroba na entrada (R$/@)" type="number" value={precoArrobaEntrada} onChange={setPrecoArrobaEntrada} placeholder="Ex: 280" />
+        <InputField label="Rendimento de entrada (%)" type="number" value={rendimentoEntrada} onChange={setRendimentoEntrada} placeholder="Ex: 50" />
+        <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: complemento para formação do lote" />
+        <div style={{ fontSize: 12, color: "#7C7C76", padding: "6px 0 2px" }}>
+          A quantidade será somada ao total do lote a partir desta data.
+        </div>
+      </div>
+      {erro && <div role="alert" style={styles.errorBox}>{erro}</div>}
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Registrar entrada"}
+      </PrimaryButton>
+      {editando && onExcluir && (
+        <button onClick={onExcluir} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir entrada
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Mantém pesos médios, pesos totais e rendimento sincronizados a partir do
+// último campo editado pelo usuário. A quantidade de cabeças liga total e média.
+function useCalculoCarcaca({
+  numCabecasInicial,
+  pesoVivoMedioInicial,
+  pesoVivoTotalInicial,
+  pesoMortoMedioInicial,
+  pesoMortoTotalInicial,
+  rendimentoInicial,
+}) {
+  const pesoVivoMedioCalculado = pesoVivoMedioInicial != null
+    ? Number(pesoVivoMedioInicial)
+    : calcularPesoMedioSaida(pesoVivoTotalInicial, numCabecasInicial);
+  const pesoVivoTotalCalculado = pesoVivoTotalInicial != null
+    ? Number(pesoVivoTotalInicial)
+    : calcularPesoTotalSaida(pesoVivoMedioCalculado, numCabecasInicial);
+  const pesoMortoMedioCalculado = pesoMortoMedioInicial != null
+    ? Number(pesoMortoMedioInicial)
+    : pesoMortoTotalInicial != null
+      ? calcularPesoMedioSaida(pesoMortoTotalInicial, numCabecasInicial)
+      : calcularPesoMorto(pesoVivoMedioCalculado, rendimentoInicial);
+  const pesoMortoTotalCalculado = pesoMortoTotalInicial != null
+    ? Number(pesoMortoTotalInicial)
+    : calcularPesoTotalSaida(pesoMortoMedioCalculado, numCabecasInicial);
+  const texto = (valor) => valor != null ? String(valor) : "";
+
+  const [numCabecas, setNumCabecas] = useState(texto(numCabecasInicial));
+  const [pesoSaidaVivo, setPesoSaidaVivo] = useState(texto(pesoVivoMedioCalculado));
+  const [pesoSaidaVivoTotal, setPesoSaidaVivoTotal] = useState(texto(pesoVivoTotalCalculado));
+  const [pesoSaidaMorto, setPesoSaidaMorto] = useState(texto(pesoMortoMedioCalculado));
+  const [pesoSaidaMortoTotal, setPesoSaidaMortoTotal] = useState(texto(pesoMortoTotalCalculado));
+  const [rendimentoCarcaca, setRendimentoCarcaca] = useState(texto(rendimentoInicial));
+  const [origemPesoVivo, setOrigemPesoVivo] = useState(
+    pesoVivoMedioInicial != null ? "medio" : pesoVivoTotalInicial != null ? "total" : null
+  );
+  const [origemPesoMorto, setOrigemPesoMorto] = useState(
+    pesoMortoMedioInicial != null ? "medio" : pesoMortoTotalInicial != null ? "total" : null
+  );
+  const [campoBaseCarcaca, setCampoBaseCarcaca] = useState(
+    pesoMortoMedioInicial != null || pesoMortoTotalInicial != null
+      ? "peso_morto"
+      : rendimentoInicial != null ? "rendimento" : null
+  );
+
+  function sincronizarCarcacaAPartirDoVivo(novoPesoVivoMedio, cabecas = numCabecas) {
+    if (campoBaseCarcaca === "peso_morto") {
+      const rendimento = calcularRendimentoCarcaca(novoPesoVivoMedio, pesoSaidaMorto);
+      setRendimentoCarcaca(texto(rendimento));
+    } else if (campoBaseCarcaca === "rendimento") {
+      const pesoMortoMedio = calcularPesoMorto(novoPesoVivoMedio, rendimentoCarcaca);
+      setPesoSaidaMorto(texto(pesoMortoMedio));
+      setPesoSaidaMortoTotal(texto(calcularPesoTotalSaida(pesoMortoMedio, cabecas)));
+    }
+  }
+
+  function alterarNumCabecas(valor) {
+    setNumCabecas(valor);
+
+    let novoPesoVivoMedio = pesoSaidaVivo;
+    if (origemPesoVivo === "total") {
+      novoPesoVivoMedio = texto(calcularPesoMedioSaida(pesoSaidaVivoTotal, valor));
+      setPesoSaidaVivo(novoPesoVivoMedio);
+    } else if (origemPesoVivo === "medio") {
+      setPesoSaidaVivoTotal(texto(calcularPesoTotalSaida(pesoSaidaVivo, valor)));
+    }
+
+    if (campoBaseCarcaca === "rendimento") {
+      const pesoMortoMedio = calcularPesoMorto(novoPesoVivoMedio, rendimentoCarcaca);
+      setPesoSaidaMorto(texto(pesoMortoMedio));
+      setPesoSaidaMortoTotal(texto(calcularPesoTotalSaida(pesoMortoMedio, valor)));
+    } else if (campoBaseCarcaca === "peso_morto") {
+      let novoPesoMortoMedio = pesoSaidaMorto;
+      if (origemPesoMorto === "total") {
+        novoPesoMortoMedio = texto(calcularPesoMedioSaida(pesoSaidaMortoTotal, valor));
+        setPesoSaidaMorto(novoPesoMortoMedio);
+      } else if (origemPesoMorto === "medio") {
+        setPesoSaidaMortoTotal(texto(calcularPesoTotalSaida(pesoSaidaMorto, valor)));
+      }
+      setRendimentoCarcaca(texto(calcularRendimentoCarcaca(novoPesoVivoMedio, novoPesoMortoMedio)));
+    }
+  }
+
+  function alterarPesoSaidaVivo(valor) {
+    setPesoSaidaVivo(valor);
+    setOrigemPesoVivo("medio");
+    setPesoSaidaVivoTotal(texto(calcularPesoTotalSaida(valor, numCabecas)));
+    sincronizarCarcacaAPartirDoVivo(valor);
+  }
+
+  function alterarPesoSaidaVivoTotal(valor) {
+    setPesoSaidaVivoTotal(valor);
+    setOrigemPesoVivo("total");
+    const pesoVivoMedio = calcularPesoMedioSaida(valor, numCabecas);
+    setPesoSaidaVivo(texto(pesoVivoMedio));
+    sincronizarCarcacaAPartirDoVivo(pesoVivoMedio);
+  }
+
+  function alterarPesoSaidaMorto(valor) {
+    setPesoSaidaMorto(valor);
+    setOrigemPesoMorto("medio");
+    setCampoBaseCarcaca("peso_morto");
+    setPesoSaidaMortoTotal(texto(calcularPesoTotalSaida(valor, numCabecas)));
+    setRendimentoCarcaca(texto(calcularRendimentoCarcaca(pesoSaidaVivo, valor)));
+  }
+
+  function alterarPesoSaidaMortoTotal(valor) {
+    setPesoSaidaMortoTotal(valor);
+    setOrigemPesoMorto("total");
+    setCampoBaseCarcaca("peso_morto");
+    const pesoMortoMedio = calcularPesoMedioSaida(valor, numCabecas);
+    setPesoSaidaMorto(texto(pesoMortoMedio));
+    setRendimentoCarcaca(texto(calcularRendimentoCarcaca(pesoSaidaVivo, pesoMortoMedio)));
+  }
+
+  function alterarRendimentoCarcaca(valor) {
+    setRendimentoCarcaca(valor);
+    setCampoBaseCarcaca("rendimento");
+    const pesoMortoMedio = calcularPesoMorto(pesoSaidaVivo, valor);
+    setPesoSaidaMorto(texto(pesoMortoMedio));
+    setPesoSaidaMortoTotal(texto(calcularPesoTotalSaida(pesoMortoMedio, numCabecas)));
+  }
+
+  return {
+    numCabecas,
+    pesoSaidaVivo,
+    pesoSaidaVivoTotal,
+    pesoSaidaMorto,
+    pesoSaidaMortoTotal,
+    rendimentoCarcaca,
+    alterarNumCabecas,
+    alterarPesoSaidaVivo,
+    alterarPesoSaidaVivoTotal,
+    alterarPesoSaidaMorto,
+    alterarPesoSaidaMortoTotal,
+    alterarRendimentoCarcaca,
+  };
+}
+
+// Registra a saída de parte das cabeças do lote (vai tirando boi aos poucos
+// até esvaziar). Quando o número de cabeças bater com o que resta, o lote
+// é finalizado sozinho — não precisa editar o lote pra fechar.
+function FormSaida({ cabecasRestantes, onCancel, onSave, tipo = "venda", titulo = "Registrar saída", textoBotao = "Salvar saída", saidaExistente = null, onExcluir, modalidadeInicial = "saida" }) {
+  const editando = Boolean(saidaExistente);
+  // Na edição, o chamador já calcula o saldo excluindo a própria saída.
+  const tetoCabecas = cabecasRestantes;
+  const [data, setData] = useState(saidaExistente?.data || new Date().toISOString().slice(0, 10));
+  const {
+    numCabecas,
+    pesoSaidaVivo,
+    pesoSaidaVivoTotal,
+    pesoSaidaMorto,
+    pesoSaidaMortoTotal,
+    rendimentoCarcaca,
+    alterarNumCabecas,
+    alterarPesoSaidaVivo,
+    alterarPesoSaidaVivoTotal,
+    alterarPesoSaidaMorto,
+    alterarPesoSaidaMortoTotal,
+    alterarRendimentoCarcaca,
+  } = useCalculoCarcaca({
+    numCabecasInicial: saidaExistente?.num_cabecas != null ? saidaExistente.num_cabecas : cabecasRestantes,
+    pesoVivoMedioInicial: saidaExistente?.peso_saida_vivo,
+    pesoVivoTotalInicial: saidaExistente?.peso_saida_vivo_total,
+    pesoMortoMedioInicial: saidaExistente?.peso_saida_morto,
+    pesoMortoTotalInicial: saidaExistente?.peso_saida_morto_total,
+    rendimentoInicial: saidaExistente?.rendimento_carcaca,
+  });
+  const [precoVendaArroba, setPrecoVendaArroba] = useState(saidaExistente?.preco_venda_arroba != null ? String(saidaExistente.preco_venda_arroba) : "");
+  const [custoOperacional, setCustoOperacional] = useState(saidaExistente?.custo_operacional != null ? String(saidaExistente.custo_operacional) : "");
+  const [modalidade, setModalidade] = useState(saidaExistente ? modalidadeSaida(saidaExistente) || modalidadeInicial : modalidadeInicial);
+  const [observacoes, setObservacoes] = useState(observacaoSemModalidade(saidaExistente?.observacoes));
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
+  const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= tetoCabecas;
+  const valido = data && numCabecasValido;
+
+  async function handleSave() {
+    setErro("");
+    setSalvando(true);
+    try {
+      await onSave({
+        data,
+        num_cabecas: Number(numCabecas),
+        tipo,
+        peso_saida_vivo: pesoSaidaVivo !== "" ? Number(pesoSaidaVivo) : null,
+        peso_saida_vivo_total: pesoSaidaVivoTotal !== "" ? Number(pesoSaidaVivoTotal) : null,
+        peso_saida_morto: pesoSaidaMorto !== "" ? Number(pesoSaidaMorto) : null,
+        peso_saida_morto_total: pesoSaidaMortoTotal !== "" ? Number(pesoSaidaMortoTotal) : null,
+        rendimento_carcaca: rendimentoCarcaca !== "" ? Number(rendimentoCarcaca) : null,
+        preco_venda_arroba: precoVendaArroba !== "" ? Number(precoVendaArroba) : null,
+        custo_operacional: custoOperacional !== "" ? Number(custoOperacional) : null,
+        observacoes: tipo === "venda" ? observacaoMovimento(modalidade, observacoes) : observacoes || null,
+      });
+    } catch (error) {
+      setErro(mensagemErroMovimentacao(error));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title={editando ? "Editar saída" : titulo} onBack={onCancel} />
+      <div style={styles.card}>
+        {tipo === "venda" && <SelectField
+          label="Movimentação"
+          value={modalidade}
+          onChange={setModalidade}
+          options={[{ value: "saida", label: "Saída (sem abate)" }, { value: "abate", label: "Abate" }]}
+        />}
+        <InputField label="Data *" type="date" value={data} onChange={setData} />
+        <InputField
+          label={`Nº de cabeças que saíram * (máx. ${tetoCabecas})`}
+          type="number"
+          value={numCabecas}
+          onChange={alterarNumCabecas}
+          placeholder={`Máx. ${tetoCabecas}`}
+        />
+        {numCabecas !== "" && !numCabecasValido && (
+          <div style={{ fontSize: 11.5, color: "#B8763E", padding: "0 0 8px" }}>
+            Só cabem {tetoCabecas} cabeça(s) nesse lote.
+          </div>
+        )}
+        <InputField label="Peso vivo médio (kg/cab.)" type="number" value={pesoSaidaVivo} onChange={alterarPesoSaidaVivo} placeholder="Ex: 540" min="0" step="0.01" />
+        <InputField
+          label="Peso vivo total da saída (kg)"
+          type="number"
+          value={pesoSaidaVivoTotal}
+          onChange={alterarPesoSaidaVivoTotal}
+          placeholder="Ex: 6480"
+          min="0"
+          step="0.01"
+        />
+        <InputField
+          label="Peso morto médio (kg/cab.)"
+          type="number"
+          value={pesoSaidaMorto}
+          onChange={alterarPesoSaidaMorto}
+          placeholder="Ex: 295"
+          min="0"
+          step="0.01"
+        />
+        <InputField
+          label="Peso morto total da saída (kg)"
+          type="number"
+          value={pesoSaidaMortoTotal}
+          onChange={alterarPesoSaidaMortoTotal}
+          placeholder="Ex: 3564"
+          min="0"
+          step="0.01"
+        />
+        <InputField
+          label="Rendimento de carcaça (%)"
+          type="number"
+          value={rendimentoCarcaca}
+          onChange={alterarRendimentoCarcaca}
+          placeholder="Ex: 54.5"
+          min="0"
+          max="100"
+          step="0.01"
+        />
+        <InputField
+          label="Preço de venda da arroba (R$/@)"
+          type="number"
+          value={precoVendaArroba}
+          onChange={setPrecoVendaArroba}
+          placeholder="Ex: 310"
+        />
+        <InputField
+          label="Custo operacional (R$/cab/dia)"
+          type="number"
+          value={custoOperacional}
+          onChange={setCustoOperacional}
+          placeholder="Ex: 0.50"
+        />
+      </div>
+      <div style={styles.card}>
+        <TextAreaField
+          label="Observações"
+          value={observacoes}
+          onChange={setObservacoes}
+          placeholder={tipo === "doenca_trauma" ? "Ex: doença respiratória, fratura de membro" : "Ex: venda parcial, frigorífico X"}
+        />
+      </div>
+      {erro && <div role="alert" style={styles.errorBox}>{erro}</div>}
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : textoBotao}
+      </PrimaryButton>
+      {editando && onExcluir && (
+        <button onClick={onExcluir} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir saída
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Registra morte de animais do lote — mesma mecânica de saidas_lote (o
+// trigger do banco desconta as cabeças e pode finalizar o lote sozinho se
+// zerar), mas sem os campos econômicos da venda: um óbito não gera receita,
+// então calcularFechamentoCusto (lib/confinamento.js) exclui tipo "morte"
+// das arrobas vendidas/receita/custo operacional pra não distorcer o
+// fechamento financeiro do lote.
+function FormMorte({ cabecasRestantes, onCancel, onSave, saidaExistente = null, onExcluir }) {
+  const editando = Boolean(saidaExistente);
+  const tetoCabecas = cabecasRestantes;
+  const [data, setData] = useState(saidaExistente?.data || new Date().toISOString().slice(0, 10));
+  const [numCabecas, setNumCabecas] = useState(saidaExistente?.num_cabecas != null ? String(saidaExistente.num_cabecas) : "");
+  const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
+  const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= tetoCabecas;
+  const valido = data && numCabecasValido;
+
+  async function handleSave() {
+    setErro("");
+    setSalvando(true);
+    try {
+      await onSave({
+        data,
+        num_cabecas: Number(numCabecas),
+        tipo: "morte",
+        observacoes: observacoes || null,
+      });
+    } catch (error) {
+      setErro(mensagemErroMovimentacao(error));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title={editando ? "Editar morte" : "Registrar morte"} onBack={onCancel} />
+      <div style={styles.card}>
+        <InputField label="Data *" type="date" value={data} onChange={setData} />
+        <InputField
+          label={`Nº de cabeças * (máx. ${tetoCabecas})`}
+          type="number"
+          value={numCabecas}
+          onChange={setNumCabecas}
+          placeholder={`Máx. ${tetoCabecas}`}
+        />
+        {numCabecas !== "" && !numCabecasValido && (
+          <div style={{ fontSize: 11.5, color: "#B8763E", padding: "0 0 8px" }}>
+            Só cabem {tetoCabecas} cabeça(s) nesse lote.
+          </div>
+        )}
+      </div>
+      <div style={styles.card}>
+        <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: causa da morte" />
+      </div>
+      {erro && <div role="alert" style={styles.errorBox}>{erro}</div>}
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Registrar morte"}
+      </PrimaryButton>
+      {editando && onExcluir && (
+        <button onClick={onExcluir} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir morte
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Move parte das cabeças de um lote pra outro (ex: sobrou de uma venda
+// parcial e vai juntar com outro grupo). Grava como uma saída tipo
+// "transferencia" no lote de origem (sem preço de venda — não é receita) e
+// uma entrada adicional no lote de destino, levando peso e custo médio já
+// investidos nesses animais junto com a quantidade de cabeças — ver
+// calcularCustoAcumulado em lib/confinamento.js, que soma esse custo
+// herdado ao custo acumulado do lote de destino.
+function FormTransferencia({
+  cabecasRestantes, lotesDestino, currais = [], custoSugerido, pesoSugerido, onCancel, onSave,
+  transferenciaExistente = null, onExcluir,
+}) {
+  const editando = Boolean(transferenciaExistente);
+  const { saida: saidaExistente, entrada: entradaExistente } = transferenciaExistente || {};
+  const [loteDestinoId, setLoteDestinoId] = useState(entradaExistente?.lote_id || lotesDestino[0]?.id || "");
+  const [data, setData] = useState(saidaExistente?.data || new Date().toISOString().slice(0, 10));
+  const [numCabecas, setNumCabecas] = useState(
+    saidaExistente?.num_cabecas != null ? String(saidaExistente.num_cabecas) : (cabecasRestantes != null ? String(cabecasRestantes) : "")
+  );
+  const [pesoVivo, setPesoVivo] = useState(
+    saidaExistente?.peso_saida_vivo != null
+      ? String(saidaExistente.peso_saida_vivo)
+      : pesoSugerido != null ? String(Math.round(pesoSugerido * 10) / 10) : ""
+  );
+  const [custoAcumulado, setCustoAcumulado] = useState(
+    entradaExistente?.custo_acumulado_herdado != null
+      ? String(entradaExistente.custo_acumulado_herdado)
+      : custoSugerido != null ? String(Math.round(custoSugerido * 100) / 100) : ""
+  );
+  const [observacoes, setObservacoes] = useState(saidaExistente?.observacoes || "");
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
+  const nomeCurralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
+  const destinosOrdenados = [...lotesDestino].sort((a, b) => {
+    const curralA = nomeCurralPorId.get(a.curral_id) || "Sem curral";
+    const curralB = nomeCurralPorId.get(b.curral_id) || "Sem curral";
+    const porCurral = curralA.localeCompare(curralB, "pt-BR", { numeric: true });
+    return porCurral || a.nome.localeCompare(b.nome, "pt-BR", { numeric: true });
+  });
+  const numCabecasValido = numCabecas !== "" && Number(numCabecas) > 0 && Number(numCabecas) <= cabecasRestantes;
+  const valido = data && numCabecasValido && loteDestinoId;
+
+  async function handleSave() {
+    if (!valido) return;
+    setErro("");
+    setSalvando(true);
+    try {
+      await onSave({
+        loteDestinoId,
+        data,
+        num_cabecas: Number(numCabecas),
+        peso_vivo: pesoVivo !== "" ? Number(pesoVivo) : null,
+        custo_acumulado_herdado: custoAcumulado !== "" ? Number(custoAcumulado) : null,
+        observacoes: observacoes.trim() || null,
+      });
+    } catch (error) {
+      setErro(mensagemErroMovimentacao(error));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  if (lotesDestino.length === 0) {
+    return (
+      <div>
+        <BackHeader title={editando ? "Editar troca de lote" : "Trocar animais de lote"} onBack={onCancel} />
+        <EmptyHint text="Não há outro lote ativo deste cliente pra receber os animais. Cadastre o lote de destino primeiro." />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <BackHeader title={editando ? "Editar troca de lote" : "Trocar animais de lote"} onBack={onCancel} />
+      <div style={styles.card}>
+        <SelectField
+          label="Curral / lote de destino *"
+          value={loteDestinoId}
+          onChange={setLoteDestinoId}
+          options={destinosOrdenados.map((lote) => ({
+            value: lote.id,
+            label: `${nomeCurralPorId.get(lote.curral_id) || "Sem curral"} — ${lote.nome}`,
+          }))}
+        />
+        <div style={{ fontSize: 11.5, color: "#7C7C76", padding: "0 0 8px" }}>
+          Ao escolher o curral, os animais entram automaticamente no lote vinculado mostrado ao lado.
+        </div>
+        <InputField label="Data da troca *" type="date" value={data} onChange={setData} />
+        <InputField
+          label={`Nº de cabeças * (máx. ${cabecasRestantes})`}
+          type="number"
+          value={numCabecas}
+          onChange={setNumCabecas}
+          placeholder={`Máx. ${cabecasRestantes}`}
+        />
+        {numCabecas !== "" && !numCabecasValido && (
+          <div style={{ fontSize: 11.5, color: "#B8763E", padding: "0 0 8px" }}>
+            Só cabem {cabecasRestantes} cabeça(s) nesse lote.
+          </div>
+        )}
+        <InputField
+          label="Peso vivo médio no momento da troca (kg/cab.)"
+          type="number"
+          value={pesoVivo}
+          onChange={setPesoVivo}
+          placeholder="Ex: 420"
+        />
+        <InputField
+          label="Custo de produção acumulado por cabeça (R$)"
+          type="number"
+          value={custoAcumulado}
+          onChange={setCustoAcumulado}
+          placeholder="Ex: 1850"
+        />
+        <div style={{ fontSize: 11.5, color: "#7C7C76", padding: "0 0 6px" }}>
+          {custoSugerido != null
+            ? "Sugestão de alimentação e custos operacionais acumulados até hoje. Pode ajustar o valor para a data da transferência."
+            : "Informe a alimentação e os custos operacionais acumulados por cabeça até a transferência, sem o valor de compra."}
+          {" "}Esse valor soma ao custo acumulado do lote de destino, em vez de recomeçar do zero.
+        </div>
+      </div>
+      <div style={styles.card}>
+        <TextAreaField label="Observações" value={observacoes} onChange={setObservacoes} placeholder="Ex: sobra da venda parcial de 12/08" />
+      </div>
+      {erro && <div role="alert" style={styles.errorBox}>{erro}</div>}
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Trocar animais de lote"}
+      </PrimaryButton>
+      {editando && onExcluir && (
+        <button onClick={onExcluir} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir troca de lote
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FormConsumo({ lote, cliente, consumo, consumos = [], saidas = [], entradas = [], onCancel, onSave }) {
+  const editando = Boolean(consumo);
+  const dataInicial = consumo?.data || new Date().toISOString().slice(0, 10);
+  const ultimoConsumo = [...consumos]
+    .filter((item) => item.id !== consumo?.id && item.data < dataInicial)
+    .sort((a, b) => String(b.data || "").localeCompare(String(a.data || "")))[0];
+  const [data, setData] = useState(dataInicial);
+  const [consumoTotalLote, setConsumoTotalLote] = useState(consumo?.consumo_total_lote != null ? String(consumo.consumo_total_lote) : "");
+  const [msDieta, setMsDieta] = useState(consumo?.ms_dieta != null ? String(consumo.ms_dieta) : "");
+  const [dietaFase, setDietaFase] = useState(consumo?.dieta_fase || null);
+  const [custoKgMn, setCustoKgMn] = useState(
+    consumo?.custo_kg_mn != null ? String(consumo.custo_kg_mn)
+      : ultimoConsumo?.custo_kg_mn != null ? String(ultimoConsumo.custo_kg_mn)
+      : consumo?.dieta_fase ? (custoKgMnDaFase(lote, consumo.dieta_fase) != null ? String(custoKgMnDaFase(lote, consumo.dieta_fase)) : "")
+      : ""
+  );
+  const [tipoCusto, setTipoCusto] = useState("mn");
+  const [salvando, setSalvando] = useState(false);
+  const valido = data && consumoTotalLote !== "";
+  const cabecasNaData = calcularCabecasNaData(lote, saidas, data, entradas);
+  const consumoMSPreview =
+    consumoTotalLote !== "" && msDieta !== "" && cabecasNaData > 0
+      ? (Number(consumoTotalLote) * (Number(msDieta) / 100)) / cabecasNaData
+      : null;
+  const custoDigitado = custoKgMn !== "" ? Number(custoKgMn) : null;
+  let custoMnEfetivo = custoDigitado;
+  if (tipoCusto === "ms" && custoDigitado != null && msDieta !== "") {
+    custoMnEfetivo = custoDigitado * (Number(msDieta) / 100);
+  }
+  const custoDiarioPreview =
+    consumoTotalLote !== "" && custoMnEfetivo != null && cabecasNaData > 0
+      ? (Number(consumoTotalLote) / cabecasNaData) * custoMnEfetivo
+      : null;
+
+  function selecionarFase(fase) {
+    setDietaFase(fase);
+    const ms = msDaFase(cliente, fase);
+    if (ms != null) setMsDieta(String(ms));
+    const custo = custoKgMnDaFase(lote, fase);
+    if (custo != null) setCustoKgMn(String(custo));
+  }
+
+  async function handleSave() {
+    setSalvando(true);
+    try {
+      await onSave({
+        data,
+        consumo_total_lote: Number(consumoTotalLote),
+        ms_dieta: msDieta !== "" ? Number(msDieta) : null,
+        dieta_fase: dietaFase,
+        custo_kg_mn: custoMnEfetivo,
+      });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title={editando ? "Editar consumo" : "Novo consumo"} onBack={onCancel} />
+      <div style={styles.card}>
+        <InputField label="Data *" type="date" value={data} onChange={setData} />
+        <div style={{ padding: "10px 0 4px" }}>
+          <div style={styles.fieldLabel}>Dieta fornecida</div>
+          <div style={{ ...styles.viewToggle, marginTop: 6 }}>
+            {FASES_DIETA.map((f) => (
+              <button
+                key={f.value}
+                onClick={() => selecionarFase(f.value)}
+                style={{
+                  ...styles.viewToggleBtn,
+                  ...(dietaFase === f.value ? styles.viewToggleBtnActive : {}),
+                  flex: 1, justifyContent: "center", padding: "7px 6px", fontSize: 12.5,
+                }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <InputField
+          label="Consumo de matéria natural (kg/dia, lote) *"
+          type="number"
+          value={consumoTotalLote}
+          onChange={setConsumoTotalLote}
+          placeholder="Total do lote/dia"
+        />
+        <InputField label="MS da dieta (%)" type="number" value={msDieta} onChange={setMsDieta} placeholder="Ex: 65" />
+        <div style={{ padding: "10px 0 4px" }}>
+          <div style={styles.fieldLabel}>Custo informado em</div>
+          <div style={{ ...styles.viewToggle, marginTop: 6, maxWidth: 220 }}>
+            <button
+              onClick={() => setTipoCusto("mn")}
+              style={{ ...styles.viewToggleBtn, ...(tipoCusto === "mn" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", fontSize: 12.5 }}
+            >
+              R$/kg MN
+            </button>
+            <button
+              onClick={() => setTipoCusto("ms")}
+              style={{ ...styles.viewToggleBtn, ...(tipoCusto === "ms" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", fontSize: 12.5 }}
+            >
+              R$/kg MS
+            </button>
+          </div>
+        </div>
+        <InputField label={`Custo do kg de ${tipoCusto === "mn" ? "MN" : "MS"} (R$)`} type="number" value={custoKgMn} onChange={setCustoKgMn} placeholder="Ex: 0.35" />
+        <Field
+          label="Consumo de MS por cabeça (calculado)"
+          value={consumoMSPreview != null ? `${consumoMSPreview.toFixed(2)} kg/dia` : "Preencha consumo e MS"}
+          highlight={consumoMSPreview != null}
+        />
+        <Field
+          label="Custo diário por animal (calculado)"
+          value={
+            custoMnEfetivo == null
+              ? "Preencha o custo do kg"
+              : consumoTotalLote === ""
+              ? "Preencha o consumo para calcular"
+              : formatBRL(custoDiarioPreview)
+          }
+          highlight={custoDiarioPreview != null}
+        />
+      </div>
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : editando ? "Salvar alterações" : "Salvar consumo"}
+      </PrimaryButton>
+    </div>
+  );
+}
+
+function preencherComUltimoConsumo(lotesAtivos, consumos, dataRef) {
+  const resultado = {};
+  for (const lote of lotesAtivos) {
+    const consumosLote = consumos
+      .filter((c) => c.lote_id === lote.id && c.data < dataRef)
+      .sort((a, b) => b.data.localeCompare(a.data));
+    const ultimo = consumosLote[0];
+    const custoPorFase = {};
+    for (const fase of ["adaptacao", "recria", "crescimento", "terminacao"]) {
+      const custoLote = custoKgMnDaFase(lote, fase);
+      const ultimoDaFase = consumosLote.find((c) => c.dieta_fase === fase);
+      custoPorFase[fase] = ultimoDaFase?.custo_kg_mn != null ? String(ultimoDaFase.custo_kg_mn)
+        : ultimo?.custo_kg_mn != null ? String(ultimo.custo_kg_mn)
+        : custoLote != null ? String(custoLote) : "";
+    }
+    resultado[lote.id] = {
+      consumo: "",
+      ms: ultimo?.ms_dieta != null ? String(ultimo.ms_dieta) : "",
+      fase: ultimo?.dieta_fase || "",
+      custos: custoPorFase,
+    };
+  }
+  return resultado;
+}
+
+// Lançamento do consumo do dia para todos os lotes ativos de uma vez —
+// uma data só, um cartão por lote (só quem tiver o consumo preenchido é
+// salvo).
+function FormConsumoEmMassa({ lotesAtivos, saidasPorLote = {}, entradasPorLote = {}, cliente, onCancel, onSalvarLote, onConcluido, consumos = [] }) {
+  const [data, setData] = useState(new Date().toISOString().slice(0, 10));
+  const [valores, setValores] = useState(() => preencherComUltimoConsumo(lotesAtivos, consumos, new Date().toISOString().slice(0, 10)));
+  const [faseGlobal, setFaseGlobal] = useState(null);
+  const [msGlobal, setMsGlobal] = useState("");
+  const [custosGlobais, setCustosGlobais] = useState({ adaptacao: "", recria: "", crescimento: "", terminacao: "" });
+  const [tipoCusto, setTipoCusto] = useState("mn");
+  const [salvando, setSalvando] = useState(false);
+  const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(cliente?.id);
+
+  function handleDataChange(novaData) {
+    setData(novaData);
+    setValores((prev) => {
+      const preenchido = preencherComUltimoConsumo(lotesAtivos, consumos, novaData);
+      const novo = {};
+      for (const lote of lotesAtivos) {
+        const anterior = prev[lote.id] || {};
+        const auto = preenchido[lote.id] || {};
+        novo[lote.id] = {
+          consumo: anterior.consumo || "",
+          ms: anterior.ms || auto.ms || "",
+          fase: anterior.fase || auto.fase || "",
+          custos: anterior.custos || auto.custos || {},
+        };
+      }
+      return novo;
+    });
+  }
+
+  const lotesOrdenados = lotesAtivos
+    .map((lote) => ({ lote }))
+    .sort(compararLotes(ordenacao))
+    .map((item) => item.lote);
+
+  function setCampo(loteId, campo, valor) {
+    setValores((v) => ({ ...v, [loteId]: { ...v[loteId], [campo]: valor } }));
+  }
+
+  // Digitou a MS uma vez aqui em cima? Aplica na hora pra todos os lotes —
+  // não precisa repetir o mesmo número lote por lote.
+  function aplicarMsATodos(valor) {
+    setMsGlobal(valor);
+    setValores((v) => {
+      const novo = { ...v };
+      for (const lote of lotesAtivos) {
+        novo[lote.id] = { ...novo[lote.id], ms: valor };
+      }
+      return novo;
+    });
+  }
+
+  function aplicarCustoGlobalDaFase(fase, valor) {
+    setCustosGlobais((cg) => ({ ...cg, [fase]: valor }));
+    setValores((v) => {
+      const novo = { ...v };
+      for (const lote of lotesAtivos) {
+        const custos = { ...(novo[lote.id]?.custos || {}) };
+        custos[fase] = valor;
+        novo[lote.id] = { ...novo[lote.id], custos };
+      }
+      return novo;
+    });
+  }
+
+  function selecionarFase(loteId, fase) {
+    const ms = msDaFase(cliente, fase);
+    setValores((v) => ({
+      ...v,
+      [loteId]: {
+        ...v[loteId],
+        fase,
+        ms: ms != null ? String(ms) : v[loteId]?.ms,
+      },
+    }));
+  }
+
+  function aplicarFaseATodos(fase) {
+    setFaseGlobal(fase);
+    const ms = msDaFase(cliente, fase);
+    if (ms != null) setMsGlobal(String(ms));
+    setValores((v) => {
+      const novo = { ...v };
+      for (const lote of lotesAtivos) {
+        novo[lote.id] = {
+          ...novo[lote.id],
+          fase,
+          ms: ms != null ? String(ms) : novo[lote.id]?.ms,
+        };
+      }
+      return novo;
+    });
+  }
+
+  const linhasPreenchidas = lotesAtivos.filter((l) => valores[l.id]?.consumo);
+  const valido = Boolean(data) && linhasPreenchidas.length > 0;
+
+  async function handleSave() {
+    setSalvando(true);
+    try {
+      for (const lote of linhasPreenchidas) {
+        const { consumo, ms, fase, custos = {} } = valores[lote.id];
+        const custoDigitado = fase && custos[fase] ? Number(custos[fase]) : null;
+        let custoMn = custoDigitado;
+        if (tipoCusto === "ms" && custoMn != null && ms) {
+          custoMn = custoMn * (Number(ms) / 100);
+        }
+        await onSalvarLote(lote.id, {
+          data,
+          consumo_total_lote: Number(consumo),
+          ms_dieta: ms ? Number(ms) : null,
+          dieta_fase: fase || null,
+          custo_kg_mn: custoMn,
+        });
+      }
+      onConcluido();
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title="Lançar consumo do dia" onBack={onCancel} />
+      <div style={styles.card}>
+        <InputField label="Data *" type="date" value={data} onChange={handleDataChange} />
+        <div style={{ padding: "10px 0 14px" }}>
+          <div style={styles.fieldLabel}>Dieta de hoje (aplica a todos os lotes)</div>
+          <div style={{ ...styles.viewToggle, marginTop: 6 }}>
+            {FASES_DIETA.map((f) => (
+              <button
+                key={f.value}
+                onClick={() => aplicarFaseATodos(f.value)}
+                style={{
+                  ...styles.viewToggleBtn,
+                  ...(faseGlobal === f.value ? styles.viewToggleBtnActive : {}),
+                  flex: 1, justifyContent: "center", padding: "7px 6px", fontSize: 12.5,
+                }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#9A9A94", paddingTop: 6 }}>
+            Se algum lote estiver numa fase diferente, ajuste só ele no card abaixo.
+          </div>
+        </div>
+        <InputField
+          label="MS da dieta (%) — aplica a todos os lotes"
+          type="number"
+          value={msGlobal}
+          onChange={aplicarMsATodos}
+          placeholder="Ex: 65"
+        />
+        <div style={{ padding: "10px 0 4px" }}>
+          <div style={styles.fieldLabel}>Custo informado em</div>
+          <div style={{ ...styles.viewToggle, marginTop: 6, maxWidth: 220 }}>
+            <button
+              onClick={() => setTipoCusto("mn")}
+              style={{ ...styles.viewToggleBtn, ...(tipoCusto === "mn" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", fontSize: 12.5 }}
+            >
+              R$/kg MN
+            </button>
+            <button
+              onClick={() => setTipoCusto("ms")}
+              style={{ ...styles.viewToggleBtn, ...(tipoCusto === "ms" ? styles.viewToggleBtnActive : {}), flex: 1, justifyContent: "center", fontSize: 12.5 }}
+            >
+              R$/kg MS
+            </button>
+          </div>
+        </div>
+        <div style={styles.fieldLabel}>Custo por dieta (R$/kg {tipoCusto === "mn" ? "MN" : "MS"}) — aplica a todos</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+          {FASES_DIETA.map((f) => (
+            <InputField
+              key={f.value}
+              label={f.label}
+              type="number"
+              value={custosGlobais[f.value] || ""}
+              onChange={(v) => aplicarCustoGlobalDaFase(f.value, v)}
+              placeholder="0.00"
+            />
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 4px 8px" }}>
+        <div style={{ ...styles.sectionTitle, margin: 0 }}>Lotes ativos</div>
+        <select
+          value={ordenacao}
+          onChange={(e) => setOrdenacao(e.target.value)}
+          style={{ fontSize: 12, color: "#5C5C58", background: "#F1EFE8", border: "none", borderRadius: 8, padding: "5px 8px", fontFamily: "inherit" }}
+        >
+          {OPCOES_ORDENACAO.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      </div>
+      {lotesAtivos.length === 0 && <EmptyHint text="Nenhum lote ativo para lançar consumo." />}
+      {lotesOrdenados.map((lote) => {
+        const valorLote = valores[lote.id] || {};
+        const cabecasNaData = calcularCabecasNaData(lote, saidasPorLote[lote.id] || [], data, entradasPorLote[lote.id] || []);
+        const preview =
+          valorLote.consumo && valorLote.ms && cabecasNaData > 0
+            ? (Number(valorLote.consumo) * (Number(valorLote.ms) / 100)) / cabecasNaData
+            : null;
+        const custoFaseAtual = (valorLote.custos || {})[valorLote.fase] || "";
+        let custoMnLote = custoFaseAtual ? Number(custoFaseAtual) : null;
+        if (tipoCusto === "ms" && custoMnLote != null && valorLote.ms) {
+          custoMnLote = custoMnLote * (Number(valorLote.ms) / 100);
+        }
+        const previewCusto =
+          valorLote.consumo && custoMnLote != null && cabecasNaData > 0
+            ? (Number(valorLote.consumo) / cabecasNaData) * custoMnLote
+            : null;
+        return (
+          <div key={lote.id} style={{ ...styles.card, marginBottom: 10 }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5, padding: "10px 0 0" }}>{lote.nome}</div>
+            <div style={{ padding: "6px 0 4px" }}>
+              <div style={styles.fieldLabel}>Dieta fornecida</div>
+              <div style={{ ...styles.viewToggle, marginTop: 6 }}>
+                {FASES_DIETA.map((f) => (
+                  <button
+                    key={f.value}
+                    onClick={() => selecionarFase(lote.id, f.value)}
+                    style={{
+                      ...styles.viewToggleBtn,
+                      ...(valorLote.fase === f.value ? styles.viewToggleBtnActive : {}),
+                      flex: 1, justifyContent: "center", padding: "6px 4px", fontSize: 11.5,
+                    }}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <InputField
+              label="Consumo (kg/dia, matéria natural)"
+              type="number"
+              value={valorLote.consumo || ""}
+              onChange={(v) => setCampo(lote.id, "consumo", v)}
+              placeholder="Ex: 2800"
+            />
+            <InputField
+              label="MS da dieta (%)"
+              type="number"
+              value={valorLote.ms || ""}
+              onChange={(v) => setCampo(lote.id, "ms", v)}
+              placeholder="Ex: 65"
+            />
+            <div style={{ padding: "4px 0 0" }}>
+              <div style={styles.fieldLabel}>Custo por dieta (R$/kg {tipoCusto === "mn" ? "MN" : "MS"})</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                {FASES_DIETA.map((f) => (
+                  <InputField
+                    key={f.value}
+                    label={f.label}
+                    type="number"
+                    value={(valorLote.custos || {})[f.value] || ""}
+                    onChange={(v) => {
+                      const novos = { ...(valorLote.custos || {}) };
+                      novos[f.value] = v;
+                      setCampo(lote.id, "custos", novos);
+                    }}
+                    placeholder="0.00"
+                  />
+                ))}
+              </div>
+            </div>
+            {preview != null && (
+              <div style={{ fontSize: 12, color: "#A85A2A", fontWeight: 600, padding: "0 0 4px" }}>
+                {preview.toFixed(2)} kg MS/cab/dia
+              </div>
+            )}
+            {previewCusto != null && (
+              <div style={{ fontSize: 12, color: "#7A4B26", fontWeight: 600, padding: "4px 0 10px" }}>
+                {formatBRL(previewCusto)}/animal/dia
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando
+          ? "Salvando..."
+          : linhasPreenchidas.length > 0
+          ? `Salvar consumo (${linhasPreenchidas.length} lote${linhasPreenchidas.length > 1 ? "s" : ""})`
+          : "Preencha ao menos um lote"}
+      </PrimaryButton>
+    </div>
+  );
+}
+
+// Casa o valor de uma célula (ex: "3", "Lote 3", "Curral 5") com o lote
+// correspondente — compara pelo número quando os dois têm um (cobre o caso
+// comum da planilha trazer só o número do lote/curral), senão cai para
+// comparação exata de texto (sem acento/maiúscula/espaço nas pontas).
+function normalizarTexto(valor) {
+  return String(valor ?? "").trim().toLowerCase();
+}
+function extrairNumero(valor) {
+  const m = String(valor ?? "").match(/\d+/);
+  return m ? m[0] : null;
+}
+function encontrarLotePorNomeOuNumero(valor, lotes) {
+  const textoAlvo = normalizarTexto(valor);
+  if (!textoAlvo) return null;
+  // Nome exato bate primeiro ("Boi 1" só reconhece o lote "Boi 1") — o
+  // número só entra como último recurso (ex: planilha só tem "3", lote se
+  // chama "Lote 3"), e apenas se for o único lote com aquele número, senão
+  // "1" poderia casar tanto com "Boi 1" quanto com "C1" e misturar os dois.
+  const porTexto = lotes.find((l) => normalizarTexto(l.nome) === textoAlvo);
+  if (porTexto) return porTexto;
+  const numeroAlvo = extrairNumero(valor);
+  if (numeroAlvo == null) return null;
+  const porNumero = lotes.filter((l) => extrairNumero(l.nome) === numeroAlvo);
+  return porNumero.length === 1 ? porNumero[0] : null;
+}
+
+// Cabeçalho/texto sem acento, minúsculo, só letras/números separados por
+// espaço — pra achar coluna pelo nome ("MS (%)", "Ms Dieta", "ms" tudo vira
+// "ms") e reconhecer a fase da dieta ("Terminação"/"Terminacao" → mesma coisa).
+function normalizarCabecalho(valor) {
+  return String(valor ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+function indiceColuna(cabecalhos, palavras) {
+  return cabecalhos.findIndex((h) => {
+    const norm = normalizarCabecalho(h);
+    if (!norm) return false;
+    const tokens = norm.split(" ");
+    return palavras.some((p) => tokens.includes(p) || norm.startsWith(p));
+  });
+}
+function normalizarFasePlanilha(valor) {
+  const norm = normalizarCabecalho(valor).replace(/\s+/g, "");
+  if (!norm) return null;
+  if (norm.startsWith("adapt")) return "adaptacao";
+  if (norm.startsWith("recri")) return "recria";
+  if (norm.startsWith("cresc")) return "crescimento";
+  if (norm.startsWith("termin")) return "terminacao";
+  return null;
+}
+
+// Classificação de receita pra agrupar cargas por tipo de dieta na aba
+// Cargas (erro acumulado por fase). Não reaproveita normalizarFasePlanilha
+// porque essa é usada pra preencher dieta_fase do consumo, e a coluna no
+// banco não aceita "sequestro" (check constraint só tem as 4 fases de
+// sempre) — aqui é só agrupamento visual, sem gravar nada.
+function classificarTipoDietaPorReceita(receita) {
+  const norm = normalizarCabecalho(receita).replace(/\s+/g, "");
+  if (!norm) return null;
+  if (norm.startsWith("adapt")) return "adaptacao";
+  if (norm.startsWith("recri")) return "recria";
+  if (norm.startsWith("cresc")) return "crescimento";
+  if (norm.startsWith("termin")) return "terminacao";
+  if (norm.startsWith("sequ")) return "sequestro";
+  return null;
+}
+
+// Datas podem vir como objeto Date (quando a célula do Excel está formatada
+// como data), texto dd/mm/aaaa, aaaa-mm-dd, ou o serial numérico do Excel
+// (dias desde 30/12/1899) quando a planilha guarda a data como texto puro.
+function normalizarDataPlanilha(valor) {
+  if (valor instanceof Date && !isNaN(valor)) {
+    return valor.toISOString().slice(0, 10);
+  }
+  const texto = String(valor ?? "").trim();
+  if (!texto) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(texto)) return texto;
+  const dm = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (dm) {
+    const [, d, mo, yBruto] = dm;
+    const y = yBruto.length === 2 ? `20${yBruto}` : yBruto;
+    return `${y.padStart(4, "0")}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  const serial = Number(texto);
+  if (Number.isFinite(serial) && serial > 20000 && serial < 90000) {
+    const base = new Date(Date.UTC(1899, 11, 30));
+    base.setUTCDate(base.getUTCDate() + serial);
+    return base.toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+// Célula em branco = "não lançou nesse dia" (não é zero) — só vira número
+// quando de fato tem um valor preenchido.
+function normalizarNumeroPlanilha(valor) {
+  if (valor == null || valor === "") return null;
+  if (typeof valor === "number") return Number.isFinite(valor) ? valor : null;
+  const n = Number(String(valor).trim().replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+// Identificadores de receita/autônomo podem mudar de representação ao passar
+// pelo Excel: 4, "04", "'4", "4.0" e "4,0" devem apontar para o mesmo ID.
+function normalizarCodigoPlanilha(valor) {
+  let texto = String(valor ?? "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim()
+    .replace(/^['"`´’]+/, "")
+    .trim();
+  if (!texto) return "";
+  const numero = texto.replace(",", ".");
+  if (/^[+-]?\d+(?:\.0+)?$/.test(numero)) return String(Number(numero));
+  return texto;
+}
+
+function encontrarLinhaCabecalho(linhas, camposObrigatorios) {
+  return linhas.findIndex((linha) => {
+    const campos = (linha || []).map((valor) => normalizarCabecalho(valor).replace(/\s+/g, ""));
+    return camposObrigatorios.every((campo) => campos.includes(campo));
+  });
+}
+
+function adicionarAoGrupo(grupos, lote, data, valor, fase, ms) {
+  const chave = `${lote.id}|${data}`;
+  if (grupos.has(chave)) {
+    const grupo = grupos.get(chave);
+    grupo.consumoTotalLote += valor;
+    grupo.linhas += 1;
+    if (grupo.fase == null) grupo.fase = fase;
+    if (grupo.ms == null) grupo.ms = ms;
+    return true;
+  }
+  grupos.set(chave, {
+    loteId: lote.id,
+    loteNome: lote.nome,
+    data,
+    consumoTotalLote: valor,
+    fase,
+    ms,
+    linhas: 1,
+  });
+  return false;
+}
+
+function montarResultadoImportacao(grupos, existentes, detalhes = {}) {
+  const novos = [];
+  const todos = [];
+  let jaExistentes = 0;
+  for (const [chave, grupo] of grupos) {
+    todos.push(grupo);
+    if (existentes.has(chave)) jaExistentes++;
+    else novos.push(grupo);
+  }
+  novos.sort((a, b) => a.data.localeCompare(b.data) || a.loteNome.localeCompare(b.loteNome, "pt-BR", { numeric: true }));
+  todos.sort((a, b) => a.data.localeCompare(b.data) || a.loteNome.localeCompare(b.loteNome, "pt-BR", { numeric: true }));
+  return { novos, todos, jaExistentes, ...detalhes };
+}
+
+function processarPlanilhaSimples(workbook, lotes, existentes) {
+  const aba = workbook.Sheets[workbook.SheetNames[0]];
+  const linhas = leitorExcelCarregado.utils.sheet_to_json(aba, { header: 1, defval: null });
+  if (linhas.length < 2) throw new Error("Planilha vazia ou sem linhas de dados.");
+
+  const cabecalho = linhas[0];
+  const idxData = indiceColuna(cabecalho, ["data"]);
+  const idxLote = indiceColuna(cabecalho, ["lote", "curral"]);
+  const idxQuant = indiceColuna(cabecalho, ["quanti", "quantidade", "consumo"]);
+  const idxDieta = indiceColuna(cabecalho, ["dieta", "fase"]);
+  const idxMs = indiceColuna(cabecalho, ["ms"]);
+  const faltando = [];
+  if (idxData === -1) faltando.push("Data");
+  if (idxLote === -1) faltando.push("Lote");
+  if (idxQuant === -1) faltando.push("Quantidade");
+  if (faltando.length > 0) {
+    throw new Error(`Não encontrei a coluna de ${faltando.join(" / ")} na planilha — confira os cabeçalhos.`);
+  }
+
+  const grupos = new Map();
+  const naoReconhecidos = new Set();
+  let linhasIgnoradas = 0;
+  let totalLinhasSomadas = 0;
+  for (const linha of linhas.slice(1)) {
+    if (!linha || linha.every((v) => v == null || v === "")) continue;
+    const data = normalizarDataPlanilha(linha[idxData]);
+    const lote = encontrarLotePorNomeOuNumero(linha[idxLote], lotes);
+    const valor = normalizarNumeroPlanilha(linha[idxQuant]);
+    if (!data || !lote || valor == null) {
+      if (!lote && linha[idxLote] != null && linha[idxLote] !== "") naoReconhecidos.add(String(linha[idxLote]));
+      linhasIgnoradas++;
+      continue;
+    }
+    const fase = idxDieta !== -1 ? normalizarFasePlanilha(linha[idxDieta]) : null;
+    const ms = idxMs !== -1 ? normalizarNumeroPlanilha(linha[idxMs]) : null;
+    if (adicionarAoGrupo(grupos, lote, data, valor, fase, ms)) totalLinhasSomadas++;
+  }
+
+  return montarResultadoImportacao(grupos, existentes, {
+    formato: "Planilha de consumo",
+    naoReconhecidos: [...naoReconhecidos],
+    linhasIgnoradas,
+    totalLinhasSomadas,
+  });
+}
+
+// Uma importação típica (formato longo) lê a mesma aba CARGAS/DESCARGAS/
+// RECEITAS várias vezes (detecção de formato + receitas + descargas +
+// fases) — em arquivos grandes (exportação de semanas inteiras, milhares
+// de linhas) isso significa reprocessar sheet_to_json repetidas vezes e
+// pode travar a tela por um bom tempo. Cacheia por workbook+aba pra cada
+// aba só ser convertida uma vez por importação.
+const cacheLinhasDaAba = new WeakMap();
+function linhasDaAba(workbook, nome) {
+  let porAba = cacheLinhasDaAba.get(workbook);
+  if (!porAba) {
+    porAba = new Map();
+    cacheLinhasDaAba.set(workbook, porAba);
+  }
+  if (porAba.has(nome)) return porAba.get(nome);
+  const nomeReal = workbook.SheetNames.find((n) => normalizarCabecalho(n).replace(/\s+/g, "") === nome);
+  const linhas = nomeReal ? leitorExcelCarregado.utils.sheet_to_json(workbook.Sheets[nomeReal], { header: 1, defval: null }) : null;
+  porAba.set(nome, linhas);
+  return linhas;
+}
+
+// Algumas exportações do vagão chamam a mesma aba em espanhol (RECETAS) e
+// outras em português (RECEITAS) - aceita qualquer uma das duas.
+function linhasDaAbaComAlias(workbook, nomes) {
+  for (const nome of nomes) {
+    const linhas = linhasDaAba(workbook, nome);
+    if (linhas) return linhas;
+  }
+  return null;
+}
+
+function montarFasesPorCarga(workbook) {
+  const linhasCargas = linhasDaAba(workbook, "cargas");
+  const linhasAutonomos = linhasDaAba(workbook, "autonomos");
+  if (!linhasCargas || !linhasAutonomos) return new Map();
+
+  const cabAut = encontrarLinhaCabecalho(linhasAutonomos, ["id", "receta"]);
+  const cabCarga = encontrarLinhaCabecalho(linhasCargas, ["id", "idautonomo"]);
+  if (cabAut === -1 || cabCarga === -1) return new Map();
+
+  const hAut = linhasAutonomos[cabAut].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxAutId = hAut.indexOf("id");
+  const idxReceita = hAut.indexOf("receta");
+  const fasePorAutonomo = new Map();
+  for (const linha of linhasAutonomos.slice(cabAut + 1)) {
+    const id = String(linha?.[idxAutId] ?? "").trim();
+    const fase = normalizarFasePlanilha(linha?.[idxReceita]);
+    if (id && fase) fasePorAutonomo.set(id, fase);
+  }
+
+  const hCarga = linhasCargas[cabCarga].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxCargaId = hCarga.indexOf("id");
+  const idxAutonomo = hCarga.indexOf("idautonomo");
+  const fasePorCarga = new Map();
+  for (const linha of linhasCargas.slice(cabCarga + 1)) {
+    const cargaId = String(linha?.[idxCargaId] ?? "").trim();
+    const autonomoId = String(linha?.[idxAutonomo] ?? "").trim();
+    const fase = fasePorAutonomo.get(autonomoId);
+    if (cargaId && fase) fasePorCarga.set(cargaId, fase);
+  }
+  return fasePorCarga;
+}
+
+function processarPlanilhaVagao(workbook, lotes, existentes) {
+  const linhas = linhasDaAba(workbook, "descargas");
+  if (!linhas) throw new Error('Não encontrei a aba "DESCARGAS" no arquivo do vagão.');
+
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["data", "idcarga"]);
+  if (idxCabecalho === -1) throw new Error('Não encontrei as colunas "Data" e "id_carga" na aba DESCARGAS.');
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxData = cabecalho.indexOf("data");
+  const idxCarga = cabecalho.indexOf("idcarga");
+  const pares = [];
+  for (let numero = 1; numero <= 15; numero++) {
+    const idxLote = cabecalho.indexOf(`ing${numero}`);
+    const idxPeso = cabecalho.indexOf(`peso${numero}`);
+    if (idxLote !== -1 && idxPeso !== -1) pares.push({ idxLote, idxPeso });
+  }
+  if (pares.length === 0) throw new Error("Não encontrei os pares de lote e peso na aba DESCARGAS.");
+
+  const fasePorCarga = montarFasesPorCarga(workbook);
+  const grupos = new Map();
+  const naoReconhecidos = new Set();
+  let linhasIgnoradas = 0;
+  let totalLinhasSomadas = 0;
+  let descargasLidas = 0;
+
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    if (!linha || linha.every((v) => v == null || v === "")) continue;
+    const data = normalizarDataPlanilha(linha[idxData]);
+    if (!data) {
+      linhasIgnoradas++;
+      continue;
+    }
+    const fase = fasePorCarga.get(String(linha[idxCarga] ?? "").trim()) || null;
+    let descargaValida = false;
+    for (const { idxLote, idxPeso } of pares) {
+      const codigoLote = linha[idxLote];
+      const valor = normalizarNumeroPlanilha(linha[idxPeso]);
+      if (codigoLote == null || codigoLote === "" || valor == null || valor <= 0) continue;
+      const lote = encontrarLoteDescarga(codigoLote, lotes);
+      if (!lote) {
+        naoReconhecidos.add(String(codigoLote).trim());
+        linhasIgnoradas++;
+        continue;
+      }
+      descargaValida = true;
+      if (adicionarAoGrupo(grupos, lote, data, valor, fase, null)) totalLinhasSomadas++;
+    }
+    if (descargaValida) descargasLidas++;
+  }
+
+  return montarResultadoImportacao(grupos, existentes, {
+    formato: "Arquivo bruto do vagão",
+    naoReconhecidos: [...naoReconhecidos].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+    linhasIgnoradas,
+    totalLinhasSomadas,
+    descargasLidas,
+  });
+}
+
+// Importa consumo diário de vários lotes de uma vez a partir de uma planilha
+// Excel simples ou diretamente do arquivo bruto gerado pelo vagão.
+function ImportarConsumoPlanilha({ lotes, cliente, consumos, onCancel, onImportar, onConcluido }) {
+  const [processando, setProcessando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [resultado, setResultado] = useState(null);
+  const [importando, setImportando] = useState(false);
+  const [concluido, setConcluido] = useState(null);
+
+  const existentes = new Set(consumos.map((c) => `${c.lote_id}|${c.data}`));
+
+  async function processarArquivo(file) {
+    if (!file) return;
+    setProcessando(true);
+    setErro(null);
+    setResultado(null);
+    setConcluido(null);
+    try {
+      const XLSX = await carregarLeitorExcel();
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+      const temDescargas = workbook.SheetNames.some((nome) => normalizarCabecalho(nome).replace(/\s+/g, "") === "descargas");
+      setResultado(
+        temDescargas
+          ? processarPlanilhaVagao(workbook, lotes, existentes)
+          : processarPlanilhaSimples(workbook, lotes, existentes)
+      );
+    } catch (e) {
+      setErro(e.message || "Não foi possível ler essa planilha.");
+    } finally {
+      setProcessando(false);
+    }
+  }
+
+  async function confirmar() {
+    if (!resultado || resultado.todos.length === 0) return;
+    setImportando(true);
+    try {
+      const linhas = resultado.todos.map((n) => {
+        const lote = lotes.find((l) => l.id === n.loteId);
+        // MS: usa o da própria planilha se veio preenchido; senão cai pro MS
+        // cadastrado no cliente pra essa fase (mesma regra do lançamento manual).
+        const msFinal = n.ms != null ? n.ms : n.fase ? msDaFase(cliente, n.fase) : null;
+        return {
+          lote_id: n.loteId,
+          data: n.data,
+          consumo_total_lote: n.consumoTotalLote,
+          ms_dieta: msFinal,
+          dieta_fase: n.fase || null,
+          custo_kg_mn: n.fase ? custoKgMnDaFase(lote, n.fase) : null,
+        };
+      });
+      const importados = await onImportar(linhas);
+      setConcluido(Array.isArray(importados) ? importados.length : linhas.length);
+    } finally {
+      setImportando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title="Importar planilha de consumo" onBack={onCancel} />
+
+      <div style={styles.card}>
+        <div style={{ fontSize: 13, color: "#5C5C58", padding: "10px 0" }}>
+          Aceita a planilha simples de consumo ou o arquivo bruto exportado
+          pelo vagão, com as abas CARGAS e DESCARGAS. As descargas do mesmo
+          lote são somadas automaticamente num único consumo diário.
+        </div>
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          disabled={processando || importando}
+          onChange={(e) => processarArquivo(e.target.files?.[0])}
+          style={{ fontSize: 13, padding: "10px 0" }}
+        />
+        {processando && <div style={{ fontSize: 13, color: "#9A9A94" }}>Lendo planilha...</div>}
+        {erro && <div style={{ fontSize: 13, color: "#B8763E", padding: "6px 0" }}>{erro}</div>}
+      </div>
+
+      {resultado && concluido == null && (
+        <>
+          <div style={{ ...styles.card, marginTop: 10 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, padding: "10px 0 4px" }}>Resumo da planilha</div>
+            <div style={{ fontSize: 13, color: "#5C5C58", lineHeight: 1.6 }}>
+              <div>{resultado.formato}</div>
+              {resultado.descargasLidas != null && <div>{resultado.descargasLidas} descarga(s) válida(s) lida(s)</div>}
+              {resultado.novos.length} lançamento{resultado.novos.length !== 1 ? "s" : ""} novo
+              {resultado.novos.length !== 1 ? "s" : ""} pronto{resultado.novos.length !== 1 ? "s" : ""} pra importar
+              {resultado.totalLinhasSomadas > 0 && (
+                <div>{resultado.totalLinhasSomadas} linha(s) somadas por serem do mesmo lote/data</div>
+              )}
+              {resultado.jaExistentes > 0 && (
+                <div>{resultado.jaExistentes} já existiam no app e terão o total do dia atualizado</div>
+              )}
+              {resultado.linhasIgnoradas > 0 && (
+                <div>{resultado.linhasIgnoradas} registro(s) sem data/lote/quantidade válidos, ignorado(s)</div>
+              )}
+              {resultado.naoReconhecidos.length > 0 && (
+                <div style={{ color: "#B8763E", marginTop: 4 }}>
+                  Lotes não reconhecidos (verifique o nome): {resultado.naoReconhecidos.join(", ")}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <PrimaryButton disabled={resultado.todos.length === 0 || importando} onClick={confirmar}>
+            {importando
+              ? "Importando..."
+              : `Importar ${resultado.todos.length} lançamento${resultado.todos.length > 1 ? "s" : ""}`}
+          </PrimaryButton>
+        </>
+      )}
+
+      {concluido != null && (
+        <div style={{ ...styles.card, marginTop: 10, textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1F4D45", padding: "14px 0" }}>
+            {concluido} lançamento{concluido !== 1 ? "s" : ""} importado{concluido !== 1 ? "s" : ""} com sucesso.
+          </div>
+          <PrimaryButton onClick={onConcluido}>Voltar</PrimaryButton>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function chaveIngrediente(nome) {
+  return normalizarTexto(nome).replace(/\s+/g, " ");
+}
+
+function montarReceitasPlanilha(workbook) {
+  const linhas = linhasDaAba(workbook, "recetas");
+  if (!linhas) throw new Error('Não encontrei a aba "RECETAS" no arquivo do vagão.');
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["id", "nombre"]);
+  if (idxCabecalho === -1) throw new Error('Não encontrei as colunas "Id" e "Nombre" na aba RECETAS.');
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("id");
+  const idxNome = cabecalho.indexOf("nombre");
+  const pares = [];
+  for (let numero = 1; numero <= 15; numero++) {
+    const idxIngrediente = cabecalho.indexOf(`ing${numero}`);
+    const idxPeso = cabecalho.indexOf(`peso${numero}`);
+    if (idxIngrediente !== -1 && idxPeso !== -1) pares.push({ idxIngrediente, idxPeso });
+  }
+  const receitas = new Map();
+  const receitasPorNome = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const id = normalizarCodigoPlanilha(linha?.[idxId]);
+    if (!id) continue;
+    const itens = [];
+    for (const par of pares) {
+      const nome = String(linha?.[par.idxIngrediente] ?? "").trim();
+      const peso = normalizarNumeroPlanilha(linha?.[par.idxPeso]);
+      if (!nome || nome === "0" || peso == null || peso <= 0) continue;
+      itens.push({ nome, chave: chaveIngrediente(nome), peso });
+    }
+    if (itens.length) {
+      const receita = { nome: String(linha?.[idxNome] ?? id).trim(), itens };
+      receitas.set(id, receita);
+      receitasPorNome.set(normalizarTexto(receita.nome), receita);
+    }
+  }
+  return { receitas, receitasPorNome };
+}
+
+function montarReceitasPorAutonomo(workbook) {
+  const linhas = linhasDaAba(workbook, "autonomos");
+  if (!linhas) return new Map();
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["id", "receta"]);
+  if (idxCabecalho === -1) return new Map();
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("id");
+  const idxReceita = cabecalho.indexOf("receta");
+  const resultado = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const id = normalizarCodigoPlanilha(linha?.[idxId]);
+    const receita = normalizarTexto(linha?.[idxReceita]);
+    if (id && receita) resultado.set(id, receita);
+  }
+  return resultado;
+}
+
+function montarDescargasPorCarga(workbook) {
+  const linhas = linhasDaAba(workbook, "descargas");
+  if (!linhas) return new Map();
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["data", "idcarga"]);
+  if (idxCabecalho === -1) return new Map();
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxData = cabecalho.indexOf("data");
+  const idxCarga = cabecalho.indexOf("idcarga");
+  const pares = [];
+  for (let numero = 1; numero <= 15; numero++) {
+    const idxLote = cabecalho.indexOf(`ing${numero}`);
+    const idxPeso = cabecalho.indexOf(`peso${numero}`);
+    if (idxLote !== -1 && idxPeso !== -1) pares.push({ idxLote, idxPeso });
+  }
+  const descargas = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const cargaCodigo = normalizarCodigoPlanilha(linha?.[idxCarga]);
+    const data = normalizarDataPlanilha(linha?.[idxData]);
+    if (!cargaCodigo || !data) continue;
+    const itens = descargas.get(cargaCodigo) || [];
+    for (const { idxLote, idxPeso } of pares) {
+      const loteCodigo = String(linha?.[idxLote] ?? "").trim();
+      const peso = normalizarNumeroPlanilha(linha?.[idxPeso]);
+      if (!loteCodigo || loteCodigo === "0" || peso == null || peso <= 0) continue;
+      itens.push({ data, lote_codigo: loteCodigo, peso });
+    }
+    if (itens.length) descargas.set(cargaCodigo, itens);
+  }
+  return descargas;
+}
+
+// --- Formato "longo" do arquivo do vagão --------------------------------
+// Algumas exportações da Hook trazem uma linha por ingrediente na aba
+// CARGAS (em vez de colunas Ing1/Peso1..15 lado a lado) e uma linha por
+// lote na aba DESCARGAS (coluna "Lot" direto, sem pares Ing/Peso). As
+// abas também podem vir em português (RECEITAS/AUTONOMO) em vez de
+// espanhol (RECETAS/AUTONOMOS). As funções abaixo tratam esse layout;
+// processarCargasPlanilha/processarPlanilhaVagao continuam cuidando do
+// formato largo de sempre.
+function ehFormatoVagaoLongo(workbook) {
+  const linhas = linhasDaAba(workbook, "cargas");
+  if (!linhas) return false;
+  return encontrarLinhaCabecalho(linhas, ["idcarga", "ingrediente", "quanti"]) !== -1;
+}
+
+function montarReceitasPorIdLonga(workbook) {
+  const linhas = linhasDaAbaComAlias(workbook, ["recetas", "receitas"]);
+  if (!linhas) throw new Error('Não encontrei a aba "RECEITAS" no arquivo do vagão.');
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["idreceita", "nome"]);
+  if (idxCabecalho === -1) throw new Error('Não encontrei as colunas "Id Receita" e "Nome" na aba RECEITAS.');
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("idreceita");
+  const idxNome = cabecalho.indexOf("nome");
+  const pares = [];
+  for (let numero = 1; numero <= 15; numero++) {
+    const idxIngrediente = cabecalho.indexOf(`ingrediente${numero}`);
+    const idxPeso = cabecalho.indexOf(`quanti${numero}`);
+    if (idxIngrediente !== -1 && idxPeso !== -1) pares.push({ idxIngrediente, idxPeso });
+  }
+  const receitas = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const id = normalizarCodigoPlanilha(linha?.[idxId]);
+    if (!id) continue;
+    const itens = [];
+    for (const par of pares) {
+      const nome = String(linha?.[par.idxIngrediente] ?? "").trim();
+      const peso = normalizarNumeroPlanilha(linha?.[par.idxPeso]);
+      if (!nome || nome === "0" || peso == null || peso <= 0) continue;
+      itens.push({ nome, chave: chaveIngrediente(nome), peso });
+    }
+    const nomeReceita = String(linha?.[idxNome] ?? id).trim();
+    receitas.set(id, { nome: nomeReceita, itens, fase: normalizarFasePlanilha(nomeReceita) });
+  }
+  return receitas;
+}
+
+function montarDescargasPorCargaLonga(workbook) {
+  const linhas = linhasDaAba(workbook, "descargas");
+  if (!linhas) return new Map();
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["idcarga", "data", "lot", "quanti"]);
+  if (idxCabecalho === -1) return new Map();
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxData = cabecalho.indexOf("data");
+  const idxCarga = cabecalho.indexOf("idcarga");
+  const idxLote = cabecalho.indexOf("lot");
+  const idxQuanti = cabecalho.indexOf("quanti");
+  const descargas = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const cargaCodigo = normalizarCodigoPlanilha(linha?.[idxCarga]);
+    const data = normalizarDataPlanilha(linha?.[idxData]);
+    const loteCodigo = String(linha?.[idxLote] ?? "").trim();
+    const peso = normalizarNumeroPlanilha(linha?.[idxQuanti]);
+    if (!cargaCodigo || !data || !loteCodigo || loteCodigo === "0" || peso == null || peso <= 0) continue;
+    const itens = descargas.get(cargaCodigo) || [];
+    itens.push({ data, lote_codigo: loteCodigo, peso });
+    descargas.set(cargaCodigo, itens);
+  }
+  return descargas;
+}
+
+function montarFasesPorCargaLonga(workbook, receitas) {
+  const linhas = linhasDaAba(workbook, "cargas");
+  if (!linhas) return new Map();
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["idcarga", "idreceita"]);
+  if (idxCabecalho === -1) return new Map();
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("idcarga");
+  const idxReceita = cabecalho.indexOf("idreceita");
+  const fasePorCarga = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    const cargaCodigo = normalizarCodigoPlanilha(linha?.[idxId]);
+    const receitaId = normalizarCodigoPlanilha(linha?.[idxReceita]);
+    const fase = receitas.get(receitaId)?.fase;
+    if (cargaCodigo && fase && !fasePorCarga.has(cargaCodigo)) fasePorCarga.set(cargaCodigo, fase);
+  }
+  return fasePorCarga;
+}
+
+function processarCargasPlanilhaLonga(workbook, cargasExistentes) {
+  const linhas = linhasDaAba(workbook, "cargas");
+  if (!linhas) throw new Error('Não encontrei a aba "CARGAS" no arquivo do vagão.');
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["idcarga", "data", "ingrediente", "quanti"]);
+  if (idxCabecalho === -1) {
+    throw new Error('Não encontrei as colunas "Id Carga", "Data", "Ingrediente" e "Quanti." na aba CARGAS.');
+  }
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("idcarga");
+  const idxData = cabecalho.indexOf("data");
+  const idxHora = cabecalho.indexOf("hora");
+  const idxReceita = cabecalho.indexOf("idreceita");
+  const idxIngrediente = cabecalho.indexOf("ingrediente");
+  const idxQuanti = cabecalho.indexOf("quanti");
+
+  const receitas = montarReceitasPorIdLonga(workbook);
+  const descargasPorCarga = montarDescargasPorCargaLonga(workbook);
+  const existentes = new Map(cargasExistentes.map((c) => [String(c.carga_codigo), c]));
+
+  // Uma carga vem espalhada em várias linhas (uma por ingrediente) - agrupa
+  // por Id Carga antes de calcular o total pesado.
+  const brutas = new Map();
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    if (!linha || linha.every((v) => v == null || v === "")) continue;
+    const cargaCodigo = normalizarCodigoPlanilha(linha[idxId]);
+    const data = normalizarDataPlanilha(linha[idxData]);
+    if (!cargaCodigo || !data) continue;
+    const grupo = brutas.get(cargaCodigo) || {
+      data,
+      hora: idxHora !== -1 ? String(linha[idxHora] ?? "").trim() || null : null,
+      receitaId: normalizarCodigoPlanilha(linha[idxReceita]),
+      itens: new Map(),
+    };
+    const nome = String(linha[idxIngrediente] ?? "").trim();
+    const peso = normalizarNumeroPlanilha(linha[idxQuanti]);
+    if (nome && nome !== "0" && peso != null && peso >= 0) {
+      const chave = chaveIngrediente(nome);
+      const atual = grupo.itens.get(chave) || { nome, peso: 0 };
+      atual.peso += peso;
+      grupo.itens.set(chave, atual);
+    }
+    brutas.set(cargaCodigo, grupo);
+  }
+
+  const novos = [];
+  const receitasAusentes = new Set();
+  let ignoradas = 0;
+  let jaExistentes = 0;
+
+  for (const [cargaCodigo, grupo] of brutas) {
+    const receita = receitas.get(grupo.receitaId);
+    if (!receita) {
+      if (grupo.receitaId && grupo.receitaId !== "0") receitasAusentes.add(grupo.receitaId);
+      ignoradas++;
+      continue;
+    }
+    const cargaExistente = existentes.get(cargaCodigo);
+    if (cargaExistente && Array.isArray(cargaExistente.descargas) && cargaExistente.descargas.length > 0) {
+      jaExistentes++;
+      continue;
+    }
+    const totalReal = [...grupo.itens.values()].reduce((soma, item) => soma + item.peso, 0);
+    const totalProgramado = receita.itens.reduce((soma, item) => soma + item.peso, 0);
+    if (totalReal <= 0 || totalProgramado <= 0) {
+      ignoradas++;
+      continue;
+    }
+    const fator = totalReal / totalProgramado;
+    const todasChaves = new Set([...grupo.itens.keys(), ...receita.itens.map((i) => i.chave)]);
+    const itens = [...todasChaves].map((chave) => {
+      const real = grupo.itens.get(chave);
+      const programado = receita.itens.find((i) => i.chave === chave);
+      return {
+        ingrediente: real?.nome || programado?.nome || chave,
+        ingrediente_chave: chave,
+        peso_real: real?.peso || 0,
+        peso_previsto: (programado?.peso || 0) * fator,
+      };
+    });
+    novos.push({
+      carga_codigo: cargaCodigo,
+      data: grupo.data,
+      hora: grupo.hora,
+      receita: receita.nome,
+      peso_real: totalReal,
+      peso_previsto: totalProgramado * fator,
+      itens,
+      descargas: descargasPorCarga.get(cargaCodigo) || [],
+    });
+  }
+
+  novos.sort((a, b) => a.data.localeCompare(b.data) || String(a.hora || "").localeCompare(String(b.hora || "")));
+  return {
+    novos,
+    ignoradas,
+    jaExistentes,
+    receitasAusentes: [...receitasAusentes],
+    receitasDisponiveis: [...receitas.keys()],
+  };
+}
+
+function processarPlanilhaVagaoLonga(workbook, lotes, existentes) {
+  const linhas = linhasDaAba(workbook, "descargas");
+  if (!linhas) throw new Error('Não encontrei a aba "DESCARGAS" no arquivo do vagão.');
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["idcarga", "data", "lot", "quanti"]);
+  if (idxCabecalho === -1) {
+    throw new Error('Não encontrei as colunas "Data", "Id Carga", "Lot" e "Quanti." na aba DESCARGAS.');
+  }
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxData = cabecalho.indexOf("data");
+  const idxCarga = cabecalho.indexOf("idcarga");
+  const idxLote = cabecalho.indexOf("lot");
+  const idxQuanti = cabecalho.indexOf("quanti");
+
+  const receitas = montarReceitasPorIdLonga(workbook);
+  const fasePorCarga = montarFasesPorCargaLonga(workbook, receitas);
+  const grupos = new Map();
+  const naoReconhecidos = new Set();
+  let linhasIgnoradas = 0;
+  let totalLinhasSomadas = 0;
+  let descargasLidas = 0;
+
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    if (!linha || linha.every((v) => v == null || v === "")) continue;
+    const data = normalizarDataPlanilha(linha[idxData]);
+    const codigoLote = linha[idxLote];
+    const valor = normalizarNumeroPlanilha(linha[idxQuanti]);
+    if (!data || codigoLote == null || codigoLote === "" || valor == null || valor <= 0) {
+      linhasIgnoradas++;
+      continue;
+    }
+    const lote = encontrarLoteDescarga(codigoLote, lotes);
+    if (!lote) {
+      naoReconhecidos.add(String(codigoLote).trim());
+      linhasIgnoradas++;
+      continue;
+    }
+    const fase = fasePorCarga.get(normalizarCodigoPlanilha(linha[idxCarga])) || null;
+    if (adicionarAoGrupo(grupos, lote, data, valor, fase, null)) totalLinhasSomadas++;
+    descargasLidas++;
+  }
+
+  return montarResultadoImportacao(grupos, existentes, {
+    formato: "Arquivo bruto do vagão",
+    naoReconhecidos: [...naoReconhecidos].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+    linhasIgnoradas,
+    totalLinhasSomadas,
+    descargasLidas,
+  });
+}
+
+function processarCargasPlanilha(workbook, cargasExistentes) {
+  const linhas = linhasDaAba(workbook, "cargas");
+  if (!linhas) throw new Error('Não encontrei a aba "CARGAS" no arquivo do vagão.');
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, ["id", "data", "numero"]);
+  if (idxCabecalho === -1) throw new Error('Não encontrei as colunas "Id", "Data" e "Numero" na aba CARGAS.');
+  const cabecalho = linhas[idxCabecalho].map((v) => normalizarCabecalho(v).replace(/\s+/g, ""));
+  const idxId = cabecalho.indexOf("id");
+  const idxData = cabecalho.indexOf("data");
+  const idxHora = cabecalho.indexOf("hora");
+  const idxReceita = cabecalho.indexOf("numero");
+  const idxAutonomo = cabecalho.indexOf("idautonomo");
+  const pares = [];
+  for (let numero = 1; numero <= 15; numero++) {
+    const idxIngrediente = cabecalho.indexOf(`ing${numero}`);
+    const idxPeso = cabecalho.indexOf(`peso${numero}`);
+    if (idxIngrediente !== -1 && idxPeso !== -1) pares.push({ idxIngrediente, idxPeso });
+  }
+
+  const { receitas, receitasPorNome } = montarReceitasPlanilha(workbook);
+  const receitaPorAutonomo = montarReceitasPorAutonomo(workbook);
+  const descargasPorCarga = montarDescargasPorCarga(workbook);
+  const existentes = new Map(cargasExistentes.map((c) => [String(c.carga_codigo), c]));
+  const novos = [];
+  const receitasAusentes = new Set();
+  let ignoradas = 0;
+  let jaExistentes = 0;
+
+  for (const linha of linhas.slice(idxCabecalho + 1)) {
+    if (!linha || linha.every((v) => v == null || v === "")) continue;
+    const cargaCodigo = normalizarCodigoPlanilha(linha[idxId]);
+    const data = normalizarDataPlanilha(linha[idxData]);
+    const receitaId = normalizarCodigoPlanilha(linha[idxReceita]);
+    const autonomoId = idxAutonomo !== -1 ? normalizarCodigoPlanilha(linha[idxAutonomo]) : "";
+    // Alguns modelos filtrados/reexportados mudam os códigos da coluna
+    // "Numero". Quando o ID direto não bate, usa IdAutonomo -> AUTONOMOS.Receta
+    // -> RECETAS.Nombre, que representa a mesma formulação.
+    const nomeReceitaAutonomo = receitaPorAutonomo.get(autonomoId);
+    const receita =
+      receitas.get(receitaId) ||
+      // Alguns arquivos trocam o identificador da receita pelo autônomo.
+      receitas.get(autonomoId) ||
+      (nomeReceitaAutonomo ? receitasPorNome.get(nomeReceitaAutonomo) : null);
+    if (!cargaCodigo || !data || !receita || receitaId === "0") {
+      if (receitaId && receitaId !== "0" && !receita) receitasAusentes.add(receitaId);
+      ignoradas++;
+      continue;
+    }
+    const cargaExistente = existentes.get(cargaCodigo);
+    if (cargaExistente && Array.isArray(cargaExistente.descargas) && cargaExistente.descargas.length > 0) {
+      jaExistentes++;
+      continue;
+    }
+
+    const reais = new Map();
+    for (const par of pares) {
+      const nome = String(linha[par.idxIngrediente] ?? "").trim();
+      const peso = normalizarNumeroPlanilha(linha[par.idxPeso]);
+      if (!nome || nome === "0" || peso == null || peso < 0) continue;
+      const chave = chaveIngrediente(nome);
+      const atual = reais.get(chave) || { nome, peso: 0 };
+      atual.peso += peso;
+      reais.set(chave, atual);
+    }
+    const totalReal = [...reais.values()].reduce((soma, item) => soma + item.peso, 0);
+    const totalProgramado = receita.itens.reduce((soma, item) => soma + item.peso, 0);
+    if (totalReal <= 0 || totalProgramado <= 0) {
+      ignoradas++;
+      continue;
+    }
+    const fator = totalReal / totalProgramado;
+    const todasChaves = new Set([...reais.keys(), ...receita.itens.map((i) => i.chave)]);
+    const itens = [...todasChaves].map((chave) => {
+      const real = reais.get(chave);
+      const programado = receita.itens.find((i) => i.chave === chave);
+      return {
+        ingrediente: real?.nome || programado?.nome || chave,
+        ingrediente_chave: chave,
+        peso_real: real?.peso || 0,
+        peso_previsto: (programado?.peso || 0) * fator,
+      };
+    });
+    novos.push({
+      carga_codigo: cargaCodigo,
+      data,
+      hora: idxHora !== -1 ? String(linha[idxHora] ?? "").trim() || null : null,
+      receita: receita.nome,
+      peso_real: totalReal,
+      peso_previsto: totalProgramado * fator,
+      itens,
+      descargas: descargasPorCarga.get(cargaCodigo) || [],
+    });
+  }
+
+  novos.sort((a, b) => a.data.localeCompare(b.data) || String(a.hora || "").localeCompare(String(b.hora || "")));
+  return {
+    novos,
+    ignoradas,
+    jaExistentes,
+    receitasAusentes: [...receitasAusentes],
+    receitasDisponiveis: [...receitas.keys()],
+  };
+}
+
+
+// Consumo acumulado por ingrediente de um lote: cada descarga de vagão no
+// lote carrega uma fração proporcional (peso descarregado / peso real da
+// carga) da composição real e prevista (dieta programada, já escalada pro
+// peso realmente pesado) daquela carga. Somando essas frações por
+// ingrediente ao longo de todo o histórico dá o acumulado real e o
+// previsto — a base tanto pro consumo acumulado (ativo e finalizado)
+// quanto pro erro entre dieta proposta e realizada (só faz sentido pra
+// lote finalizado, onde o período fechou).
+function calcularConsumoIngredientesLote(lote, cargas = [], ingredientesMs = [], currais = [], curralOcupacoes = [], lotes = [lote], etapasAnteriores = []) {
+  const custoPorChave = new Map(
+    ingredientesMs.map((item) => [item.ingrediente_chave, item.custo_kg_mn == null ? null : Number(item.custo_kg_mn)])
+  );
+  const porIngrediente = new Map();
+  for (const carga of cargas) {
+    // A máquina Hook às vezes grava peso_real negativo num ingrediente
+    // quando o vagão precisou de uma correção de carga no meio do
+    // carregamento — mesmo filtro de calcularComposicaoCarga. Sem isso,
+    // um único item negativo derruba o pesoTotalCarga (denominador),
+    // inflando a proporção de todos os outros ingredientes da carga e
+    // ainda subtraindo do acumulado do próprio ingrediente afetado.
+    const itens = (Array.isArray(carga.itens) ? carga.itens : []).filter((item) => Number(item.peso_real || 0) > 0);
+    const pesoTotalCarga = itens.reduce((soma, item) => soma + Number(item.peso_real || 0), 0);
+    if (!(pesoTotalCarga > 0)) continue;
+    const pesoNoLote = (Array.isArray(carga.descargas) ? carga.descargas : [])
+      .reduce((soma, descarga) => {
+        const data = descarga.data || carga.data;
+        const loteDescarga = encontrarLoteDaDescarga({ ...descarga, data }, lotes, currais, curralOcupacoes);
+        const fator = loteDescarga?.id === lote.id ? 1 : etapasAnteriores
+          .filter((e) => e.lote.id === loteDescarga?.id)
+          .reduce((total, e) => total + proporcaoConsumoEtapa(e, data), 0);
+        return soma + Number(descarga.peso || 0) * Math.min(1, fator);
+      }, 0);
+    if (!(pesoNoLote > 0)) continue;
+    const proporcao = pesoNoLote / pesoTotalCarga;
+    for (const item of itens) {
+      const chave = item.ingrediente_chave || chaveIngrediente(item.ingrediente);
+      const atual = porIngrediente.get(chave) || { nome: item.ingrediente, real: 0, previsto: 0 };
+      atual.real += Number(item.peso_real || 0) * proporcao;
+      atual.previsto += Number(item.peso_previsto || 0) * proporcao;
+      porIngrediente.set(chave, atual);
+    }
+  }
+  return [...porIngrediente.entries()]
+    .map(([chave, dados]) => {
+      const custoUnit = custoPorChave.get(chave);
+      return {
+        chave,
+        nome: dados.nome,
+        real: dados.real,
+        previsto: dados.previsto,
+        erroPercentual: dados.previsto > 0 ? ((dados.real - dados.previsto) / dados.previsto) * 100 : null,
+        custo: custoUnit != null ? dados.real * custoUnit : null,
+      };
+    })
+    .sort((a, b) => b.real - a.real);
+}
+
+
+function removerDuplicacaoSaicon(texto) {
+  if (!texto || texto.length < 4) return texto;
+  let iguais = 0;
+  for (let i = 0; i + 1 < texto.length; i += 2) {
+    if (texto[i] === texto[i + 1]) iguais++;
+  }
+  if (iguais / Math.floor(texto.length / 2) < 0.72) return texto;
+  let resultado = "";
+  for (let i = 0; i < texto.length; i += 2) resultado += texto[i];
+  return resultado;
+}
+
+function minutosDoHorario(valor) {
+  const partes = String(valor || "").split(":").map(Number);
+  return partes.length >= 2 && partes.every(Number.isFinite) ? partes[0] * 60 + partes[1] : null;
+}
+
+function dataIsoSaicon(texto) {
+  const match = removerDuplicacaoSaicon(texto).match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : null;
+}
+
+function numeroSaicon(valor) {
+  const texto = String(valor || "").trim();
+  const normalizado = /^-?\d{1,3}(?:\.\d{3})+,\d+$/.test(texto)
+    ? texto.replace(/\./g, "").replace(",", ".")
+    : texto.replace(",", ".");
+  return normalizarNumeroPlanilha(normalizado);
+}
+
+async function extrairPaginasPdfSaicon(file) {
+  const pdfjs = await carregarLeitorPdf();
+  const documento = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  const paginas = [];
+  for (let numero = 1; numero <= documento.numPages; numero++) {
+    const pagina = await documento.getPage(numero);
+    const conteudo = await pagina.getTextContent();
+    const linhasPorY = new Map();
+    for (const item of conteudo.items) {
+      if (!item.str?.trim()) continue;
+      const y = Math.round(Number(item.transform?.[5] || 0));
+      const itens = linhasPorY.get(y) || [];
+      itens.push({ x: Number(item.transform?.[4] || 0), texto: item.str });
+      linhasPorY.set(y, itens);
+    }
+    const linhas = [...linhasPorY.entries()]
+      .sort((a, b) => b[0] - a[0])
+      .map(([, itens]) => removerDuplicacaoSaicon(
+        itens.sort((a, b) => a.x - b.x).map((item) => item.texto).join(" ").replace(/\s+/g, " ").trim()
+      ))
+      .filter(Boolean);
+    paginas.push(linhas);
+  }
+  return paginas;
+}
+
+function interpretarPdfSaicon(paginas) {
+  const registros = [];
+  let tipo = null;
+  for (let indice = 0; indice < paginas.length; indice++) {
+    const linhas = paginas[indice];
+    const titulo = linhas.find((linha) => /Relat[oó]rio de (Carregamento|Descarga)/i.test(linha));
+    const tipoPagina = /Carregamento/i.test(titulo || "") ? "carga" : /Descarga/i.test(titulo || "") ? "descarga" : null;
+    if (!tipoPagina) continue;
+    if (tipo && tipo !== tipoPagina) throw new Error("O PDF mistura relatórios de carga e descarga.");
+    tipo = tipoPagina;
+    const data = dataIsoSaicon(titulo);
+    // Sem "i": o cabeçalho vem como "TRATO"; a linha de dados começa
+    // exatamente com "Trato".
+    const resumo = linhas.find((linha) => /^Trato\s/.test(linha));
+    const horarios = resumo?.match(/(\d{2}:\d{2})\s+(\d{2}:\d{2})\s+\d{2}:\d{2}:\d{2}\s*$/);
+    if (!data || !resumo || !horarios) continue;
+    const itens = [];
+    for (const linha of linhas) {
+      const match = linha.match(/^(.+?)\s+(-?[\d.,]+)\s*KG\s+(-?[\d.,]+)\s*KG\s+(-?[\d.,]+)\s*KG\s+(-?[\d.,]+)\s*%/i);
+      if (!match || /^TOTAIS/i.test(match[1])) continue;
+      const nome = match[1].trim();
+      if (tipoPagina === "carga" || /^Lote\s+/i.test(nome)) {
+        itens.push({
+          nome,
+          previsto: numeroSaicon(match[2]) || 0,
+          realizado: numeroSaicon(match[3]) || 0,
+        });
+      }
+    }
+    if (!itens.length) continue;
+    registros.push({
+      pagina: indice + 1,
+      data,
+      inicio: horarios[1],
+      fim: horarios[2],
+      inicioMinutos: minutosDoHorario(horarios[1]),
+      fimMinutos: minutosDoHorario(horarios[2]),
+      itens,
+    });
+  }
+  if (!tipo || !registros.length) throw new Error("Não reconheci o relatório de carga ou descarga da Saicon.");
+  return { tipo, registros, paginasLidas: paginas.length };
+}
+
+function processarPdfsSaicon(cargaPdf, descargaPdf, lotes, consumos, cargasExistentes) {
+  const cargasPorData = new Map();
+  const descargasPorData = new Map();
+  for (const carga of cargaPdf.registros) {
+    const lista = cargasPorData.get(carga.data) || [];
+    lista.push(carga);
+    cargasPorData.set(carga.data, lista);
+  }
+  for (const descarga of descargaPdf.registros) {
+    const lista = descargasPorData.get(descarga.data) || [];
+    lista.push(descarga);
+    descargasPorData.set(descarga.data, lista);
+  }
+  const codigosExistentes = new Set(cargasExistentes.map((carga) => String(carga.carga_codigo)));
+  const novasCargas = [];
+  const gruposConsumo = new Map();
+  const lotesNaoReconhecidos = new Set();
+  let cargasSemDescarga = 0;
+  let descargasSemCarga = 0;
+  let cargasJaExistentes = 0;
+
+  const todasDatas = new Set([...cargasPorData.keys(), ...descargasPorData.keys()]);
+  for (const data of todasDatas) {
+    const cargasDia = (cargasPorData.get(data) || []).sort((a, b) => a.inicioMinutos - b.inicioMinutos);
+    const descargasDia = (descargasPorData.get(data) || []).sort((a, b) => a.inicioMinutos - b.inicioMinutos);
+    const usadas = new Set();
+    for (let indice = 0; indice < cargasDia.length; indice++) {
+      const carga = cargasDia[indice];
+      let melhorIndice = -1;
+      let melhorIntervalo = Infinity;
+      for (let i = 0; i < descargasDia.length; i++) {
+        if (usadas.has(i)) continue;
+        const intervalo = descargasDia[i].inicioMinutos - carga.fimMinutos;
+        if (intervalo >= -2 && intervalo <= 180 && intervalo < melhorIntervalo) {
+          melhorIndice = i;
+          melhorIntervalo = intervalo;
+        }
+      }
+      if (melhorIndice === -1) {
+        cargasSemDescarga++;
+        continue;
+      }
+      usadas.add(melhorIndice);
+      const descarga = descargasDia[melhorIndice];
+      const codigo = `saicon-${data}-${carga.inicio.replace(":", "")}`;
+      const itens = carga.itens.map((item) => ({
+        ingrediente: item.nome,
+        ingrediente_chave: chaveIngrediente(item.nome),
+        peso_real: item.realizado,
+        peso_previsto: item.previsto,
+      }));
+      const descargas = [];
+      for (const item of descarga.itens) {
+        const lote = encontrarLoteDescarga(item.nome, lotes);
+        if (!lote) {
+          lotesNaoReconhecidos.add(item.nome);
+          continue;
+        }
+        descargas.push({ data, hora: descarga.inicio, lote_codigo: item.nome, peso: item.realizado, peso_previsto: item.previsto });
+        adicionarAoGrupo(gruposConsumo, lote, data, item.realizado, null, null);
+      }
+      if (codigosExistentes.has(codigo)) cargasJaExistentes++;
+      else {
+        novasCargas.push({
+          carga_codigo: codigo,
+          data,
+          hora: carga.inicio,
+          receita: "Saicon",
+          peso_real: itens.reduce((soma, item) => soma + item.peso_real, 0),
+          peso_previsto: itens.reduce((soma, item) => soma + item.peso_previsto, 0),
+          itens,
+          descargas,
+        });
+      }
+    }
+    descargasSemCarga += descargasDia.length - usadas.size;
+  }
+
+  const existentes = new Set(consumos.map((consumo) => `${consumo.lote_id}|${consumo.data}`));
+  return {
+    novos: novasCargas,
+    jaExistentes: cargasJaExistentes,
+    ignoradas: cargasSemDescarga,
+    receitasAusentes: [],
+    receitasDisponiveis: [],
+    descargas: montarResultadoImportacao(gruposConsumo, existentes, {
+      naoReconhecidos: [...lotesNaoReconhecidos],
+      linhasIgnoradas: 0,
+    }),
+    saicon: {
+      cargasLidas: cargaPdf.registros.length,
+      descargasLidas: descargaPdf.registros.length,
+      cargasSemDescarga,
+      descargasSemCarga,
+    },
+  };
+}
+
+function ImportarCargasPlanilha({ cargasExistentes, lotes, consumos, ingredientesMs, currais = [], curralOcupacoes = [], onCancel, onImportar, onImportarConsumos, onSincronizar, onConcluido }) {
+  const [processando, setProcessando] = useState(false);
+  const [importando, setImportando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [resultado, setResultado] = useState(null);
+  const [concluido, setConcluido] = useState(null);
+  const [arquivoPrincipal, setArquivoPrincipal] = useState(null);
+  const [arquivoDescarga, setArquivoDescarga] = useState(null);
+
+  async function processarArquivo(files) {
+    const selecionados = [...(files || [])];
+    if (!selecionados.length) return;
+    setProcessando(true);
+    setErro(null);
+    setResultado(null);
+    setConcluido(null);
+    try {
+      const pdfs = selecionados.filter((file) => /\.pdf$/i.test(file.name));
+      if (pdfs.length) {
+        if (pdfs.length !== 2 || selecionados.length !== 2) {
+          throw new Error("Para a Saicon, selecione juntos os dois PDFs: Carga e Descarga.");
+        }
+        const interpretados = [];
+        for (const file of pdfs) interpretados.push(interpretarPdfSaicon(await extrairPaginasPdfSaicon(file)));
+        const cargaPdf = interpretados.find((pdf) => pdf.tipo === "carga");
+        const descargaPdf = interpretados.find((pdf) => pdf.tipo === "descarga");
+        if (!cargaPdf || !descargaPdf) throw new Error("Selecione um PDF de Carga e um PDF de Descarga da Saicon.");
+        setResultado(processarPdfsSaicon(cargaPdf, descargaPdf, lotes, consumos, cargasExistentes));
+      } else {
+        if (selecionados.length !== 1) throw new Error("Selecione apenas uma planilha do vagão.");
+        const XLSX = await carregarLeitorExcel();
+        const workbook = XLSX.read(await selecionados[0].arrayBuffer(), { type: "array", cellDates: true });
+        const existentes = new Set(consumos.map((consumo) => `${consumo.lote_id}|${consumo.data}`));
+        // Formato largo (Ing1/Peso1..15 lado a lado) ou longo (uma linha por
+        // ingrediente/lote) - detecta pelo cabeçalho da aba CARGAS.
+        const cargas = ehFormatoVagaoLongo(workbook)
+          ? processarCargasPlanilhaLonga(workbook, cargasExistentes)
+          : processarCargasPlanilha(workbook, cargasExistentes);
+        const descargas = ehFormatoVagaoLongo(workbook)
+          ? processarPlanilhaVagaoLonga(workbook, lotes, existentes)
+          : processarPlanilhaVagao(workbook, lotes, existentes);
+        setResultado({ ...cargas, descargas });
+      }
+    } catch (e) {
+      setErro(e.message || "Não foi possível ler as cargas dessa planilha.");
+    } finally {
+      setProcessando(false);
+    }
+  }
+
+  async function confirmar() {
+    if (!resultado || (!resultado.novos.length && !resultado.descargas.todos.length)) return;
+    setImportando(true);
+    try {
+      const importadas = resultado.novos.length ? await onImportar(resultado.novos) : [];
+      const cargasImportadas = Array.isArray(importadas) ? importadas : resultado.novos;
+      const linhasConsumo = resultado.descargas.todos.map((descarga) => ({
+        lote_id: descarga.loteId,
+        data: descarga.data,
+        consumo_total_lote: descarga.consumoTotalLote,
+        ms_dieta: null,
+        dieta_fase: descarga.fase || null,
+        custo_kg_mn: null,
+      }));
+      const consumosImportados = linhasConsumo.length && onImportarConsumos
+        ? await onImportarConsumos(linhasConsumo)
+        : [];
+      const todosConsumos = [...consumos, ...(Array.isArray(consumosImportados) ? consumosImportados : [])];
+      const atualizacoes = onSincronizar
+        ? montarSincronizacoesConsumoCargas([...cargasExistentes, ...cargasImportadas], lotes, todosConsumos, ingredientesMs, currais, curralOcupacoes)
+        : [];
+      if (atualizacoes.length) await onSincronizar(atualizacoes);
+      setConcluido({
+        cargas: cargasImportadas.length,
+        descargas: Array.isArray(consumosImportados) ? consumosImportados.length : linhasConsumo.length,
+        sincronizados: atualizacoes.length,
+      });
+    } finally {
+      setImportando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title="Importar cargas do vagão" onBack={onCancel} />
+      <div style={styles.card}>
+        <div style={{ fontSize: 13, color: "#5C5C58", lineHeight: 1.5, padding: "10px 0" }}>
+          Hook: selecione a planilha bruta. Saicon: selecione juntos os PDFs
+          de Carga e Descarga. O aplicativo relaciona os vagões, soma o consumo
+          por lote/dia e calcula composição, erro, custo e matéria seca.
+        </div>
+        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#5C5C58", marginTop: 8 }}>
+          Planilha Hook ou PDF de Carga Saicon
+          <input type="file" accept=".xlsx,.xls,.pdf" disabled={processando || importando}
+            onChange={(e) => {
+              setArquivoPrincipal(e.target.files?.[0] || null);
+              setArquivoDescarga(null);
+              setResultado(null);
+              setErro(null);
+            }}
+            style={{ display: "block", fontSize: 13, padding: "8px 0" }} />
+        </label>
+        {arquivoPrincipal && /\.pdf$/i.test(arquivoPrincipal.name) && (
+          <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#5C5C58", marginTop: 4 }}>
+            PDF de Descarga Saicon
+            <input type="file" accept=".pdf" disabled={processando || importando}
+              onChange={(e) => setArquivoDescarga(e.target.files?.[0] || null)}
+              style={{ display: "block", fontSize: 13, padding: "8px 0" }} />
+          </label>
+        )}
+        <button type="button"
+          disabled={!arquivoPrincipal || (/\.pdf$/i.test(arquivoPrincipal.name) && !arquivoDescarga) || processando || importando}
+          onClick={() => processarArquivo([arquivoPrincipal, ...(arquivoDescarga ? [arquivoDescarga] : [])])}
+          style={{ ...styles.secondaryActionBtn, marginTop: 6 }}>
+          {processando ? "Analisando..." : "Analisar arquivos"}
+        </button>
+        {processando && <div style={{ fontSize: 13, color: "#9A9A94" }}>Lendo e relacionando cargas e descargas...</div>}
+        {erro && <div style={{ fontSize: 13, color: "#B8763E", padding: "6px 0" }}>{erro}</div>}
+      </div>
+
+      {resultado && concluido == null && (
+        <>
+          <div style={{ ...styles.card, marginTop: 10, fontSize: 13, color: "#5C5C58", lineHeight: 1.7 }}>
+            <strong style={{ color: "#252522" }}>{resultado.novos.length} carga(s) nova(s)</strong>
+            {resultado.jaExistentes > 0 && <div>{resultado.jaExistentes} já existiam e não serão duplicadas</div>}
+            <div><strong style={{ color: "#252522" }}>{resultado.descargas.novos.length} consumo(s) diário(s) novo(s)</strong> calculado(s) pelas descargas</div>
+            {resultado.descargas.jaExistentes > 0 && <div>{resultado.descargas.jaExistentes} consumo(s) já existiam e terão o total diário atualizado, sem duplicação</div>}
+            {resultado.descargas.naoReconhecidos.length > 0 && (
+              <div style={{ color: "#B8763E" }}>Lotes não encontrados: {resultado.descargas.naoReconhecidos.join(", ")}</div>
+            )}
+            {resultado.saicon && (
+              <div style={{ marginTop: 4 }}>
+                Saicon: {resultado.saicon.cargasLidas} cargas e {resultado.saicon.descargasLidas} descargas lidas.
+                {(resultado.saicon.cargasSemDescarga > 0 || resultado.saicon.descargasSemCarga > 0) && (
+                  <span style={{ color: "#B8763E" }}> {resultado.saicon.cargasSemDescarga} carga(s) e {resultado.saicon.descargasSemCarga} descarga(s) sem correspondência foram ignoradas.</span>
+                )}
+              </div>
+            )}
+            {resultado.ignoradas > 0 && <div>{resultado.ignoradas} registro(s) sem carga/receita válida, ignorado(s)</div>}
+            {resultado.receitasAusentes.length > 0 && (
+              <>
+                <div style={{ color: "#B8763E" }}>Receitas não encontradas: {resultado.receitasAusentes.join(", ")}</div>
+                <div style={{ color: "#8A6A4A" }}>
+                  Códigos encontrados na aba RECETAS: {resultado.receitasDisponiveis.length ? resultado.receitasDisponiveis.join(", ") : "nenhum"}
+                </div>
+              </>
+            )}
+          </div>
+          <PrimaryButton disabled={(!resultado.novos.length && !resultado.descargas.todos.length) || importando} onClick={confirmar}>
+            {importando ? "Importando cargas e descargas..." : "Importar cargas e descargas"}
+          </PrimaryButton>
+        </>
+      )}
+
+      {concluido != null && (
+        <div style={{ ...styles.card, marginTop: 10, textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1F4D45", padding: "14px 0" }}>
+            {concluido.cargas} carga(s) importada(s) com sucesso.
+            <div style={{ marginTop: 4 }}>{concluido.descargas} consumo(s) diário(s) importado(s) pelas descargas.</div>
+            {concluido.sincronizados > 0 && <div style={{ marginTop: 4 }}>{concluido.sincronizados} consumo(s) atualizado(s) com MS e custo.</div>}
+          </div>
+          <PrimaryButton onClick={onConcluido}>Ver análise das cargas</PrimaryButton>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function corErroCarga(percentual) {
+  const absoluto = Math.abs(percentual || 0);
+  if (absoluto <= 2) return { cor: "#2F7D5B", fundo: "#E7F3EC" };
+  if (absoluto <= 5) return { cor: "#9A6B16", fundo: "#FFF3D6" };
+  return { cor: "#B4473D", fundo: "#FBE8E6" };
+}
+
+function numeroDistribuicao(valor) {
+  if (valor == null || valor === "") return null;
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? numero : null;
+}
+
+function tratadorDaCarga(carga) {
+  const candidatos = [
+    carga?.tratador,
+    ...(Array.isArray(carga?.itens) ? carga.itens.map((item) => item?.tratador) : []),
+    ...(Array.isArray(carga?.descargas) ? carga.descargas.map((item) => item?.tratador) : []),
+  ];
+  return candidatos.find((nome) => String(nome || "").trim()) || "Não informado";
+}
+
+function resumoErroDaCarga(carga) {
+  const itens = Array.isArray(carga?.itens) ? carga.itens : [];
+  const previstoItens = itens.reduce((soma, item) => soma + (numeroDistribuicao(item.peso_previsto) || 0), 0);
+  if (itens.length > 0 && previstoItens > 0) {
+    const realizado = itens.reduce((soma, item) => soma + (numeroDistribuicao(item.peso_real) || 0), 0);
+    const erroAbsoluto = itens.reduce((soma, item) => {
+      const real = numeroDistribuicao(item.peso_real) || 0;
+      const previsto = numeroDistribuicao(item.peso_previsto) || 0;
+      return soma + Math.abs(real - previsto);
+    }, 0);
+    return {
+      previsto: previstoItens,
+      realizado,
+      saldo: realizado - previstoItens,
+      erroAbsoluto,
+      percentual: erroAbsoluto / previstoItens * 100,
+    };
+  }
+
+  const previsto = numeroDistribuicao(carga?.peso_previsto) || 0;
+  const realizado = numeroDistribuicao(carga?.peso_real) || 0;
+  const erroAbsoluto = Math.abs(realizado - previsto);
+  return {
+    previsto,
+    realizado,
+    saldo: realizado - previsto,
+    erroAbsoluto,
+    percentual: previsto > 0 ? erroAbsoluto / previsto * 100 : 0,
+  };
+}
+
+function agruparErros(registros, chaveDoRegistro, nomeDoRegistro) {
+  const grupos = new Map();
+  for (const registro of registros) {
+    const chave = chaveDoRegistro(registro);
+    const grupo = grupos.get(chave) || {
+      chave,
+      nome: nomeDoRegistro(registro),
+      registros: [],
+      previsto: 0,
+      realizado: 0,
+      saldo: 0,
+      erroAbsoluto: 0,
+      semPrevisto: 0,
+    };
+    grupo.registros.push(registro);
+    if (registro.previsto > 0) {
+      grupo.previsto += registro.previsto;
+      grupo.realizado += registro.realizado;
+      grupo.saldo += registro.saldo;
+      grupo.erroAbsoluto += registro.erroAbsoluto;
+    } else {
+      grupo.semPrevisto += 1;
+    }
+    grupos.set(chave, grupo);
+  }
+  return [...grupos.values()]
+    .map((grupo) => ({
+      ...grupo,
+      percentual: grupo.previsto > 0 ? grupo.erroAbsoluto / grupo.previsto * 100 : null,
+    }))
+    .sort((a, b) => (b.percentual ?? -1) - (a.percentual ?? -1) || a.nome.localeCompare(b.nome, "pt-BR", { numeric: true }));
+}
+
+function textoPesoDistribuicao(valor, sinal = false) {
+  if (valor == null) return "—";
+  const prefixo = sinal && valor > 0 ? "+" : "";
+  return `${prefixo}${valor.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg`;
+}
+
+function BadgeErroDistribuicao({ percentual, assinado = false }) {
+  if (percentual == null) return <span style={{ color: "#8A8A82", fontSize: 12 }}>Sem previsto</span>;
+  const sinal = corErroCarga(percentual);
+  return (
+    <span style={{ color: sinal.cor, background: sinal.fundo, padding: "4px 7px", borderRadius: 999, fontWeight: 700, whiteSpace: "nowrap" }}>
+      {assinado && percentual > 0 ? "+" : ""}{percentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+    </span>
+  );
+}
+
+function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralOcupacoes = [], saidasPorLote = {}, entradasPorLote = {} }) {
+  const [exportandoExcel, setExportandoExcel] = useState(false);
+  const [erroExcel, setErroExcel] = useState(null);
+  const [exportandoPdf, setExportandoPdf] = useState(false);
+  const [erroPdf, setErroPdf] = useState(null);
+  const curralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
+  const eventos = [];
+
+  for (const carga of cargas) {
+    for (let indice = 0; indice < (Array.isArray(carga.descargas) ? carga.descargas.length : 0); indice++) {
+      const descarga = carga.descargas[indice];
+      const realizado = numeroDistribuicao(descarga.peso ?? descarga.peso_real);
+      if (realizado == null) continue;
+      const erroInformado = numeroDistribuicao(descarga.erro_kg);
+      const previstoInformado = numeroDistribuicao(descarga.peso_previsto);
+      const previsto = previstoInformado ?? (erroInformado != null ? realizado - erroInformado : null);
+      const lote = encontrarLoteDaDescarga({ ...descarga, data: descarga.data || carga.data }, lotes, currais, curralOcupacoes);
+      const nomeCurral = curralPorId.get(descarga.curral_id || lote?.curral_id) || descarga.lote_codigo || "Sem curral";
+      const nomeLote = lote?.nome || descarga.lote_codigo || "Lote não identificado";
+      const saldo = previsto != null ? realizado - previsto : null;
+      eventos.push({
+        chave: `${carga.id || carga.carga_codigo}:${indice}`,
+        data: descarga.data || carga.data,
+        hora: descarga.hora || carga.hora || null,
+        cargaCodigo: carga.carga_codigo,
+        receita: carga.receita,
+        tratador: String(descarga.tratador || tratadorDaCarga(carga)).trim() || "Não informado",
+        loteId: lote?.id || descarga.lote_id || `codigo:${descarga.lote_codigo || indice}`,
+        loteNome: nomeLote,
+        curralNome: nomeCurral,
+        previsto: previsto != null && previsto > 0 ? previsto : 0,
+        realizado,
+        saldo: saldo || 0,
+        erroAbsoluto: saldo != null ? Math.abs(saldo) : 0,
+        percentual: previsto != null && previsto > 0 ? saldo / previsto * 100 : null,
+      });
+    }
+  }
+
+  const datas = [...new Set(eventos.map((evento) => evento.data).filter(Boolean))].sort((a, b) => b.localeCompare(a));
+  const primeiraData = datas[datas.length - 1] || "";
+  const ultimaData = datas[0] || "";
+  const [modo, setModo] = useState("dia");
+  const [dataEscolhida, setDataEscolhida] = useState("");
+  const [periodoInicio, setPeriodoInicio] = useState("");
+  const [periodoFim, setPeriodoFim] = useState("");
+  const [loteExpandido, setLoteExpandido] = useState(null);
+  const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
+  const inicio = periodoInicio || primeiraData;
+  const fim = periodoFim || ultimaData;
+  const eventosFiltrados = modo === "periodo"
+    ? eventos.filter((evento) => evento.data >= inicio && evento.data <= fim)
+    : eventos.filter((evento) => evento.data === data);
+  const porLote = resumirDescargasDiarias(eventosFiltrados, leiturasCocho);
+  const totalPrevisto = porLote.reduce((soma, grupo) => soma + (grupo.previsto ?? 0), 0);
+  const totalRealizado = porLote.reduce((soma, grupo) => soma + grupo.realizado, 0);
+  const referenciaCompleta = porLote.every((grupo) => grupo.previsto != null);
+  const saldoGeral = referenciaCompleta ? totalRealizado - totalPrevisto : null;
+  const erroPercentual = referenciaCompleta && totalPrevisto > 0 ? saldoGeral / totalPrevisto * 100 : null;
+  const porTratador = agruparErros(eventosFiltrados, (evento) => evento.tratador, (evento) => evento.tratador);
+  const semPrevisto = porLote.filter((grupo) => grupo.previsto == null).length;
+
+  async function exportarIngredientesExcel() {
+    setExportandoExcel(true);
+    setErroExcel(null);
+    try {
+      const XLSX = await carregarLeitorExcel();
+      const { montarConsumoIngredientesDescargas } = await import("@/lib/consumoIngredientesDescargas.mjs");
+      const linhas = montarConsumoIngredientesDescargas(cargas, {
+        lotes, currais, curralOcupacoes,
+        inicio: modo === "periodo" ? inicio : data,
+        fim: modo === "periodo" ? fim : data,
+        cabecasNaData: (lote, dia) => calcularCabecasNaData(lote, saidasPorLote[lote.id] || [], dia, entradasPorLote[lote.id] || []),
+      });
+      const tabela = [["Data", "Lote", "Curral", "Ingrediente", "Consumo total MN (kg)", "Cabeças no dia", "Consumo MN (kg/cabeça/dia)", "Observação"],
+        ...linhas.map((r) => [formatDataBR(r.data), r.lote, r.curral, r.ingrediente, r.total, r.cabecas, r.porCabeca, r.observacao])];
+      const planilha = XLSX.utils.aoa_to_sheet(tabela);
+      linhas.forEach((r, i) => {
+        planilha[`E${i + 2}`].z = "#,##0.00";
+        if (r.porCabeca != null) planilha[`G${i + 2}`] = { t: "n", f: `E${i + 2}/F${i + 2}`, v: r.porCabeca, z: "0.000" };
+      });
+      planilha["!cols"] = [12, 26, 22, 32, 25, 18, 30, 80].map((wch) => ({ wch }));
+      planilha["!autofilter"] = { ref: planilha["!ref"] };
+      const arquivo = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(arquivo, planilha, "Consumo por ingrediente");
+      XLSX.writeFile(arquivo, `consumo-ingredientes-lotes-${modo === "periodo" ? `${inicio}-a-${fim}` : data}.xlsx`);
+    } catch (erro) {
+      setErroExcel("Não foi possível gerar o Excel. Tente novamente.");
+    } finally {
+      setExportandoExcel(false);
+    }
+  }
+
+  async function exportarPdf() {
+    setExportandoPdf(true);
+    setErroPdf(null);
+    try {
+      const { criarPdfDescargas } = await import("@/lib/descargasPdf.mjs");
+      const pdf = await criarPdfDescargas({
+        periodo: modo === "periodo" ? `${formatDataBR(inicio)} a ${formatDataBR(fim)}` : formatDataBR(data),
+        resumo: [[modo === "periodo" ? "Tratos no período" : "Tratos no dia", String(eventosFiltrados.length)],
+          ["Lotes atendidos", String(porLote.length)], ["Previsto", textoPesoDistribuicao(referenciaCompleta ? totalPrevisto : null)],
+          ["Realizado", textoPesoDistribuicao(totalRealizado)], ["Saldo real - previsto", textoPesoDistribuicao(saldoGeral, true)],
+          ["Erro acumulado real", erroPercentual != null ? `${erroPercentual > 0 ? "+" : ""}${erroPercentual.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "Sem previsto"]],
+        porTratador, porLote, loteExpandido,
+      });
+      pdf.save(`descargas-${modo === "periodo" ? `${inicio}-a-${fim}` : data}.pdf`);
+    } catch (erro) {
+      setErroPdf("Não foi possível gerar o PDF. Tente novamente.");
+    } finally {
+      setExportandoPdf(false);
+    }
+  }
+
+  if (!eventos.length) return <EmptyHint text="Nenhuma descarga detalhada encontrada nas cargas importadas." />;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <SectionTitle>Análise das descargas</SectionTitle>
+        <button type="button" onClick={exportarPdf} disabled={exportandoPdf || !eventosFiltrados.length} style={styles.secondaryActionBtn}>
+          <Download size={14} /> {exportandoPdf ? "Gerando PDF..." : "Exportar PDF"}
+        </button>
+        <button type="button" onClick={exportarIngredientesExcel} disabled={exportandoExcel || !eventosFiltrados.length} style={styles.secondaryActionBtn}>
+          <Download size={14} /> {exportandoExcel ? "Gerando Excel..." : "Exportar Excel"}
+        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid #D8D5CC" }}>
+            <button type="button" onClick={() => setModo("dia")} style={{ padding: "6px 10px", fontSize: 12, border: 0, cursor: "pointer", background: modo === "dia" ? "#1F4D45" : "transparent", color: modo === "dia" ? "#fff" : "#5C5C58" }}>Dia</button>
+            <button type="button" onClick={() => setModo("periodo")} style={{ padding: "6px 10px", fontSize: 12, border: 0, cursor: "pointer", background: modo === "periodo" ? "#1F4D45" : "transparent", color: modo === "periodo" ? "#fff" : "#5C5C58" }}>Período</button>
+          </div>
+          {modo === "dia" ? (
+            <select value={data || ""} onChange={(e) => setDataEscolhida(e.target.value)} style={{ ...styles.input, width: "auto", minWidth: 140, padding: "7px 9px" }}>
+              {datas.map((item) => <option key={item} value={item}>{formatDataBR(item)}</option>)}
+            </select>
+          ) : (
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input type="date" value={inicio} min={primeiraData} max={fim} onChange={(e) => setPeriodoInicio(e.target.value)} style={{ ...styles.input, width: "auto", padding: "7px 9px", fontSize: 12 }} />
+              <span style={{ fontSize: 12, color: "#9A9A94" }}>até</span>
+              <input type="date" value={fim} min={inicio} max={ultimaData} onChange={(e) => setPeriodoFim(e.target.value)} style={{ ...styles.input, width: "auto", padding: "7px 9px", fontSize: 12 }} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {erroPdf && <div role="alert" style={{ color: "#B4473D", marginBottom: 12 }}>{erroPdf}</div>}
+      {erroExcel && <div role="alert" style={{ color: "#B4473D", marginBottom: 12 }}>{erroExcel}</div>}
+      <div style={styles.gestaoGrid} className="desktop-summary-grid">
+        <PainelCard label={modo === "periodo" ? "Tratos no período" : "Tratos no dia"} valor={eventosFiltrados.length} />
+        <PainelCard label="Lotes atendidos" valor={porLote.length} />
+        <PainelCard label="Previsto" valor={textoPesoDistribuicao(referenciaCompleta ? totalPrevisto : null)} />
+        <PainelCard label="Realizado" valor={textoPesoDistribuicao(totalRealizado)} />
+        <PainelCard label="Saldo real − previsto" valor={textoPesoDistribuicao(saldoGeral, true)} />
+        <PainelCard label="Erro acumulado real" valor={erroPercentual != null ? `${erroPercentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : "—"} />
+      </div>
+
+      {semPrevisto > 0 && (
+        <div style={{ ...styles.card, padding: 12, marginBottom: 12, color: "#8A6420", background: "#FFF8E8", fontSize: 12.5 }}>
+          {semPrevisto} lote(s) sem previsto diário registrado. O realizado inclui todas as descargas; o saldo e o erro dependem do previsto diário.
+        </div>
+      )}
+
+      <div style={{ ...styles.card, overflowX: "auto", padding: 0, marginBottom: 12 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Erro de descarga por tratador</div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O erro é (realizado − previsto) / previsto: positivo quando passou do previsto e negativo quando faltou.</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620, fontSize: 12.5 }}>
+          <thead><tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}><th style={{ padding: 10, textAlign: "left" }}>Tratador</th><th style={{ padding: 10 }}>Tratos</th><th style={{ padding: 10 }}>Previsto</th><th style={{ padding: 10 }}>Realizado</th><th style={{ padding: 10 }}>Saldo</th><th style={{ padding: 10 }}>Erro</th></tr></thead>
+          <tbody>
+            {porTratador.map((grupo) => (
+              <tr key={grupo.chave} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                <td style={{ padding: 10, textAlign: "left", fontWeight: 700 }}>{grupo.nome}</td>
+                <td style={{ padding: 10 }}>{grupo.registros.length}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
+                <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.previsto > 0 ? grupo.saldo / grupo.previsto * 100 : null} assinado /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Acumulado por lote</div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O previsto usa a quantidade esperada do lote no dia, sem somar ajustes dos tratos. O erro é (realizado − previsto) / previsto. Clique em um lote para visualizar cada trato.</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720, fontSize: 12.5 }}>
+          <thead><tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}><th style={{ padding: 10, textAlign: "left" }}>Curral / lote</th><th style={{ padding: 10 }}>Tratos</th><th style={{ padding: 10 }}>Previsto</th><th style={{ padding: 10 }}>Realizado</th><th style={{ padding: 10 }}>Saldo</th><th style={{ padding: 10 }}>Erro acumulado</th></tr></thead>
+          <tbody>
+            {porLote.map((grupo) => {
+              const expandido = loteExpandido === grupo.chave;
+              return (
+                <Fragment key={grupo.chave}>
+                  <tr onClick={() => setLoteExpandido(expandido ? null : grupo.chave)} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right", cursor: "pointer" }}>
+                    <td style={{ padding: 10, textAlign: "left", fontWeight: 700 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ChevronDown size={14} style={{ transform: expandido ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s" }} />{grupo.nome}</span></td>
+                    <td style={{ padding: 10 }}>{grupo.registros.length}</td>
+                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
+                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
+                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
+                    <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} assinado /></td>
+                  </tr>
+                  {expandido && (
+                    <tr><td colSpan={6} style={{ padding: 0, background: "#FAFAF7" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760, fontSize: 12 }}>
+                        <thead><tr style={{ color: "#8A8A82", textAlign: "right" }}><th style={{ padding: "7px 10px 7px 34px", textAlign: "left" }}>Data / hora</th><th style={{ padding: 7, textAlign: "left" }}>Trato / carga</th><th style={{ padding: 7, textAlign: "left" }}>Tratador</th><th style={{ padding: 7 }}>Previsto</th><th style={{ padding: 7 }}>Realizado</th><th style={{ padding: 7 }}>Saldo</th><th style={{ padding: 7 }}>Erro</th></tr></thead>
+                        <tbody>{[...grupo.registros].sort((a, b) => `${b.data}${b.hora || ""}`.localeCompare(`${a.data}${a.hora || ""}`)).map((evento) => (
+                          <tr key={evento.chave} style={{ borderTop: "1px solid #EFEDE6", textAlign: "right" }}>
+                            <td style={{ padding: "7px 10px 7px 34px", textAlign: "left" }}>{formatDataBR(evento.data)}{evento.hora ? ` · ${evento.hora}` : ""}</td>
+                            <td style={{ padding: 7, textAlign: "left" }}>{evento.cargaCodigo}{evento.receita ? ` · ${evento.receita}` : ""}</td>
+                            <td style={{ padding: 7, textAlign: "left" }}>{evento.tratador}</td>
+                            <td style={{ padding: 7 }}>{evento.previsto > 0 ? textoPesoDistribuicao(evento.previsto) : "—"}</td>
+                            <td style={{ padding: 7 }}>{textoPesoDistribuicao(evento.realizado)}</td>
+                            <td style={{ padding: 7 }}>{evento.previsto > 0 ? textoPesoDistribuicao(evento.saldo, true) : "—"}</td>
+                            <td style={{ padding: 7 }}><BadgeErroDistribuicao percentual={evento.percentual} assinado /></td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    </td></tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Lista de dietas formuladas (Adaptação/Recria/Crescimento/Terminação/
+// Sequestro) do cliente — cada uma com sua própria lista de ingredientes.
+function AbaDietas({ dietas, ingredientesMs, onAbrir }) {
+  const ordenadas = [...dietas].sort((a, b) => a.nome.localeCompare(b.nome));
+
+  if (ordenadas.length === 0) return <EmptyHint text="Nenhuma dieta cadastrada." />;
+
+  return (
+    <div>
+      {ordenadas.map((d) => {
+        const { custoPorKgMn } = calcularDieta(d.ingredientes, ingredientesMs);
+        return (
+          <div key={d.id} style={styles.listItem} onClick={() => onAbrir(d.id)}>
+            <div style={styles.avatar}>
+              <Wheat size={17} color="#1F4D45" />
+            </div>
+            <div style={{ flex: 1, textAlign: "left" }}>
+              <div style={styles.listItemTitle}>{d.nome}</div>
+              <div style={styles.listItemSub}>
+                GMD previsto: {d.gmd_previsto == null ? "Não informado" : `${Number(d.gmd_previsto).toLocaleString("pt-BR", {minimumFractionDigits:3, maximumFractionDigits:3})} kg/cabeça/dia`} · {(d.ingredientes || []).length} ingrediente(s)
+                {custoPorKgMn > 0 ? ` · ${formatBRL(custoPorKgMn)}/kg MN` : ""}
+              </div>
+            </div>
+            <span style={styles.dietaTipoTag}>{labelTipoDieta(d.tipo)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// %MS e preço de cada ingrediente NÃO ficam gravados na dieta — vêm da
+// biblioteca compartilhada `ingredientesMs` (mesma aba Cargas), pela chave
+// normalizada do nome. Editar aqui salva direto na biblioteca (mesmo
+// upsert da aba Cargas), então atualizar o MS ou o preço de um ingrediente
+// uma vez reflete em qualquer outra dieta que o use.
+function FormDieta({ onCancel, onSave, dietaExistente, onDelete, ingredientesMs = [], onSalvarMs }) {
+  const ehEdicao = Boolean(dietaExistente);
+  const [nome, setNome] = useState(dietaExistente?.nome || "");
+  const [gmdPrevisto, setGmdPrevisto] = useState(dietaExistente?.gmd_previsto ?? "");
+  const [tipo, setTipo] = useState(dietaExistente?.tipo || TIPOS_DIETA[0].value);
+  const [ingredientes, setIngredientes] = useState(
+    dietaExistente?.ingredientes?.length ? dietaExistente.ingredientes : [ingredienteVazio()]
+  );
+  const [salvando, setSalvando] = useState(false);
+  const [salvandoCampo, setSalvandoCampo] = useState(null);
+
+  function atualizarIngrediente(index, campo, valor) {
+    setIngredientes((lista) => lista.map((ing, i) => (i === index ? { ...ing, [campo]: valor } : ing)));
+  }
+
+  function renomearIngrediente(index, novoNome) {
+    setIngredientes((lista) =>
+      lista.map((ing, i) => (i === index ? { ...ing, nome: novoNome, ingrediente_chave: chaveIngrediente(novoNome) } : ing))
+    );
+  }
+
+  function removerIngrediente(index) {
+    setIngredientes((lista) => lista.filter((_, i) => i !== index));
+  }
+
+  function adicionarIngrediente() {
+    setIngredientes((lista) => [...lista, ingredienteVazio()]);
+  }
+
+  // Salva MS/custo direto na biblioteca do cliente (upsert por chave) —
+  // não fica em estado local: o valor exibido vem sempre de `ingredientesMs`.
+  async function salvarNaBiblioteca(chave, nomeAtual, campo, valor) {
+    if (!onSalvarMs || !chave) return;
+    const numero = valor === "" ? null : Number(valor);
+    if (numero != null && (isNaN(numero) || numero < 0 || (campo === "ms_percentual" && numero > 100))) return;
+    const existente = ingredientesMs.find((i) => i.ingrediente_chave === chave);
+    if (numero === (existente?.[campo] == null ? null : Number(existente[campo]))) return;
+    setSalvandoCampo(`${chave}:${campo}`);
+    try {
+      await onSalvarMs({
+        ingrediente_chave: chave,
+        ingrediente_nome: nomeAtual,
+        ms_percentual: campo === "ms_percentual" ? numero : existente?.ms_percentual ?? null,
+        custo_kg_mn: campo === "custo_kg_mn" ? numero : existente?.custo_kg_mn ?? null,
+      });
+    } finally {
+      setSalvandoCampo(null);
+    }
+  }
+
+  const ingredientesValidos = ingredientes.filter((ing) => ing.nome.trim());
+  const { linhas, totalParticipacaoMs, custoPorKgMs, custoPorKgMn, faltamMs, faltamCusto } = calcularDieta(ingredientesValidos, ingredientesMs);
+  const msForaDoEsperado = ingredientesValidos.length > 0 && Math.abs(totalParticipacaoMs - 100) > 0.5;
+
+  const gmdValido = String(gmdPrevisto).trim() === "" || (numeroDecimal(gmdPrevisto) != null && numeroDecimal(gmdPrevisto) >= 0);
+  const valido = nome.trim() && ingredientesValidos.length > 0 && gmdValido;
+  const nomesBiblioteca = [...new Set(ingredientesMs.map((i) => i.ingrediente_nome).filter(Boolean))];
+
+  async function handleSave() {
+    setSalvando(true);
+    try {
+      const paraSalvar = ingredientesValidos.map((ing) => ({
+        ingrediente_chave: ing.ingrediente_chave || chaveIngrediente(ing.nome),
+        nome: ing.nome.trim(),
+        participacao_ms: ing.participacao_ms,
+      }));
+      await onSave({ nome: nome.trim(), tipo, ingredientes: paraSalvar, gmd_previsto: numeroDecimal(gmdPrevisto) });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title={ehEdicao ? "Editar dieta" : "Nova dieta"} onBack={onCancel} />
+      <div style={styles.card}>
+        <InputField label="Nome da dieta *" value={nome} onChange={setNome} placeholder="Ex: Dieta padrão terminação" />
+        <SelectField label="Fase *" value={tipo} onChange={setTipo} options={TIPOS_DIETA} />
+        <InputField label="Registrar GMD por dieta (kg/cabeça/dia)" inputMode="decimal" value={gmdPrevisto} onChange={setGmdPrevisto} placeholder="Ex: 1,450" />
+        {!gmdValido && <div role="alert" style={styles.errorBox}>Informe um decimal válido igual ou maior que zero.</div>}
+        <p style={{fontSize:12}}>Informe sua previsão. Sem GMD, a projeção será incompleta. Ao salvar, o GMD desta dieta será aplicado também aos períodos anteriores dos lotes vinculados, recalculando o peso esperado.</p>
+      </div>
+
+      <SectionTitle>Ingredientes</SectionTitle>
+      <datalist id="dieta-biblioteca-ingredientes">
+        {nomesBiblioteca.map((n) => <option key={n} value={n} />)}
+      </datalist>
+
+      {ingredientes.map((ing, i) => {
+        const linha = linhas.find((l) => l.ingrediente_chave === (ing.ingrediente_chave || chaveIngrediente(ing.nome)));
+        const chave = ing.ingrediente_chave || (ing.nome.trim() ? chaveIngrediente(ing.nome) : "");
+        const semBiblioteca = chave && !ingredientesMs.some((item) => item.ingrediente_chave === chave);
+        return (
+          <div key={i} style={styles.ingredienteCard}>
+            <div style={styles.ingredienteHeaderRow}>
+              <input
+                value={ing.nome}
+                onChange={(e) => renomearIngrediente(i, e.target.value)}
+                placeholder={`Ingrediente ${i + 1}`}
+                list="dieta-biblioteca-ingredientes"
+                style={{ ...styles.ingredienteMiniInput, border: "none", background: "transparent", fontSize: 14.5, fontWeight: 600, padding: 0 }}
+              />
+              {ingredientes.length > 1 && (
+                <button onClick={() => removerIngrediente(i)} style={styles.ingredienteRemoveBtn}>
+                  <Trash2 size={15} />
+                </button>
+              )}
+            </div>
+            <div style={styles.ingredienteGrid}>
+              <label style={styles.ingredienteMiniField}>
+                <div style={styles.ingredienteMiniLabel}>% MS do alimento</div>
+                <input
+                  type="number"
+                  defaultValue={linha?.ms || ""}
+                  key={`ms-${chave}-${linha?.ms ?? ""}`}
+                  disabled={!chave || !onSalvarMs}
+                  onBlur={(e) => salvarNaBiblioteca(chave, ing.nome.trim(), "ms_percentual", e.target.value)}
+                  placeholder="Ex: 88"
+                  style={styles.ingredienteMiniInput}
+                />
+              </label>
+              <label style={styles.ingredienteMiniField}>
+                <div style={styles.ingredienteMiniLabel}>% na dieta (MS)</div>
+                <input
+                  type="number"
+                  value={ing.participacao_ms}
+                  onChange={(e) => atualizarIngrediente(i, "participacao_ms", e.target.value)}
+                  placeholder="Ex: 20"
+                  style={styles.ingredienteMiniInput}
+                />
+              </label>
+              <label style={styles.ingredienteMiniField}>
+                <div style={styles.ingredienteMiniLabel}>Preço R$/kg</div>
+                <input
+                  type="number"
+                  defaultValue={linha?.preco || ""}
+                  key={`preco-${chave}-${linha?.preco ?? ""}`}
+                  disabled={!chave || !onSalvarMs}
+                  onBlur={(e) => salvarNaBiblioteca(chave, ing.nome.trim(), "custo_kg_mn", e.target.value)}
+                  placeholder="Ex: 0,90"
+                  style={styles.ingredienteMiniInput}
+                />
+              </label>
+            </div>
+            {salvandoCampo?.startsWith(`${chave}:`) && (
+              <div style={styles.ingredienteMnResult}>Salvando na biblioteca do cliente...</div>
+            )}
+            {!salvandoCampo && ing.nome.trim() && (
+              <div style={styles.ingredienteMnResult}>
+                Participação em matéria natural: <span style={styles.ingredienteMnValor}>{linha ? linha.participacaoMn.toFixed(1) : "0,0"}%</span>
+                {semBiblioteca && " · novo na biblioteca — preencha %MS e preço acima"}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <button onClick={adicionarIngrediente} style={styles.addIngredienteBtn}>
+        <Plus size={16} /> Adicionar ingrediente
+      </button>
+
+      {ingredientesValidos.length > 0 && (
+        <div style={styles.dietaResumoCard}>
+          <div style={styles.dietaResumoRow}>
+            <span style={styles.dietaResumoLabel}>Custo por kg de matéria natural</span>
+            <span style={styles.dietaResumoValor}>{formatBRL(custoPorKgMn)}</span>
+          </div>
+          <div style={styles.dietaResumoRow}>
+            <span style={styles.dietaResumoLabel}>Custo por kg de matéria seca</span>
+            <span style={styles.dietaResumoValor}>{formatBRL(custoPorKgMs)}</span>
+          </div>
+          {msForaDoEsperado && (
+            <div style={styles.dietaResumoAviso}>
+              <AlertTriangle size={11} style={{ verticalAlign: -1, marginRight: 4 }} />
+              A soma da participação em MS está em {totalParticipacaoMs.toFixed(1)}% (o esperado é 100%).
+            </div>
+          )}
+          {(faltamMs > 0 || faltamCusto > 0) && (
+            <div style={styles.dietaResumoAviso}>
+              <AlertTriangle size={11} style={{ verticalAlign: -1, marginRight: 4 }} />
+              {faltamMs > 0 && `${faltamMs} ingrediente(s) sem %MS cadastrado`}
+              {faltamMs > 0 && faltamCusto > 0 && " · "}
+              {faltamCusto > 0 && `${faltamCusto} sem preço cadastrado`}
+            </div>
+          )}
+        </div>
+      )}
+
+      <PrimaryButton disabled={!valido || salvando} onClick={handleSave}>
+        {salvando ? "Salvando..." : ehEdicao ? "Salvar alterações" : "Salvar dieta"}
+      </PrimaryButton>
+      {ehEdicao && onDelete && (
+        <button onClick={onDelete} style={styles.dangerLinkBtn}>
+          <Trash2 size={14} /> Excluir dieta
+        </button>
+      )}
+    </div>
+  );
+}
+
+const SEM_DADOS_TRATO = [];
+
+export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, ingredientesMs, lotes, consumos, currais = SEM_DADOS_TRATO, curralOcupacoes = SEM_DADOS_TRATO, onSalvarMs, onSincronizar, onImportar, onExcluirCarga, modoInicial = "dia", exportacaoDisponivel = true }) {
+  const [composicoes, setComposicoes] = useState({ clienteId: null, receitas: [], erro: "" });
+  useEffect(() => {
+    let ativa = true;
+    const atualizar = async () => {
+      if (!cliente?.id) return;
+      setComposicoes({ clienteId: null, receitas: [], erro: "" });
+      try {
+        const receitas = await buscarTodasPaginas(() => supabase.from("trato_dietas")
+          .select("id,cliente_id,nome,tipo_receita,ingredientes")
+          .eq("cliente_id", cliente.id).eq("tipo_receita", "pre_mistura"));
+        if (ativa) setComposicoes({ clienteId: cliente.id, receitas, erro: "" });
+      } catch {
+        if (ativa) setComposicoes({ clienteId: cliente.id, receitas: [], erro: "Não foi possível carregar a composição das pré-misturas. O PDF dos erros pode ser exportado; os componentes das pré-misturas não serão detalhados." });
+      }
+    };
+    atualizar();
+    return () => { ativa = false; };
+  }, [cliente?.id]);
+  const datas = datasDisponiveisTrato(cargas);
+  const primeiraData = datas[datas.length - 1];
+  const ultimaData = datas[0];
+  const [modo, setModo] = useState(modoInicial);
+  const [dataEscolhida, setDataEscolhida] = useState("");
+  const [periodoInicio, setPeriodoInicio] = useState("");
+  const [periodoFim, setPeriodoFim] = useState("");
+  const [salvando, setSalvando] = useState(null);
+  const [cargaExpandida, setCargaExpandida] = useState(null);
+  const [tipoDietaExpandido, setTipoDietaExpandido] = useState(null);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [mensagemSincronizacao, setMensagemSincronizacao] = useState("");
+  const [exportandoIngredientesPdf, setExportandoIngredientesPdf] = useState(false);
+  const [exportandoExcel, setExportandoExcel] = useState(false);
+  const [erroExcel, setErroExcel] = useState(null);
+  const [exportandoPdf, setExportandoPdf] = useState(false);
+  const [erroPdf, setErroPdf] = useState("");
+  const [pdfGerado, setPdfGerado] = useState(null);
+  const [destinatarioRelatorio, setDestinatarioRelatorio] = useState("");
+  const data = datas.includes(dataEscolhida) ? dataEscolhida : datas[0];
+  const inicio = periodoInicio || primeiraData;
+  const fim = periodoFim || ultimaData;
+  const inicioRelatorio = modo === "dia" ? data : inicio;
+  const fimRelatorio = modo === "dia" ? data : fim;
+  const periodoValido = Boolean(inicioRelatorio && fimRelatorio && inicioRelatorio <= fimRelatorio);
+  const relatorioTrato = useMemo(() => periodoValido && exportacaoDisponivel
+    ? montarRelatorioTrato({ cargas, lotes, leiturasCocho, currais, curralOcupacoes, premisturas: composicoes.receitas, clienteId: cliente?.id, inicio: inicioRelatorio, fim: fimRelatorio, modo }) : null,
+  [cargas, lotes, leiturasCocho, currais, curralOcupacoes, composicoes, cliente?.id, inicioRelatorio, fimRelatorio, periodoValido, modo, exportacaoDisponivel]);
+  useEffect(() => () => { if (pdfGerado) URL.revokeObjectURL(pdfGerado.url); }, [pdfGerado]);
+  const pdfAtual = pdfGerado?.relatorio === relatorioTrato && pdfGerado?.destinatario === destinatarioRelatorio ? pdfGerado : null;
+  const cargasDia = modo === "periodo"
+    ? cargas.filter((c) => c.data >= inicio && c.data <= fim)
+    : cargas.filter((c) => c.data === data);
+  const msPorIngrediente = new Map(
+    ingredientesMs
+      .filter((i) => i.ms_percentual != null)
+      .map((i) => [i.ingrediente_chave, Number(i.ms_percentual)])
+  );
+  const custoPorIngrediente = new Map(
+    ingredientesMs
+      .filter((i) => i.custo_kg_mn != null)
+      .map((i) => [i.ingrediente_chave, Number(i.custo_kg_mn)])
+  );
+  const resumo = new Map();
+
+  for (const carga of cargasDia) {
+    for (const item of Array.isArray(carga.itens) ? carga.itens : []) {
+      const chave = item.ingrediente_chave || chaveIngrediente(item.ingrediente);
+      const atual = resumo.get(chave) || {
+        chave,
+        nome: item.ingrediente,
+        previsto: 0,
+        real: 0,
+      };
+      atual.previsto += Number(item.peso_previsto || 0);
+      atual.real += Number(item.peso_real || 0);
+      resumo.set(chave, atual);
+    }
+  }
+
+  const ingredientes = [...resumo.values()].sort((a, b) => b.real - a.real);
+  const totalReal = ingredientes.reduce((s, i) => s + i.real, 0);
+  const errosPorCarga = cargasDia.map((carga) => ({
+    carga,
+    tratador: tratadorDaCarga(carga),
+    ...resumoErroDaCarga(carga),
+  }));
+  const totalPrevistoCargas = errosPorCarga.reduce((soma, item) => soma + item.previsto, 0);
+  const totalRealCargas = errosPorCarga.reduce((soma, item) => soma + item.realizado, 0);
+  const erroAbsolutoCargas = errosPorCarga.reduce((soma, item) => soma + item.erroAbsoluto, 0);
+  const erroMedio = relatorioTrato?.cargas.erroPercentual ?? null;
+  const errosCargaPorTratador = agruparErros(
+    errosPorCarga,
+    (item) => item.tratador,
+    (item) => item.tratador
+  );
+  const totalMs = ingredientes.reduce((s, i) => {
+    const ms = msPorIngrediente.get(i.chave);
+    return s + (Number.isFinite(ms) ? i.real * ms / 100 : 0);
+  }, 0);
+  const faltamMs = ingredientes.filter((i) => !Number.isFinite(msPorIngrediente.get(i.chave))).length;
+  const custoTotal = ingredientes.reduce((s, i) => {
+    const custo = custoPorIngrediente.get(i.chave);
+    return s + (Number.isFinite(custo) ? i.real * custo : 0);
+  }, 0);
+  const custoDietaKgMn = totalReal > 0 ? custoTotal / totalReal : null;
+  const custoDietaKgMs = totalMs > 0 ? custoTotal / totalMs : null;
+  const faltamCustos = ingredientes.filter((i) => !Number.isFinite(custoPorIngrediente.get(i.chave))).length;
+
+  // Erro acumulado por tipo de dieta (Adaptação/Recria/Crescimento/
+  // Terminação/Sequestro): mesmas cargas do período, agrupadas pela
+  // receita em vez de por ingrediente — complementa a tabela por
+  // ingrediente e a lista por carga, sem substituir nenhuma das duas.
+  // Erro por grupo é o mesmo cálculo do resumo geral (soma do erro
+  // absoluto por ingrediente / previsto total) — não a diferença líquida
+  // previsto-real da carga, que mascara erros que se cancelam entre
+  // ingredientes (ex: milho a mais, silagem a menos no mesmo carregamento).
+  const porTipoDieta = new Map();
+  for (const carga of cargasDia) {
+    const tipo = classificarTipoDietaPorReceita(carga.receita);
+    const itensCarga = Array.isArray(carga.itens) ? carga.itens : [];
+    const realCarga = itensCarga.reduce((s, i) => s + Number(i.peso_real || 0), 0);
+    const custoCarga = itensCarga.reduce((s, item) => {
+      const custo = custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente));
+      return s + (Number.isFinite(custo) ? Number(item.peso_real || 0) * custo : 0);
+    }, 0);
+    const cargaComCustoCompleto = itensCarga.every((item) =>
+      Number.isFinite(custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)))
+    );
+    const chaveTipo = tipo || "outro";
+    const grupo = porTipoDieta.get(chaveTipo) || {
+      tipo,
+      cargas: 0,
+      previsto: 0,
+      real: 0,
+      custo: 0,
+      custoCompleto: true,
+      ingredientes: new Map(),
+    };
+    grupo.cargas += 1;
+    grupo.real += realCarga;
+    grupo.custo += custoCarga;
+    if (!cargaComCustoCompleto) grupo.custoCompleto = false;
+    for (const item of itensCarga) {
+      const chave = item.ingrediente_chave || chaveIngrediente(item.ingrediente);
+      const atualItem = grupo.ingredientes.get(chave) || { chave, nome: item.ingrediente, previsto: 0, real: 0 };
+      atualItem.previsto += Number(item.peso_previsto || 0);
+      atualItem.real += Number(item.peso_real || 0);
+      grupo.ingredientes.set(chave, atualItem);
+    }
+    porTipoDieta.set(chaveTipo, grupo);
+  }
+  const gruposPorTipoDieta = [...porTipoDieta.values()].map((grupo) => {
+    const ingredientesGrupo = [...grupo.ingredientes.values()].sort((a, b) => b.real - a.real);
+    const previsto = ingredientesGrupo.reduce((s, i) => s + i.previsto, 0);
+    const erroAbsolutoGrupo = ingredientesGrupo.reduce((s, i) => s + Math.abs(i.real - i.previsto), 0);
+    return { ...grupo, previsto, erroAbsoluto: erroAbsolutoGrupo, ingredientes: ingredientesGrupo };
+  }).sort((a, b) => b.real - a.real);
+
+  async function exportarErrosTrato() {
+    if (!relatorioTrato || (!relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length) || exportandoPdf) return;
+    setExportandoPdf(true);
+    setErroPdf("");
+    try {
+      const doc = await criarPdfErrosCargas({ ingredientes, inicio: inicioRelatorio, fim: fimRelatorio,
+        clienteNome: cliente?.nome, msPorIngrediente, custoPorIngrediente, porTratador: errosCargaPorTratador, modo,
+        resumo: [[modo === "periodo" ? "Cargas no período" : "Cargas no dia", String(cargasDia.length)],
+          ["Matéria natural", `${totalRealCargas.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`],
+          ["Erro absoluto", erroMedio == null ? "Sem referência" : `${erroMedio.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`],
+          ["Matéria seca", `${totalMs.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg MS`],
+          ["Custo total das cargas", faltamCustos === 0 ? formatBRL(custoTotal) : "Preencha os custos"],
+          ["Custo da dieta (MN)", faltamCustos === 0 && custoDietaKgMn != null ? `${formatBRL(custoDietaKgMn)}/kg` : "—"],
+          ["Custo da dieta (MS)", faltamCustos === 0 && custoDietaKgMs != null ? `${formatBRL(custoDietaKgMs)}/kg MS` : "—"]],
+      });
+      const periodo = inicioRelatorio === fimRelatorio ? inicioRelatorio : `${inicioRelatorio}-a-${fimRelatorio}`;
+      const nome = `erros-cargas-${periodo}.pdf`;
+      const blob = doc.output("blob");
+      setPdfGerado({ url: URL.createObjectURL(blob), nome, relatorio: relatorioTrato, destinatario: destinatarioRelatorio });
+      try {
+        await doc.save(nome, { returnPromise: true });
+      } catch {
+        setErroPdf("O PDF está pronto. Use Abrir PDF ou Baixar PDF abaixo.");
+      }
+    } catch (erro) {
+      setErroPdf(erro.message || "Não foi possível gerar o PDF. Tente novamente.");
+    } finally {
+      setExportandoPdf(false);
+    }
+  }
+
+  async function exportarIngredientesExcel() {
+    setExportandoExcel(true);
+    setErroExcel(null);
+    try {
+      const XLSX = await carregarLeitorExcel();
+      const tabela = [["Início", "Fim", "Ingrediente", "Previsto MN (kg)", "Realizado MN (kg)", "Saldo (kg)", "Saldo (%)", "MS (%)", "Realizado MS (kg)", "Custo (R$/kg MN)", "Custo total (R$)"],
+        ...ingredientes.map((item) => {
+          const ms = msPorIngrediente.get(item.chave);
+          const custo = custoPorIngrediente.get(item.chave);
+          return [inicioRelatorio, fimRelatorio, item.nome, item.previsto, item.real, item.real - item.previsto,
+            item.previsto > 0 ? (item.real - item.previsto) / item.previsto * 100 : null,
+            ms, Number.isFinite(ms) ? item.real * ms / 100 : null,
+            custo, Number.isFinite(custo) ? item.real * custo : null];
+        })];
+      const planilha = XLSX.utils.aoa_to_sheet(tabela);
+      planilha["!cols"] = [12, 12, 32, 22, 22, 20, 16, 16, 22, 24, 22].map((wch) => ({ wch }));
+      planilha["!autofilter"] = { ref: planilha["!ref"] };
+      const arquivo = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(arquivo, planilha, "Consumo por ingrediente");
+      XLSX.writeFile(arquivo, `cargas-ingredientes-${inicioRelatorio}-${fimRelatorio}.xlsx`);
+    } catch {
+      setErroExcel("Não foi possível gerar o Excel. Tente novamente.");
+    } finally {
+      setExportandoExcel(false);
+    }
+  }
+
+  async function exportarIngredientesPdf() {
+    if (cliente?.id && composicoes.clienteId !== cliente.id) {
+      setErroPdf(composicoes.erro || "Aguarde o carregamento da composição das pré-misturas antes de exportar os ingredientes.");
+      return;
+    }
+    if (!relatorioTrato) {
+      setErroPdf("Escolha um dia ou período válido para exportar os ingredientes.");
+      return;
+    }
+    setExportandoIngredientesPdf(true);
+    setErroPdf("");
+    try {
+      const { criarPdfConsumoIngredientes } = await import("@/lib/consumoIngredientesPdf.mjs");
+      const pdf = await criarPdfConsumoIngredientes({
+        resumo: ingredientes.map((item) => ({ ...item, ms: msPorIngrediente.get(item.chave), custo: custoPorIngrediente.get(item.chave) })),
+        detalhado: { ...relatorioTrato.consumoIngredientes, inicio: inicioRelatorio, fim: fimRelatorio },
+        clienteNome: cliente?.nome,
+      });
+      pdf.save(`consumo-ingredientes-${inicioRelatorio}-${fimRelatorio}.pdf`);
+    } catch (erro) {
+      setErroPdf(erro.message || "Não foi possível exportar os ingredientes em PDF.");
+    } finally {
+      setExportandoIngredientesPdf(false);
+    }
+  }
+
+  async function salvarConfiguracao(item, campo, valor) {
+    if (!onSalvarMs) return;
+    const numero = normalizarNumeroPlanilha(valor);
+    if (numero == null || numero < 0 || (campo === "ms_percentual" && numero > 100)) return;
+    const msAtual = msPorIngrediente.get(item.chave);
+    const custoAtual = custoPorIngrediente.get(item.chave);
+    if (numero === (campo === "ms_percentual" ? msAtual : custoAtual)) return;
+    setSalvando(item.chave);
+    try {
+      const configuracaoAtualizada = {
+        ingrediente_chave: item.chave,
+        ingrediente_nome: item.nome,
+        ms_percentual: campo === "ms_percentual" ? numero : Number.isFinite(msAtual) ? msAtual : null,
+        custo_kg_mn: campo === "custo_kg_mn" ? numero : Number.isFinite(custoAtual) ? custoAtual : null,
+      };
+      await onSalvarMs(configuracaoAtualizada);
+      // Assim que a MS/custo de um ingrediente é preenchida, sincroniza na
+      // hora — não deixa dependente do clique manual em "Sincronizar
+      // descargas com consumo" (que fica só como reforço/recálculo).
+      if (onSincronizar) {
+        const ingredientesAtualizados = [
+          ...ingredientesMs.filter((i) => i.ingrediente_chave !== item.chave),
+          configuracaoAtualizada,
+        ];
+        const atualizacoes = montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesAtualizados, currais, curralOcupacoes);
+        if (atualizacoes.length) await onSincronizar(atualizacoes);
+      }
+    } finally {
+      setSalvando(null);
+    }
+  }
+
+  async function sincronizarConsumos() {
+    if (!onSincronizar) return;
+    setSincronizando(true);
+    setMensagemSincronizacao("");
+    try {
+      const atualizacoes = montarSincronizacoesConsumoCargas(cargas, lotes, consumos, ingredientesMs, currais, curralOcupacoes);
+      await onSincronizar(atualizacoes);
+      setMensagemSincronizacao(
+        atualizacoes.length
+          ? `${atualizacoes.length} consumo(s) sincronizado(s) com as descargas.`
+          : "Nenhum consumo pôde ser sincronizado. Confira se as descargas, os lotes, a MS e os preços estão completos."
+      );
+    } finally {
+      setSincronizando(false);
+    }
+  }
+
+  if (!cargas.length) {
+    return (
+      <div>
+        <EmptyHint text="Nenhuma carga importada ainda. Use o mesmo arquivo bruto do vagão utilizado no consumo." />
+        {onImportar && <PrimaryButton onClick={onImportar}>Importar cargas</PrimaryButton>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <SectionTitle>Cargas do vagão</SectionTitle>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid #D8D5CC" }}>
+            <button type="button" onClick={() => setModo("dia")}
+              style={{
+                padding: "6px 10px", fontSize: 12, border: 0, cursor: "pointer",
+                background: modo === "dia" ? "#1F4D45" : "transparent",
+                color: modo === "dia" ? "#fff" : "#5C5C58",
+              }}>
+              Dia
+            </button>
+            <button type="button" onClick={() => setModo("periodo")}
+              style={{
+                padding: "6px 10px", fontSize: 12, border: 0, cursor: "pointer",
+                background: modo === "periodo" ? "#1F4D45" : "transparent",
+                color: modo === "periodo" ? "#fff" : "#5C5C58",
+              }}>
+              Período
+            </button>
+          </div>
+          {modo === "dia" ? (
+            <label style={{ fontSize: 12, color: "#5C5C58" }}>
+              <select aria-label="Dia do relatório" value={data || ""} onChange={(e) => setDataEscolhida(e.target.value)}
+                style={{ ...styles.input, width: "auto", minWidth: 140, padding: "7px 9px" }}>
+                {datas.map((d) => <option key={d} value={d}>{formatDataBR(d)}</option>)}
+              </select>
+            </label>
+          ) : (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <input aria-label="Início do período" type="date" value={inicio || ""} min={primeiraData} max={fim}
+                onInput={(e) => setPeriodoInicio(e.currentTarget.value)}
+                onChange={(e) => setPeriodoInicio(e.target.value)}
+                style={{ ...styles.input, width: "auto", padding: "7px 9px", fontSize: 12 }} />
+              <span style={{ fontSize: 12, color: "#9A9A94" }}>até</span>
+              <input aria-label="Fim do período" type="date" value={fim || ""} min={inicio} max={ultimaData}
+                onInput={(e) => setPeriodoFim(e.currentTarget.value)}
+                onChange={(e) => setPeriodoFim(e.target.value)}
+                style={{ ...styles.input, width: "auto", padding: "7px 9px", fontSize: 12 }} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        <button type="button" onClick={exportarIngredientesExcel}
+          disabled={exportandoExcel || !exportacaoDisponivel || !periodoValido || !ingredientes.length} style={styles.secondaryActionBtn}>
+          <Download size={14} /> {exportandoExcel ? "Gerando Excel..." : "Exportar Excel"}
+        </button>
+        <button type="button" onClick={exportarIngredientesPdf}
+          disabled={exportandoIngredientesPdf || !exportacaoDisponivel || !periodoValido || !ingredientes.length} style={styles.secondaryActionBtn}>
+          <Download size={14} /> {exportandoIngredientesPdf ? "Gerando PDF..." : "Ingredientes em PDF"}
+        </button>
+        <button type="button" disabled={!exportacaoDisponivel || !periodoValido || !ingredientes.length}
+          onClick={() => baixarCSV(`consumo-ingredientes-${inicioRelatorio}-${fimRelatorio}.csv`,
+            ["Início", "Fim", "Ingrediente", "Previsto MN (kg)", "Realizado MN (kg)", "Saldo (kg)", "Saldo (%)", "MS (%)", "Realizado MS (kg)", "Custo (R$/kg MN)", "Custo total (R$)"],
+            ingredientes.map((item) => {
+              const ms = msPorIngrediente.get(item.chave);
+              const custo = custoPorIngrediente.get(item.chave);
+              return [inicioRelatorio, fimRelatorio, item.nome, item.previsto, item.real, item.real - item.previsto,
+                item.previsto > 0 ? (item.real - item.previsto) / item.previsto * 100 : null,
+                ms, Number.isFinite(ms) ? item.real * ms / 100 : null,
+                custo, Number.isFinite(custo) ? item.real * custo : null];
+            }))}
+          style={styles.secondaryActionBtn}>
+          <Download size={14} /> Ingredientes em CSV
+        </button>
+      </div>
+
+      {erroExcel && <div role="alert" style={{ color: "#B4473D", marginBottom: 12 }}>{erroExcel}</div>}
+
+      <div style={{ ...styles.card, marginBottom: 14, border: "1px solid #DCE5DE", background: "#F5F8F5" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 14 }}>
+          <div style={{ flex: "1 1 280px" }}>
+            <div style={{ fontWeight: 700, color: "#1F4D45", marginBottom: 5 }}>Painel para imprimir e expor</div>
+            <div style={{ fontSize: 12.5, color: "#5C5C58", lineHeight: 1.6 }}>
+              {modo === "periodo"
+                ? "Turmas agrupadas pelo login, em qualquer horário ou dia de trabalho. Cada ingrediente tem um único resultado acumulado: faltou, passou ou ficou no previsto."
+                : "Uma página por carga, com letras grandes: vermelho quando faltou e azul quando passou do previsto. Cargas com muitos itens continuam na próxima página."}
+            </div>
+          </div>
+          <button type="button" onClick={exportarErrosTrato}
+            disabled={exportandoPdf || !relatorioTrato || (!relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length)}
+            style={{ ...styles.secondaryActionBtn, display: "flex", alignItems: "center", gap: 7,
+              opacity: exportandoPdf || !relatorioTrato || (!relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length) ? 0.5 : 1 }}>
+            <Download size={16} /> {exportandoPdf ? "Gerando PDF..." : "Exportar erros em PDF"}
+          </button>
+        </div>
+        <label style={{ display: "block", marginTop: 12, fontSize: 12, color: "#5C5C58" }}>
+          Destinatário (opcional)
+          <input value={destinatarioRelatorio} onChange={(e) => setDestinatarioRelatorio(e.target.value)} maxLength={80}
+            placeholder="Ex.: Mural do trato" style={{ ...styles.input, display: "block", marginTop: 5, maxWidth: 340,
+              padding: "9px 11px", border: "1px solid #D8DFD9", borderRadius: 8, background: "#FFFFFF", fontSize: 13 }} />
+        </label>
+        <div style={{ fontSize: 11.5, color: "#68736C", lineHeight: 1.6, marginTop: 9 }}>
+          Descargas sem meta original usam o total esperado na leitura de cocho do mesmo dia, quando disponível.
+          Registros sem referência são identificados no PDF. O destinatário não altera os registros exportados.
+        </div>
+        {modo === "periodo" && relatorioTrato && <div style={{ fontSize: 12, color: "#1F4D45", lineHeight: 1.6, marginTop: 9 }}>
+          A comparação entre turmas considera os erros de cada pesagem. O acumulado compara os totais do período.
+          Turmas sem login registrado ou com pesagens incompletas ficam fora da classificação.
+        </div>}
+        {!periodoValido && <div role="alert" style={{ fontSize: 12, color: "#B4473D", marginTop: 8 }}>Escolha um período válido: o início deve ser anterior ou igual ao fim.</div>}
+        {relatorioTrato && !relatorioTrato.carregamentos.length && !relatorioTrato.descargas.length &&
+          <div role="status" style={{ fontSize: 12, marginTop: 8 }}>Nenhuma carga ou descarga no período selecionado.</div>}
+        {composicoes.erro && <div role="status" style={{ fontSize: 12, color: "#8A6420", marginTop: 8 }}>{composicoes.erro}</div>}
+        {cliente?.id && composicoes.clienteId !== cliente.id && !composicoes.erro && <div role="status" style={{ fontSize: 12, color: "#68736C", marginTop: 8 }}>Carregando a composição das pré-misturas. Você já pode exportar os erros das cargas.</div>}
+        {erroPdf && <div role="alert" style={{ fontSize: 12, color: "#B4473D", marginTop: 8 }}>{erroPdf}</div>}
+        {pdfAtual && <div role="status" style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12, fontSize: 13, alignItems: "center" }}>
+          <strong style={{ color: "#1F4D45" }}>PDF pronto</strong>
+          <a href={pdfAtual.url} target="_blank" rel="noopener noreferrer" style={{ color: "#1F4D45", textDecoration: "underline" }}>Abrir PDF</a>
+          <a href={pdfAtual.url} download={pdfAtual.nome} style={{ color: "#1F4D45", textDecoration: "underline" }}>Baixar PDF</a>
+        </div>}
+      </div>
+
+      <div style={styles.gestaoGrid} className="desktop-summary-grid">
+        <PainelCard label={modo === "periodo" ? "Cargas no período" : "Cargas no dia"} valor={cargasDia.length} />
+        <PainelCard label="Matéria natural" valor={`${totalRealCargas.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`} />
+        <PainelCard label="Erro absoluto" valor={erroMedio == null ? "Sem referência" : `${erroMedio.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`} />
+        <PainelCard label="Matéria seca" valor={`${totalMs.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg MS`} />
+        <PainelCard label="Custo total das cargas" valor={faltamCustos === 0 ? formatBRL(custoTotal) : "Preencha os custos"} />
+        <PainelCard label="Custo da dieta (MN)" valor={faltamCustos === 0 && custoDietaKgMn != null ? `${formatBRL(custoDietaKgMn)}/kg` : "—"} />
+        <PainelCard label="Custo da dieta (MS)" valor={faltamCustos === 0 && custoDietaKgMs != null ? `${formatBRL(custoDietaKgMs)}/kg MS` : "—"} />
+      </div>
+
+      <div style={{ ...styles.card, marginBottom: 12, overflowX: "auto", padding: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>
+          Erro de carga por tratador {modo === "periodo" ? "no período" : "no dia"}
+        </div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>
+          O acumulado soma o erro absoluto de cada ingrediente em cada carga; erros positivos e negativos não se anulam.
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 650, fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}>
+              <th style={{ padding: 10, textAlign: "left" }}>Tratador</th>
+              <th style={{ padding: 10 }}>Cargas</th>
+              <th style={{ padding: 10 }}>Previsto</th>
+              <th style={{ padding: 10 }}>Realizado</th>
+              <th style={{ padding: 10 }}>Saldo</th>
+              <th style={{ padding: 10 }}>Erro acumulado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {errosCargaPorTratador.map((grupo) => (
+              <tr key={grupo.chave} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                <td style={{ padding: 10, textAlign: "left", fontWeight: 700 }}>{grupo.nome}</td>
+                <td style={{ padding: 10 }}>{grupo.registros.length}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
+                <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
+                <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {(faltamMs > 0 || faltamCustos > 0) && (
+        <div style={{ ...styles.card, marginBottom: 10, padding: 12, fontSize: 12.5, color: "#8A6420", background: "#FFF8E8" }}>
+          {faltamMs > 0 && <div>Informe a MS de {faltamMs} ingrediente(s) para completar o total diário de matéria seca.</div>}
+          {faltamCustos > 0 && <div>Informe o custo de {faltamCustos} ingrediente(s) para calcular o custo real das cargas e da dieta.</div>}
+        </div>
+      )}
+
+      {onSincronizar && (
+        <div style={{ ...styles.card, marginBottom: 10, padding: 12 }}>
+          <div style={{ fontSize: 12.5, color: "#5C5C58", lineHeight: 1.5, marginBottom: 8 }}>
+            Envie para o consumo diário a MS e o custo ponderados pelo peso descarregado em cada lote. A quantidade consumida não é alterada.
+          </div>
+          <button type="button" onClick={sincronizarConsumos} disabled={sincronizando} style={styles.secondaryActionBtn}>
+            {sincronizando ? "Sincronizando..." : "Sincronizar descargas com consumo"}
+          </button>
+          {mensagemSincronizacao && <div style={{ fontSize: 12, color: "#1F4D45", marginTop: 8 }}>{mensagemSincronizacao}</div>}
+        </div>
+      )}
+
+      <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 930, fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}>
+              <th style={{ padding: 10, textAlign: "left" }}>Ingrediente</th>
+              <th style={{ padding: 10 }}>Previsto</th>
+              <th style={{ padding: 10 }}>Realizado</th>
+              <th style={{ padding: 10 }} title="Saldo entre o total realizado e o previsto">Saldo kg</th>
+              <th style={{ padding: 10 }} title="Saldo percentual; faltas e excessos podem se compensar">Saldo %</th>
+              <th style={{ padding: 10 }}>MS %</th>
+              <th style={{ padding: 10 }}>Kg MS/dia</th>
+              <th style={{ padding: 10 }}>Custo R$/kg</th>
+              <th style={{ padding: 10 }}>Custo/dia</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ingredientes.map((item) => {
+              const diferenca = item.real - item.previsto;
+              const percentual = item.previsto > 0 ? diferenca / item.previsto * 100 : 0;
+              const sinal = corErroCarga(percentual);
+              const ms = msPorIngrediente.get(item.chave);
+              const custo = custoPorIngrediente.get(item.chave);
+              return (
+                <tr key={item.chave} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
+                  <td style={{ padding: 10, textAlign: "left", fontWeight: 600 }}>{item.nome}</td>
+                  <td style={{ padding: 10 }}>{item.previsto.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                  <td style={{ padding: 10 }}>{item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                  <td style={{ padding: 10 }}>{diferenca > 0 ? "+" : ""}{diferenca.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                  <td style={{ padding: 10 }}>
+                    <span style={{ color: sinal.cor, background: sinal.fundo, padding: "4px 7px", borderRadius: 999, fontWeight: 700 }}>
+                      {percentual > 0 ? "+" : ""}{percentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                    </span>
+                  </td>
+                  <td style={{ padding: 7 }}>
+                    <input type="number" min="0" max="100" step="0.1" defaultValue={Number.isFinite(ms) ? ms : ""}
+                      key={`ms-${item.chave}-${ms ?? ""}`}
+                      disabled={!onSalvarMs || salvando === item.chave}
+                      onBlur={(e) => salvarConfiguracao(item, "ms_percentual", e.target.value)}
+                      placeholder="MS"
+                      style={{ ...styles.input, width: 72, padding: "6px 7px", textAlign: "right" }} />
+                  </td>
+                  <td style={{ padding: 10, fontWeight: 600 }}>
+                    {Number.isFinite(ms) ? `${(item.real * ms / 100).toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg` : "—"}
+                  </td>
+                  <td style={{ padding: 7 }}>
+                    <input type="number" min="0" step="0.001" defaultValue={Number.isFinite(custo) ? custo : ""}
+                      key={`custo-${item.chave}-${custo ?? ""}`}
+                      disabled={!onSalvarMs || salvando === item.chave}
+                      onBlur={(e) => salvarConfiguracao(item, "custo_kg_mn", e.target.value)}
+                      placeholder="R$/kg"
+                      style={{ ...styles.input, width: 88, padding: "6px 7px", textAlign: "right" }} />
+                  </td>
+                  <td style={{ padding: 10, fontWeight: 600 }}>
+                    {Number.isFinite(custo) ? formatBRL(item.real * custo) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {gruposPorTipoDieta.length > 0 && (
+        <div style={{ ...styles.card, marginTop: 12, overflowX: "auto", padding: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>
+            Erro acumulado por tipo de dieta {modo === "periodo" ? "no período" : "no dia"}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>
+            Erro = soma do erro absoluto por ingrediente (mesmo cálculo do resumo geral acima), não a diferença líquida entre previsto e realizado — por isso pode ficar alto mesmo quando o total previsto bate com o total realizado.
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620, fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ color: "#5C5C58", textAlign: "right" }}>
+                <th style={{ padding: 10, textAlign: "left" }}>Fase</th>
+                <th style={{ padding: 10 }}>Cargas</th>
+                <th style={{ padding: 10 }}>Previsto</th>
+                <th style={{ padding: 10 }}>Realizado</th>
+                <th style={{ padding: 10 }}>Erro kg</th>
+                <th style={{ padding: 10 }}>Erro %</th>
+                <th style={{ padding: 10 }}>Custo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gruposPorTipoDieta.map((grupo) => {
+                const chaveTipo = grupo.tipo || "outro";
+                const percentual = grupo.previsto > 0 ? grupo.erroAbsoluto / grupo.previsto * 100 : 0;
+                const sinal = corErroCarga(percentual);
+                const expandido = tipoDietaExpandido === chaveTipo;
+                return (
+                  <Fragment key={chaveTipo}>
+                  <tr
+                    onClick={() => setTipoDietaExpandido(expandido ? null : chaveTipo)}
+                    style={{ borderTop: "1px solid #E8E5DE", textAlign: "right", cursor: "pointer" }}
+                  >
+                    <td style={{ padding: 10, textAlign: "left", fontWeight: 600 }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <ChevronDown size={14} style={{ transform: expandido ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s", color: "#8A8A82" }} />
+                        {grupo.tipo ? labelTipoDieta(grupo.tipo) : "Não identificado"}
+                      </span>
+                    </td>
+                    <td style={{ padding: 10 }}>{grupo.cargas}</td>
+                    <td style={{ padding: 10 }}>{grupo.previsto.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                    <td style={{ padding: 10 }}>{grupo.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                    <td style={{ padding: 10 }}>{grupo.erroAbsoluto.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                    <td style={{ padding: 10 }}>
+                      <span style={{ color: sinal.cor, background: sinal.fundo, padding: "4px 7px", borderRadius: 999, fontWeight: 700 }}>
+                        {percentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                      </span>
+                    </td>
+                    <td style={{ padding: 10, fontWeight: 600 }}>
+                      {grupo.custoCompleto ? formatBRL(grupo.custo) : "—"}
+                    </td>
+                  </tr>
+                  {expandido && (
+                    <tr>
+                      <td colSpan={7} style={{ padding: 0, background: "#FAFAF7" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ color: "#8A8A82", textAlign: "right" }}>
+                              <th style={{ padding: "6px 10px 6px 34px", textAlign: "left", fontWeight: 500 }}>Ingrediente</th>
+                              <th style={{ padding: "6px 10px", fontWeight: 500 }}>Previsto</th>
+                              <th style={{ padding: "6px 10px", fontWeight: 500 }}>Realizado</th>
+                              <th style={{ padding: "6px 10px", fontWeight: 500 }}>Erro kg</th>
+                              <th style={{ padding: "6px 10px", fontWeight: 500 }}>Erro %</th>
+                              <th style={{ padding: "6px 10px", fontWeight: 500 }}>Custo</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {grupo.ingredientes.map((item) => {
+                              const diferencaItem = item.real - item.previsto;
+                              const percentualItem = item.previsto > 0 ? diferencaItem / item.previsto * 100 : 0;
+                              const sinalItem = corErroCarga(percentualItem);
+                              const custo = custoPorIngrediente.get(item.chave);
+                              return (
+                                <tr key={item.chave} style={{ borderTop: "1px solid #EFEDE6", textAlign: "right" }}>
+                                  <td style={{ padding: "6px 10px 6px 34px", textAlign: "left" }}>{item.nome}</td>
+                                  <td style={{ padding: "6px 10px" }}>{item.previsto.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                                  <td style={{ padding: "6px 10px" }}>{item.real.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                                  <td style={{ padding: "6px 10px" }}>{diferencaItem > 0 ? "+" : ""}{diferencaItem.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg</td>
+                                  <td style={{ padding: "6px 10px" }}>
+                                    <span style={{ color: sinalItem.cor, background: sinalItem.fundo, padding: "3px 6px", borderRadius: 999, fontWeight: 700 }}>
+                                      {percentualItem > 0 ? "+" : ""}{percentualItem.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: "6px 10px", fontWeight: 600 }}>
+                                    {Number.isFinite(custo) ? formatBRL(item.real * custo) : "—"}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={{ ...styles.card, marginTop: 12 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8 }}>Resultado por carga</div>
+        {[...cargasDia]
+          .sort((a, b) => (a.data + (a.hora || "")).localeCompare(b.data + (b.hora || "")))
+          .map((carga) => {
+          const itens = Array.isArray(carga.itens) ? carga.itens : [];
+          const resumoErro = resumoErroDaCarga(carga);
+          const erro = resumoErro.percentual;
+          const tratador = tratadorDaCarga(carga);
+          const sinal = corErroCarga(erro);
+          const custoCarga = itens.reduce((s, item) => {
+            const custo = custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente));
+            return s + (Number.isFinite(custo) ? Number(item.peso_real || 0) * custo : 0);
+          }, 0);
+          const cargaComCustoCompleto = itens.every((item) =>
+            Number.isFinite(custoPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)))
+          );
+          const custoKgCarga = Number(carga.peso_real || 0) > 0 ? custoCarga / Number(carga.peso_real) : null;
+          const cargaComMsCompleta = itens.every((item) =>
+            Number.isFinite(msPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente)))
+          );
+          const msCarga = cargaComMsCompleta && Number(carga.peso_real || 0) > 0
+            ? itens.reduce((soma, item) => {
+                const ms = msPorIngrediente.get(item.ingrediente_chave || chaveIngrediente(item.ingrediente));
+                return soma + Number(item.peso_real || 0) * ms;
+              }, 0) / Number(carga.peso_real)
+            : null;
+          const chaveCarga = carga.id || carga.carga_codigo;
+          const expandida = cargaExpandida === chaveCarga;
+          return (
+            <div key={chaveCarga} style={{ borderTop: "1px solid #ECE9E2", display: "flex", alignItems: "center", gap: 4 }}>
+              <button type="button" aria-expanded={expandida} onClick={() => setCargaExpandida(expandida ? null : chaveCarga)}
+                style={{ flex: 1, minWidth: 0, border: 0, background: "transparent", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "10px 0", cursor: "pointer", textAlign: "left", color: "inherit" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {expandida ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Carga {carga.carga_codigo} · {carga.receita}</div>
+                    <div style={{ fontSize: 11.5, color: "#777770" }}>
+                      {modo === "periodo" ? `${formatDataBR(carga.data)} · ` : ""}
+                      {carga.hora || "Horário não informado"} · {tratador} · {resumoErro.realizado.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg
+                      {msCarga != null ? ` · MS ${msCarga.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : " · MS incompleta"}
+                      {cargaComCustoCompleto && custoKgCarga != null ? ` · ${formatBRL(custoCarga)} · ${formatBRL(custoKgCarga)}/kg dieta` : ""}
+                    </div>
+                  </div>
+                </div>
+                <span style={{ color: sinal.cor, background: sinal.fundo, padding: "5px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
+                  erro {erro.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                </span>
+              </button>
+              {onExcluirCarga && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm(`Excluir a carga ${carga.carga_codigo}? Essa ação não pode ser desfeita.`)) onExcluirCarga(carga.id);
+                  }}
+                  style={{ background: "transparent", border: "none", color: "#B8763E", cursor: "pointer", padding: 4, display: "flex", flexShrink: 0 }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+              {expandida && (
+                <div style={{ overflowX: "auto", padding: "0 0 10px 25px" }}>
+                  <table style={{ width: "100%", minWidth: 540, borderCollapse: "collapse", fontSize: 11.5 }}>
+                    <thead>
+                      <tr style={{ color: "#777770", textAlign: "right" }}>
+                        <th style={{ padding: "6px 8px", textAlign: "left" }}>Ingrediente</th>
+                        <th style={{ padding: "6px 8px" }}>Previsto</th>
+                        <th style={{ padding: "6px 8px" }}>Realizado</th>
+                        <th style={{ padding: "6px 8px" }}>Erro kg</th>
+                        <th style={{ padding: "6px 8px" }}>Erro %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {itens.map((item) => {
+                        const diferenca = Number(item.peso_real || 0) - Number(item.peso_previsto || 0);
+                        const percentual = Number(item.peso_previsto || 0) > 0 ? diferenca / Number(item.peso_previsto) * 100 : 0;
+                        const cor = corErroCarga(percentual);
+                        return (
+                          <tr key={item.ingrediente_chave || item.ingrediente} style={{ borderTop: "1px solid #F0EEE9", textAlign: "right" }}>
+                            <td style={{ padding: "7px 8px", textAlign: "left", fontWeight: 600 }}>{item.ingrediente}</td>
+                            <td style={{ padding: "7px 8px" }}>{Number(item.peso_previsto || 0).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg</td>
+                            <td style={{ padding: "7px 8px" }}>{Number(item.peso_real || 0).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg</td>
+                            <td style={{ padding: "7px 8px" }}>{diferenca > 0 ? "+" : ""}{diferenca.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} kg</td>
+                            <td style={{ padding: "7px 8px", color: cor.cor, fontWeight: 700 }}>{percentual > 0 ? "+" : ""}{percentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Importa a leitura de cocho (nota de -4 a 4 por lote/dia) de uma planilha —
+// mesmo modelo de colunas "Data"/"Lote" do importador de consumo, mais uma
+// coluna de nota/escore. O consumo de referência e a quantidade esperada de
+// cada linha são recalculados a partir do consumo já lançado no app antes
+// daquela data (mesma regra usada no lançamento manual, dia a dia).
+function ImportarLeituraCochoPlanilha({ lotes, leiturasCocho, consumosPorLote, onCancel, onImportar, onConcluido }) {
+  const [processando, setProcessando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [resultado, setResultado] = useState(null);
+  const [importando, setImportando] = useState(false);
+  const [concluido, setConcluido] = useState(null);
+
+  const existentes = new Set(leiturasCocho.map((l) => `${l.lote_id}|${l.data}`));
+
+  async function processarArquivo(file) {
+    if (!file) return;
+    setProcessando(true);
+    setErro(null);
+    setResultado(null);
+    setConcluido(null);
+    try {
+      const XLSX = await carregarLeitorExcel();
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+      const aba = workbook.Sheets[workbook.SheetNames[0]];
+      const linhas = XLSX.utils.sheet_to_json(aba, { header: 1, defval: null });
+      if (linhas.length < 2) throw new Error("Planilha vazia ou sem linhas de dados.");
+
+      const cabecalho = linhas[0];
+      const idxData = indiceColuna(cabecalho, ["data"]);
+      const idxLote = indiceColuna(cabecalho, ["lote", "curral"]);
+      const idxNota = indiceColuna(cabecalho, ["nota", "escore", "pontuacao", "score", "avaliacao"]);
+      const faltando = [];
+      if (idxData === -1) faltando.push("Data");
+      if (idxLote === -1) faltando.push("Lote");
+      if (idxNota === -1) faltando.push("Nota");
+      if (faltando.length > 0) {
+        throw new Error(`Não encontrei a coluna de ${faltando.join(" / ")} na planilha — confira os cabeçalhos.`);
+      }
+
+      // Se o mesmo lote/data aparecer mais de uma vez, fica valendo a
+      // última linha (não faz sentido somar notas de leitura de cocho).
+      const candidatos = new Map();
+      const naoReconhecidos = new Set();
+      const notasInvalidas = new Set();
+      let linhasIgnoradas = 0;
+
+      for (const linha of linhas.slice(1)) {
+        if (!linha || linha.every((v) => v == null || v === "")) continue;
+        const data = normalizarDataPlanilha(linha[idxData]);
+        const lote = encontrarLotePorNomeOuNumero(linha[idxLote], lotes);
+        const notaBruta = normalizarNumeroPlanilha(linha[idxNota]);
+        const nota = notaBruta != null ? Math.round(notaBruta) : null;
+        const notaValida = nota != null && NOTAS_LEITURA_COCHO.some((n) => n.nota === nota);
+        if (!data || !lote || !notaValida) {
+          if (!lote && linha[idxLote] != null && linha[idxLote] !== "") naoReconhecidos.add(String(linha[idxLote]));
+          if (lote && data && !notaValida && notaBruta != null) notasInvalidas.add(String(linha[idxNota]));
+          linhasIgnoradas++;
+          continue;
+        }
+        candidatos.set(`${lote.id}|${data}`, { loteId: lote.id, loteNome: lote.nome, data, nota });
+      }
+
+      const novos = [];
+      const semReferencia = [];
+      let jaExistentes = 0;
+      for (const [chave, candidato] of candidatos) {
+        if (existentes.has(chave)) {
+          jaExistentes++;
+          continue;
+        }
+        const referencia = obterConsumoReferenciaAntesDe(consumosPorLote[candidato.loteId] || [], candidato.data);
+        if (!referencia) {
+          semReferencia.push(candidato);
+          continue;
+        }
+        novos.push({
+          loteId: candidato.loteId,
+          data: candidato.data,
+          consumoReferencia: Number(referencia.consumo_total_lote),
+          nota: candidato.nota,
+        });
+      }
+
+      setResultado({ novos, semReferencia, naoReconhecidos: [...naoReconhecidos], notasInvalidas: [...notasInvalidas], jaExistentes, linhasIgnoradas });
+    } catch (e) {
+      setErro(e.message || "Não foi possível ler essa planilha.");
+    } finally {
+      setProcessando(false);
+    }
+  }
+
+  async function confirmar() {
+    if (!resultado || resultado.novos.length === 0) return;
+    setImportando(true);
+    try {
+      const linhas = resultado.novos.map((n) => ({
+        lote_id: n.loteId,
+        data: n.data,
+        consumo_referencia: n.consumoReferencia,
+        nota: n.nota,
+        ajuste_percentual: ajustePercentualDaNota(n.nota),
+        quantidade_esperada: calcularQuantidadeEsperada(n.consumoReferencia, n.nota),
+      }));
+      await onImportar(linhas);
+      setConcluido(linhas.length);
+    } finally {
+      setImportando(false);
+    }
+  }
+
+  return (
+    <div>
+      <BackHeader title="Importar planilha de leitura de cocho" onBack={onCancel} />
+
+      <div style={styles.card}>
+        <div style={{ fontSize: 13, color: "#5C5C58", padding: "10px 0" }}>
+          Planilha Excel (.xlsx) com uma linha por lote/data e colunas "Data",
+          "Lote" e "Nota" (escore de -4 a 4, igual aos botões da leitura
+          manual). O nome do lote na planilha precisa bater com o do app (ex:
+          "3" reconhece "Lote 3"). Cada linha usa como referência o consumo já
+          lançado no app antes daquela data — sem consumo lançado antes, a
+          linha é ignorada.
+        </div>
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          disabled={processando || importando}
+          onChange={(e) => processarArquivo(e.target.files?.[0])}
+          style={{ fontSize: 13, padding: "10px 0" }}
+        />
+        {processando && <div style={{ fontSize: 13, color: "#9A9A94" }}>Lendo planilha...</div>}
+        {erro && <div style={{ fontSize: 13, color: "#B8763E", padding: "6px 0" }}>{erro}</div>}
+      </div>
+
+      {resultado && concluido == null && (
+        <>
+          <div style={{ ...styles.card, marginTop: 10 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, padding: "10px 0 4px" }}>Resumo da planilha</div>
+            <div style={{ fontSize: 13, color: "#5C5C58", lineHeight: 1.6 }}>
+              {resultado.novos.length} leitura{resultado.novos.length !== 1 ? "s" : ""} nova
+              {resultado.novos.length !== 1 ? "s" : ""} pronta{resultado.novos.length !== 1 ? "s" : ""} pra importar
+              {resultado.jaExistentes > 0 && (
+                <div>{resultado.jaExistentes} já existiam no app (não serão duplicadas)</div>
+              )}
+              {resultado.semReferencia.length > 0 && (
+                <div>
+                  {resultado.semReferencia.length} linha(s) ignorada(s) por não ter consumo lançado antes da data
+                </div>
+              )}
+              {resultado.linhasIgnoradas > 0 && (
+                <div>{resultado.linhasIgnoradas} linha(s) sem data/lote/nota válidos, ignorada(s)</div>
+              )}
+              {resultado.naoReconhecidos.length > 0 && (
+                <div style={{ color: "#B8763E", marginTop: 4 }}>
+                  Lotes não reconhecidos (verifique o nome): {resultado.naoReconhecidos.join(", ")}
+                </div>
+              )}
+              {resultado.notasInvalidas.length > 0 && (
+                <div style={{ color: "#B8763E", marginTop: 4 }}>
+                  Nota fora do intervalo -4 a 4: {resultado.notasInvalidas.join(", ")}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <PrimaryButton disabled={resultado.novos.length === 0 || importando} onClick={confirmar}>
+            {importando
+              ? "Importando..."
+              : resultado.novos.length > 0
+              ? `Importar ${resultado.novos.length} leitura${resultado.novos.length > 1 ? "s" : ""}`
+              : "Nenhuma leitura nova para importar"}
+          </PrimaryButton>
+        </>
+      )}
+
+      {concluido != null && (
+        <div style={{ ...styles.card, marginTop: 10, textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1F4D45", padding: "14px 0" }}>
+            {concluido} leitura{concluido !== 1 ? "s" : ""} importada{concluido !== 1 ? "s" : ""} com sucesso.
+          </div>
+          <PrimaryButton onClick={onConcluido}>Voltar</PrimaryButton>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Gráfico de consumo por lote: consumo de MS em relação ao peso vivo (%).
+// Só entra na lista quem já tem pelo menos 2 lançamentos de consumo com o
+// dado necessário (MS da dieta preenchida).
+function AbaGraficos({ lotes, lotesOriginais = [], currais = [], pesagensPorLote, consumosPorLote, saidasPorLote = {}, entradasPorLote = {}, clienteId }) {
+  const [exportando, setExportando] = useState(false);
+  const [ordenacao, setOrdenacao] = usarOrdenacaoPersistida(clienteId);
+  const nomeCurralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
+  const comDados = lotes
+    .map((lote) => ({
+      lote,
+      svgId: `grafico-pv-lote-${lote.id}`,
+      pontosPV: calcularEvolucaoConsumoAnalises(
+        lote,
+        pesagensPorLote[lote.id] || [],
+        consumosPorLote[lote.id] || [],
+        saidasPorLote[lote.id] || [],
+        entradasPorLote[lote.id] || [],
+        lotesOriginais.find((original) => original.id === lote.id)
+      ).filter((p) => p.percentualPV != null),
+    }))
+    .filter((x) => x.pontosPV.length > 0)
+    .sort(compararLotes(ordenacao, nomeCurralPorId));
+
+  if (comDados.length === 0) {
+    return (
+      <EmptyHint text="Ainda não há consumo lançado com MS da dieta preenchida. Lance o consumo com a MS para ver os gráficos aqui." />
+    );
+  }
+
+  async function exportar() {
+    setExportando(true);
+    try {
+      await exportarGraficosPDF(
+        comDados.filter((x) => x.pontosPV.length > 1),
+        "Consumo de MS em relação ao peso vivo (%)"
+      );
+    } finally {
+      setExportando(false);
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 4px 14px", gap: 8 }}>
+        <select
+          value={ordenacao}
+          onChange={(e) => setOrdenacao(e.target.value)}
+          style={{ fontSize: 12, color: "#5C5C58", background: "#F1EFE8", border: "none", borderRadius: 8, padding: "5px 8px", fontFamily: "inherit" }}
+        >
+          {OPCOES_ORDENACAO_GRAFICOS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <button
+          onClick={exportar}
+          disabled={exportando}
+          style={{ ...styles.editLinkBtn, display: "flex", alignItems: "center", gap: 6 }}
+        >
+          <Download size={14} /> {exportando ? "Gerando PDF..." : "Exportar PDF"}
+        </button>
+      </div>
+      <div className="desktop-graphs-grid">
+      {comDados.map(({ lote, pontosPV, svgId }) => {
+        const nomeCurral = nomeCurralPorId.get(lote.curral_id);
+        return (
+          <div key={lote.id} style={{ marginBottom: 26 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 4px 10px" }}>
+              <div
+                style={{
+                  ...styles.avatar,
+                  ...(!nomeCurral ? { background: "#F1EFE8", color: "#8A8A84" } : {}),
+                  fontSize: identificacaoCurral(nomeCurral).length > 2 ? 11 : 14,
+                  flexShrink: 0,
+                }}
+                title={nomeCurral || "Lote sem curral"}
+              >
+                {identificacaoCurral(nomeCurral)}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{lote.nome}</div>
+                <div style={{ fontSize: 11.5, color: nomeCurral ? "#1F4D45" : "#8A8A84", marginTop: 2 }}>
+                  {nomeCurral || "Sem curral"}
+                </div>
+              </div>
+            </div>
+            <div style={{ ...styles.sectionTitle, margin: "0 4px 6px" }}>Consumo de MS em relação ao peso vivo (%)</div>
+            {pontosPV.length > 1 ? (
+              <GraficoLinha
+                pontos={pontosPV}
+                valueKey="percentualPV"
+                unidade="%"
+                cor="#1F4D45"
+                tendencia
+                gradeDetalhada
+                consultaPorDia
+                id={svgId}
+              />
+            ) : (
+              <EmptyHint text="Falta a % de MS em pelo menos 2 lançamentos para montar este gráfico." />
+            )}
+          </div>
+        );
+      })}
+      </div>
+    </div>
+  );
+}
+
+// Rasteriza um <svg> (auto-contido, sem CSS externo) num PNG via canvas —
+// funciona porque os gráficos são desenhados só com elementos SVG básicos
+// (linha, polyline, texto), sem depender de folha de estilo externa.
+function svgParaPngDataUrl(svgEl, escala = 2) {
+  return new Promise((resolve, reject) => {
+    const viewBox = svgEl.viewBox.baseVal;
+    const largura = viewBox && viewBox.width ? viewBox.width : svgEl.clientWidth;
+    const altura = viewBox && viewBox.height ? viewBox.height : svgEl.clientHeight;
+
+    const xml = new XMLSerializer().serializeToString(svgEl);
+    const xmlComNamespace = xml.includes("xmlns=") ? xml : xml.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+    const svg64 = btoa(unescape(encodeURIComponent(xmlComNamespace)));
+
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = largura * escala;
+      canvas.height = altura * escala;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve({ dataUrl: canvas.toDataURL("image/png"), largura, altura });
+    };
+    img.onerror = reject;
+    img.src = `data:image/svg+xml;base64,${svg64}`;
+  });
+}
+
+// Monta um PDF com um gráfico por lote, empilhando quantos couberem em cada
+// página, para o consultor mandar direto pro gestor sem precisar printar tela.
+async function exportarGraficosPDF(itens, tituloGrafico) {
+  if (itens.length === 0) return;
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const margem = 40;
+  const larguraPagina = doc.internal.pageSize.getWidth();
+  const alturaPagina = doc.internal.pageSize.getHeight();
+  const larguraImg = larguraPagina - margem * 2;
+  let y = margem;
+
+  doc.setFontSize(16);
+  doc.text("Relatório de gráficos - Confinamento", margem, y);
+  y += 18;
+  doc.setFontSize(9);
+  doc.setTextColor(120);
+  doc.text(`Gerado em ${new Date().toLocaleDateString("pt-BR")}`, margem, y);
+  doc.setTextColor(0);
+  y += 22;
+
+  for (const { lote, svgId } of itens) {
+    const svgEl = document.getElementById(svgId);
+    if (!svgEl) continue;
+    const { dataUrl, largura, altura } = await svgParaPngDataUrl(svgEl);
+    const alturaImg = (altura / largura) * larguraImg;
+    const alturaBloco = 34 + alturaImg;
+
+    if (y + alturaBloco > alturaPagina - margem) {
+      doc.addPage();
+      y = margem;
+    }
+
+    doc.setFontSize(12);
+    doc.setFont(undefined, "bold");
+    doc.text(lote.nome, margem, y);
+    doc.setFont(undefined, "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(120);
+    doc.text(tituloGrafico, margem, y + 13);
+    doc.setTextColor(0);
+    y += 22;
+    doc.addImage(dataUrl, "PNG", margem, y, larguraImg, alturaImg);
+    y += alturaImg + 24;
+  }
+
+  doc.save(`graficos-confinamento-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+// Leitura de cocho: pra cada lote ativo, mostra o consumo de referência
+// (estritamente ontem, em MS/PV) e 9 botões de nota (-4 a 4) que decidem o
+// ajuste do trato de hoje. Uma leitura por lote/dia — clicar em outra nota
+// no mesmo dia substitui a anterior (upsert), corrigindo clique errado sem
+// precisar excluir nada.
+export function AbaLeituraCocho({ clienteId, dietas = [], cargas = [], ocupacoes = [], lotes, currais = [], consumosPorLote, pesagensPorLote = {}, saidasPorLote = {}, entradasPorLote = {}, leiturasCochoPorLote, onRegistrar, onAbrirImportar }) {
+  const referencias = useReferenciasCochoTrato(clienteId);
+  const [hoje, setHoje] = useState(() => dataCochoLocal());
+  useEffect(() => {
+    const atualizarData = () => setHoje(dataCochoLocal());
+    const intervalo = setInterval(atualizarData, 30000);
+    window.addEventListener("focus", atualizarData);
+    document.addEventListener("visibilitychange", atualizarData);
+    return () => {
+      clearInterval(intervalo);
+      window.removeEventListener("focus", atualizarData);
+      document.removeEventListener("visibilitychange", atualizarData);
+    };
+  }, []);
+  const nomeCurralPorId = new Map(currais.map((curral) => [curral.id, curral.nome]));
+  const ativos = lotes
+    .filter((l) => !l.data_saida)
+    .sort((a, b) => {
+      const curralA = nomeCurralPorId.get(a.curral_id) || "Sem curral";
+      const curralB = nomeCurralPorId.get(b.curral_id) || "Sem curral";
+      const porCurral = curralA.localeCompare(curralB, "pt-BR", { numeric: true });
+      return porCurral || a.nome.localeCompare(b.nome, "pt-BR", { numeric: true });
+    });
+  const [salvandoId, setSalvandoId] = useState(null);
+
+  return (
+    <div>
+      {onAbrirImportar && (
+        <div style={{ display: "flex", justifyContent: "flex-end", margin: "0 4px 12px" }}>
+          <button onClick={onAbrirImportar} style={styles.editLinkBtn}>
+            Importar planilha
+          </button>
+        </div>
+      )}
+      {referencias.aviso && <p className="cocho-reference-notice" role="status">{referencias.aviso}</p>}
+      {ativos.length === 0 ? <EmptyHint text="Nenhum lote ativo." /> : <ListaLeituraCocho receitasTrato={referencias.receitas} vinculosTrato={referencias.vinculos} carregandoReferencias={referencias.carregando} dietas={dietas} cargas={cargas} ocupacoes={ocupacoes} lotes={lotes} currais={currais} pesagensPorLote={pesagensPorLote} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} ativos={ativos} nomeCurralPorId={nomeCurralPorId} consumosPorLote={consumosPorLote} leiturasCochoPorLote={leiturasCochoPorLote} onRegistrar={onRegistrar} salvandoId={salvandoId} setSalvandoId={setSalvandoId} hoje={hoje} />}
+    </div>
+  );
+}
+
+export function ListaLeituraCocho({ receitasTrato = [], vinculosTrato = [], carregandoReferencias = false, dietas = [], cargas = [], ocupacoes = [], lotes = [], currais = [], ativos, nomeCurralPorId, consumosPorLote, pesagensPorLote, saidasPorLote, entradasPorLote, leiturasCochoPorLote, onRegistrar, salvandoId, setSalvandoId, hoje }) {
+  const [erro, setErro] = useState(null);
+  async function registrar(lote, referencia, nota) {
+    setSalvandoId(lote.id);
+    setErro(null);
+    try {
+      // Recalcular na ação evita salvar ontem se a tela atravessou a meia-noite.
+      const dataLeitura = dataCochoLocal();
+      const atual = obterConsumoOntemCocho(lote, pesagensPorLote[lote.id] || [], consumosPorLote[lote.id] || [], saidasPorLote[lote.id] || [], entradasPorLote[lote.id] || [], dataLeitura);
+      referencia = atual.referencia;
+      if (!referencia) {
+        setErro({ loteId: lote.id, mensagem: "Sem consumo do dia anterior. Confira os lançamentos antes de salvar." });
+        return;
+      }
+      await onRegistrar(lote.id, {
+        data: dataLeitura,
+        consumo_referencia: Number(referencia.consumo_total_lote),
+        nota,
+        ajuste_percentual: NOTAS_LEITURA_COCHO.find((n) => n.nota === nota).ajuste,
+        quantidade_esperada: calcularQuantidadeEsperada(referencia.consumo_total_lote, nota),
+      });
+    } catch (e) {
+      setErro({ loteId: lote.id, mensagem: "Não foi possível salvar a leitura. Tente novamente." });
+    } finally {
+      setSalvandoId(null);
+    }
+  }
+
+  return (
+    <div>
+      <LegendaAjustesCocho />
+      <div className="cocho-cards">
+      {ativos.map((lote) => {
+        const nomeCurral = nomeCurralPorId.get(lote.curral_id) || "Sem curral";
+        const consumoOntem = obterConsumoOntemCocho(lote, pesagensPorLote[lote.id] || [], consumosPorLote[lote.id] || [], saidasPorLote[lote.id] || [], entradasPorLote[lote.id] || [], hoje);
+        const referencia = consumoOntem.referencia;
+        const confirmado = consumoOntem.percentualPV != null;
+        const receita = identificarDietaCochoTrato({ lote, data: consumoOntem.data, receitas: receitasTrato, dietas, cargas, consumos: consumosPorLote[lote.id] || [], lotes, currais, ocupacoes });
+        const avaliacao = avaliarFaixaCocho(consumoOntem.percentualPV, faixaDaReceitaTrato(receita));
+        const faixaTexto = avaliacao.minimo != null ? `${avaliacao.minimo.toLocaleString("pt-BR", { maximumFractionDigits: 3 })} a ${avaliacao.maximo.toLocaleString("pt-BR", { maximumFractionDigits: 3 })}% do PV` : null;
+        const statusFaixa = avaliacao.alerta ? "Fora da faixa" : avaliacao.status === "dentro" ? "Dentro da faixa" : confirmado ? "Confirmado" : "Sem dados";
+        const historico = [...(leiturasCochoPorLote[lote.id] || [])].sort((a, b) => a.data.localeCompare(b.data));
+        const leituraHoje = historico.find((l) => l.data === hoje);
+        const receitaHoje = receitaAtualCochoTrato(lote, vinculosTrato, receitasTrato);
+        const esperadoHoje = leituraHoje ? calcularConsumoEsperadoCocho(lote, leituraHoje, consumosPorLote[lote.id] || [], pesagensPorLote[lote.id] || [], saidasPorLote[lote.id] || [], entradasPorLote[lote.id] || [], hoje, receitaHoje) : null;
+        const avaliacaoEsperado = avaliarFaixaCocho(esperadoHoje?.percentualPV, faixaDaReceitaTrato(receitaHoje));
+        return (
+          <article key={lote.id} className="cocho-reading-card" aria-label={`${nomeCurral} · ${lote.nome}`}>
+            <h3>{nomeCurral} · {lote.nome}</h3>
+            <div className={`cocho-consumption ${confirmado ? "" : "cocho-consumption-missing"} ${avaliacao.alerta ? "cocho-consumption-alert" : ""}`}>
+              <div className="cocho-consumption-heading">
+                <span>Consumo de ontem · MS/PV</span>
+                <span className="cocho-consumption-status">{statusFaixa}</span>
+              </div>
+              <div className="cocho-consumption-value">
+                <strong>{confirmado ? `${consumoOntem.percentualPV.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}% do PV` : "—"}</strong>
+                <time dateTime={consumoOntem.data}>{formatDataBR(consumoOntem.data)}</time>
+              </div>
+              {!confirmado && <p>{consumoOntem.motivo}</p>}
+              {faixaTexto && <p className="cocho-expected-range">Faixa esperada · {receita.nome}: {faixaTexto}</p>}
+              {avaliacao.alerta && <p className="cocho-consumption-alert-text" role="alert">{avaliacao.status === "abaixo" ? "Consumo abaixo do mínimo esperado." : "Consumo acima do máximo esperado."}</p>}
+              {confirmado && !faixaTexto && <p>{carregandoReferencias ? "Carregando faixa do Trato Certo…" : !receita ? "Dieta de ontem sem referência identificada no Trato Certo." : "Faixa de consumo não cadastrada nesta dieta do Trato Certo."}</p>}
+            </div>
+            <div className="cocho-score-buttons" role="group" aria-label={`Nota de cocho de ${lote.nome}`} aria-busy={salvandoId === lote.id}>
+              {NOTAS_LEITURA_COCHO.map(({ nota, ajuste }) => {
+                const ativa = !!leituraHoje && Number(leituraHoje.nota) === nota;
+                return (
+                  <button key={nota} type="button"
+                    disabled={!referencia || salvandoId != null}
+                    onClick={() => registrar(lote, referencia, nota)}
+                    aria-pressed={ativa}
+                    aria-label={`Nota ${nota > 0 ? "+" : ""}${nota}: ${ajuste > 0 ? "+" : ""}${ajuste}% no trato`}
+                    title={`${ajuste > 0 ? "+" : ""}${ajuste}% no trato`}
+                    className={`cocho-score ${nota < 0 ? "negative" : nota > 0 ? "positive" : "neutral"} ${ativa ? "selected" : ""}`}>
+                    {nota > 0 ? `+${nota}` : nota}
+                  </button>
+                );
+              })}
+            </div>
+            {leituraHoje && <div className={`cocho-consumption cocho-consumption-expected ${avaliacaoEsperado.alerta ? "cocho-consumption-alert" : ""} ${esperadoHoje.percentualPV == null ? "cocho-consumption-missing" : ""}`} aria-live="polite">
+              <div className="cocho-consumption-heading">
+                <span>Consumo esperado hoje · MS/PV</span>
+                <span className="cocho-consumption-status">{avaliacaoEsperado.alerta ? "Fora da faixa" : "Estimativa"}</span>
+              </div>
+              <div className="cocho-consumption-value">
+                <strong>{esperadoHoje.percentualPV != null ? `${esperadoHoje.percentualPV.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}% do PV` : "—"}</strong>
+                <time dateTime={hoje}>{formatDataBR(hoje)}</time>
+              </div>
+              {esperadoHoje.percentualPV == null ? <p>{esperadoHoje.motivo}</p> : <p>Após a leitura · composição da dieta atual e peso vivo estimado de hoje.</p>}
+              {avaliacaoEsperado.alerta && <p className="cocho-consumption-alert-text" role="alert">{avaliacaoEsperado.status === "abaixo" ? "Consumo esperado abaixo do mínimo da dieta." : "Consumo esperado acima do máximo da dieta."}</p>}
+            </div>}
+            {salvandoId === lote.id && <p className="cocho-reading-note" role="status">Salvando leitura…</p>}
+            {erro?.loteId === lote.id && <p className="cocho-reading-error" role="alert">{erro.mensagem}</p>}
+            {leituraHoje?._offline_pendente && <p className="cocho-reading-note" role="status">Salva neste aparelho · aguardando internet para sincronizar</p>}
+            {historico.length > 0 && <details className="cocho-reading-details"><summary>Quantidade esperada e histórico</summary>
+              {leituraHoje && <p>Quantidade esperada hoje: {Number(leituraHoje.quantidade_esperada).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg ({Number(leituraHoje.ajuste_percentual) > 0 ? "+" : ""}{Number(leituraHoje.ajuste_percentual)}%)</p>}
+              {historico.length > 1 && <GraficoLinha pontos={historico} valueKey="nota" unidade="pontos" cor="#7A4B26" />}
+            </details>}
+          </article>
+        );
+      })}
+      </div>
+    </div>
+  );
+}
+
+function LegendaAjustesCocho() {
+  return (
+    <div className="cocho-legend">
+      <div className="cocho-legend-title">Como a nota altera o próximo trato</div>
+      <div className="cocho-legend-grid">
+        {NOTAS_LEITURA_COCHO.map(({ nota, ajuste }) => {
+          const tipo = ajuste > 0 ? "increase" : ajuste < 0 ? "decrease" : "keep";
+          return (
+            <div key={nota} className={`cocho-legend-item cocho-legend-${tipo}`}>
+              <strong>Nota {nota > 0 ? `+${nota}` : nota}</strong>
+              <span>
+                {ajuste > 0 ? "↑" : ajuste < 0 ? "↓" : "＝"} {ajuste > 0 ? "+" : ""}
+                {ajuste}% comida
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="cocho-legend-help">
+        Nota negativa aumenta · Nota positiva diminui · Nota 0 mantém
+      </div>
+    </div>
+  );
+}
+
+// Baixa a tabela (lote + quantidade a fornecer) em CSV — abre certinho no
+// Excel/Sheets em pt-BR (separador ";", vírgula decimal, BOM de UTF-8 pros
+// acentos não bagunçarem).
+function exportarConsumoEsperadoCSV(linhas, dataISO) {
+  const cabecalho = "Lote;Quantidade esperada (kg)";
+  const corpo = linhas
+    .map((l) => `${l.lote};${l.quantidade != null ? l.quantidade.toFixed(2).replace(".", ",") : ""}`)
+    .join("\n");
+  const csv = `${cabecalho}\n${corpo}`;
+
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `consumo-esperado-${dataISO}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Consumo esperado: quantidade que deveria ser fornecida hoje (decidida na
+// leitura de cocho) e, assim que o consumo real do dia for lançado (na aba
+// Nutrição do lote), compara esperado x realizado num gráfico.
+function AbaConsumoEsperado({ lotes, consumosPorLote, leiturasCochoPorLote }) {
+  const hoje = new Date().toISOString().slice(0, 10);
+  const ativos = lotes.filter((l) => !l.data_saida);
+
+  if (ativos.length === 0) return <EmptyHint text="Nenhum lote ativo." />;
+
+  const tabela = montarTabelaConsumoEsperado(ativos, leiturasCochoPorLote, consumosPorLote, hoje);
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "0 4px 14px" }}>
+        <button
+          onClick={() => exportarConsumoEsperadoCSV(tabela, hoje)}
+          style={{ ...styles.editLinkBtn, display: "flex", alignItems: "center", gap: 6 }}
+        >
+          <Download size={14} /> Exportar tabela
+        </button>
+      </div>
+      {ativos.map((lote) => {
+        const leituras = leiturasCochoPorLote[lote.id] || [];
+        const leituraHoje = leituras.find((l) => l.data === hoje);
+        const historico = calcularHistoricoEsperadoRealizado(leituras, consumosPorLote[lote.id] || []);
+        return (
+          <div key={lote.id} style={{ marginBottom: 26 }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5, margin: "0 4px 6px" }}>{lote.nome}</div>
+            {leituraHoje ? (
+              <div style={{ fontSize: 13, color: "#A85A2A", fontWeight: 700, margin: "0 4px 10px" }}>
+                Esperado hoje: {Number(leituraHoje.quantidade_esperada).toFixed(2)} kg (nota{" "}
+                {Number(leituraHoje.nota) > 0 ? "+" : ""}
+                {Number(leituraHoje.nota)})
+              </div>
+            ) : (
+              <div style={{ fontSize: 12.5, color: "#9A9A94", margin: "0 4px 10px" }}>
+                Sem leitura de cocho hoje — registre na aba "Leitura de cocho".
+              </div>
+            )}
+            {historico.length > 1 ? (
+              <GraficoDuasLinhas
+                pontos={historico}
+                chave1="quantidadeEsperada"
+                chave2="realizado"
+                label1="Esperado"
+                label2="Realizado"
+                unidade="kg"
+                cor1="#1F4D45"
+                cor2="#A85A2A"
+              />
+            ) : (
+              <EmptyHint text='Ainda não há histórico suficiente — depende de pelo menos 2 leituras de cocho para montar o gráfico.' />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Gráfico de duas séries (esperado x realizado), mesmo estilo do
+// GraficoLinha — linha cheia para a primeira série, tracejada para a
+// segunda, com legenda embaixo. Pontos sem valor numa das séries (dia sem
+// consumo lançado ainda) simplesmente não entram na respectiva linha.
+function GraficoDuasLinhas({ pontos, chave1, chave2, label1, label2, unidade = "", cor1 = "#1F4D45", cor2 = "#A85A2A" }) {
+  const largura = 320;
+  const altura = 130;
+  const paddingEsquerda = 34;
+  const paddingDireita = 10;
+  const paddingY = 16;
+
+  const todosValores = pontos.flatMap((p) => [p[chave1], p[chave2]]).filter((v) => v != null);
+  const min = Math.min(...todosValores);
+  const max = Math.max(...todosValores);
+  const meio = (min + max) / 2;
+  const span = max - min || 1;
+
+  const xDe = (i) =>
+    pontos.length > 1
+      ? paddingEsquerda + (i / (pontos.length - 1)) * (largura - paddingEsquerda - paddingDireita)
+      : (paddingEsquerda + largura - paddingDireita) / 2;
+  const yDe = (v) => altura - paddingY - ((v - min) / span) * (altura - paddingY * 2);
+
+  function construirLinha(chave) {
+    return pontos
+      .map((p, i) => (p[chave] != null ? { x: xDe(i), y: yDe(p[chave]), v: p[chave], data: p.data } : null))
+      .filter(Boolean);
+  }
+
+  const coords1 = construirLinha(chave1);
+  const coords2 = construirLinha(chave2);
+  const formatEixo = (v) => `${Number.isInteger(v) ? v : v.toFixed(1)} ${unidade}`;
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #ECEAE3", padding: "14px 10px 10px" }}>
+      <svg viewBox={`0 0 ${largura} ${altura}`} style={{ width: "100%", height: altura, display: "block" }}>
+        <line x1={paddingEsquerda} y1={paddingY} x2={largura - paddingDireita} y2={paddingY} stroke="#F1EFE8" strokeWidth="1" />
+        <line x1={paddingEsquerda} y1={altura / 2} x2={largura - paddingDireita} y2={altura / 2} stroke="#F1EFE8" strokeWidth="1" />
+        <line
+          x1={paddingEsquerda}
+          y1={altura - paddingY}
+          x2={largura - paddingDireita}
+          y2={altura - paddingY}
+          stroke="#F1EFE8"
+          strokeWidth="1"
+        />
+        <text x={0} y={paddingY + 3} fontSize="9" fill="#ABA9A0">{formatEixo(max)}</text>
+        <text x={0} y={altura / 2 + 3} fontSize="9" fill="#ABA9A0">{formatEixo(meio)}</text>
+        <text x={0} y={altura - paddingY + 3} fontSize="9" fill="#ABA9A0">{formatEixo(min)}</text>
+        <polyline
+          points={coords1.map((c) => `${c.x},${c.y}`).join(" ")}
+          fill="none" stroke={cor1} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+        />
+        <polyline
+          points={coords2.map((c) => `${c.x},${c.y}`).join(" ")}
+          fill="none" stroke={cor2} strokeWidth="2" strokeDasharray="4 3" strokeLinecap="round" strokeLinejoin="round"
+        />
+        {coords1.map((c, i) => (
+          <circle key={`a${i}`} cx={c.x} cy={c.y} r="3.5" fill={cor1}>
+            <title>{`${formatDataBR(c.data)} · ${label1}: ${c.v} ${unidade}`}</title>
+          </circle>
+        ))}
+        {coords2.map((c, i) => (
+          <circle key={`b${i}`} cx={c.x} cy={c.y} r="3.5" fill={cor2}>
+            <title>{`${formatDataBR(c.data)} · ${label2}: ${c.v} ${unidade}`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#9A9A94", padding: "2px 6px 0 34px" }}>
+        <span>{formatDataBR(pontos[0].data)}</span>
+        <span>{formatDataBR(pontos[pontos.length - 1].data)}</span>
+      </div>
+      <div style={{ display: "flex", gap: 14, fontSize: 10.5, color: "#5C5C58", padding: "6px 6px 0 34px" }}>
+        <span><span style={{ color: cor1 }}>●</span> {label1}</span>
+        <span><span style={{ color: cor2 }}>●</span> {label2}</span>
+      </div>
+    </div>
+  );
+}
