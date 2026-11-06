@@ -9,3 +9,9 @@ const lote={id:'l',cliente_id:'f',nome:'Lote10',curral_id:'c',num_cabecas:161,pe
 const html=renderToStaticMarkup(React.createElement(Card,{receitasTrato:[receita],vinculosTrato:[{lote_id:'l',dieta_id:'d',cliente_id:'f'}],ativos:[lote],nomeCurralPorId:new Map([['c','CURRAL10']]),consumosPorLote:{l:[{data:'2026-11-03',consumo_total_lote:3715,ms_dieta:55.43,dieta_fase:'DIETA FINAL'}]},pesagensPorLote:{},saidasPorLote:{},entradasPorLote:{},leiturasCochoPorLote:{l:[{data:'2026-11-04',nota:0,quantidade_esperada:3715,ajuste_percentual:0}]},onRegistrar:()=>{},setSalvandoId:()=>{},salvandoId:null,hoje:'2026-11-04'}));
 assert.match(html,/2,20% do PV/);assert.match(html,/1,99% do PV/);assert.match(html,/cocho-consumption-expected cocho-consumption-alert/);assert.match(html,/Consumo esperado abaixo do mínimo da dieta/);assert.match(html,/composição da dieta atual/);
 });
+test('sem leitura de hoje exibe previsão provisória sem marcar nota nem salvar leitura',()=>{
+const lote={id:'l',cliente_id:'f',nome:'Lote',curral_id:'c',num_cabecas:10,peso_entrada:400,data_entrada:'2026-11-01',gmd_esperado:0};
+const receita={id:'d',cliente_id:'f',nome:'Dieta',ingredientes:[{percent:100,dryMatter:50}]};
+const html=renderToStaticMarkup(React.createElement(Card,{receitasTrato:[receita],vinculosTrato:[{lote_id:'l',dieta_id:'d',cliente_id:'f'}],ativos:[lote],nomeCurralPorId:new Map(),consumosPorLote:{l:[{data:'2026-11-05',consumo_total_lote:200,ms_dieta:50,dieta_fase:'Dieta'}]},pesagensPorLote:{},saidasPorLote:{},entradasPorLote:{},leiturasCochoPorLote:{l:[]},onRegistrar:()=>{throw Error('Não deve salvar')},setSalvandoId:()=>{},salvandoId:null,hoje:'2026-11-06'}));
+assert.match(html,/Consumo esperado hoje/);assert.match(html,/Antes da leitura/);assert.match(html,/2,50% do PV/);assert.doesNotMatch(html,/aria-pressed="true"/);
+});

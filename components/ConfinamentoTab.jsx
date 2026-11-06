@@ -5344,7 +5344,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
         loteId: lote?.id || descarga.lote_id || `codigo:${descarga.lote_codigo || indice}`,
         loteNome: nomeLote,
         curralNome: nomeCurral,
-        previsto: previsto != null && previsto > 0 ? previsto : 0,
+        previsto: previsto != null && previsto >= 0 ? previsto : null,
         realizado,
         saldo: saldo || 0,
         erroAbsoluto: saldo != null ? Math.abs(saldo) : 0,
@@ -5368,6 +5368,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
     ? eventos.filter((evento) => evento.data >= inicio && evento.data <= fim)
     : eventos.filter((evento) => evento.data === data);
   const porLote = resumirDescargasDiarias(eventosFiltrados, leiturasCocho);
+  const usandoPrevisaoTratos = porLote.some((grupo) => grupo.referenciaTratos);
   const totalPrevisto = porLote.reduce((soma, grupo) => soma + (grupo.previsto ?? 0), 0);
   const totalRealizado = porLote.reduce((soma, grupo) => soma + grupo.realizado, 0);
   const referenciaCompleta = porLote.every((grupo) => grupo.previsto != null);
@@ -5470,9 +5471,10 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
         <PainelCard label="Erro acumulado real" valor={erroPercentual != null ? `${erroPercentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : "—"} />
       </div>
 
+      {usandoPrevisaoTratos && <p style={{ fontSize: 12, color: "#5C5C58", marginTop: 10 }}>Nos lotes sem leitura diária, o previsto usa as metas registradas nos tratos, incluindo eventuais compensações.</p>}
       {semPrevisto > 0 && (
         <div style={{ ...styles.card, padding: 12, marginBottom: 12, color: "#8A6420", background: "#FFF8E8", fontSize: 12.5 }}>
-          {semPrevisto} lote(s) sem previsto diário registrado. O realizado inclui todas as descargas; o saldo e o erro dependem do previsto diário.
+          {semPrevisto} lote(s) sem leitura diária e com previsão incompleta nos tratos. O realizado inclui todas as descargas; confira a previsão na origem.
         </div>
       )}
 
@@ -5498,7 +5500,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
 
       <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Acumulado por lote</div>
-        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O previsto usa a quantidade esperada do lote no dia, sem somar ajustes dos tratos. O erro é (realizado − previsto) / previsto. Clique em um lote para visualizar cada trato.</div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O previsto usa a leitura diária. Sem leitura, usa a soma das previsões registradas em cada trato, que pode incluir compensações. O erro é (realizado − previsto) / previsto. Clique em um lote para visualizar cada trato.</div>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720, fontSize: 12.5 }}>
           <thead><tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}><th style={{ padding: 10, textAlign: "left" }}>Curral / lote</th><th style={{ padding: 10 }}>Tratos</th><th style={{ padding: 10 }}>Previsto</th><th style={{ padding: 10 }}>Realizado</th><th style={{ padding: 10 }}>Saldo</th><th style={{ padding: 10 }}>Erro acumulado</th></tr></thead>
           <tbody>
@@ -5509,7 +5511,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
                   <tr onClick={() => setLoteExpandido(expandido ? null : grupo.chave)} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right", cursor: "pointer" }}>
                     <td style={{ padding: 10, textAlign: "left", fontWeight: 700 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ChevronDown size={14} style={{ transform: expandido ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s" }} />{grupo.nome}</span></td>
                     <td style={{ padding: 10 }}>{grupo.registros.length}</td>
-                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
+                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}{grupo.referenciaTratos && <div style={{ fontSize: 10, color: "#8A8A82", marginTop: 3 }}>Metas dos tratos</div>}</td>
                     <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
                     <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
                     <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} assinado /></td>
@@ -6984,7 +6986,8 @@ export function ListaLeituraCocho({ receitasTrato = [], vinculosTrato = [], carr
         const historico = [...(leiturasCochoPorLote[lote.id] || [])].sort((a, b) => a.data.localeCompare(b.data));
         const leituraHoje = historico.find((l) => l.data === hoje);
         const receitaHoje = receitaAtualCochoTrato(lote, vinculosTrato, receitasTrato);
-        const esperadoHoje = leituraHoje ? calcularConsumoEsperadoCocho(lote, leituraHoje, consumosPorLote[lote.id] || [], pesagensPorLote[lote.id] || [], saidasPorLote[lote.id] || [], entradasPorLote[lote.id] || [], hoje, receitaHoje) : null;
+        const previsaoLeitura = leituraHoje || (referencia ? { data: hoje, quantidade_esperada: referencia.consumo_total_lote } : null);
+        const esperadoHoje = calcularConsumoEsperadoCocho(lote, previsaoLeitura, consumosPorLote[lote.id] || [], pesagensPorLote[lote.id] || [], saidasPorLote[lote.id] || [], entradasPorLote[lote.id] || [], hoje, receitaHoje);
         const avaliacaoEsperado = avaliarFaixaCocho(esperadoHoje?.percentualPV, faixaDaReceitaTrato(receitaHoje));
         return (
           <article key={lote.id} className="cocho-reading-card" aria-label={`${nomeCurral} · ${lote.nome}`}>
@@ -7019,7 +7022,7 @@ export function ListaLeituraCocho({ receitasTrato = [], vinculosTrato = [], carr
                 );
               })}
             </div>
-            {leituraHoje && <div className={`cocho-consumption cocho-consumption-expected ${avaliacaoEsperado.alerta ? "cocho-consumption-alert" : ""} ${esperadoHoje.percentualPV == null ? "cocho-consumption-missing" : ""}`} aria-live="polite">
+            <div className={`cocho-consumption cocho-consumption-expected ${avaliacaoEsperado.alerta ? "cocho-consumption-alert" : ""} ${esperadoHoje.percentualPV == null ? "cocho-consumption-missing" : ""}`} aria-live="polite">
               <div className="cocho-consumption-heading">
                 <span>Consumo esperado hoje · MS/PV</span>
                 <span className="cocho-consumption-status">{avaliacaoEsperado.alerta ? "Fora da faixa" : "Estimativa"}</span>
@@ -7028,9 +7031,9 @@ export function ListaLeituraCocho({ receitasTrato = [], vinculosTrato = [], carr
                 <strong>{esperadoHoje.percentualPV != null ? `${esperadoHoje.percentualPV.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}% do PV` : "—"}</strong>
                 <time dateTime={hoje}>{formatDataBR(hoje)}</time>
               </div>
-              {esperadoHoje.percentualPV == null ? <p>{esperadoHoje.motivo}</p> : <p>Após a leitura · composição da dieta atual e peso vivo estimado de hoje.</p>}
+              {esperadoHoje.percentualPV == null ? <p>{esperadoHoje.motivo}</p> : <p>{leituraHoje ? "Após a leitura · composição da dieta atual e peso vivo estimado de hoje." : "Antes da leitura · quantidade de ontem, sem ajuste. Registre a nota para confirmar a previsão."}</p>}
               {avaliacaoEsperado.alerta && <p className="cocho-consumption-alert-text" role="alert">{avaliacaoEsperado.status === "abaixo" ? "Consumo esperado abaixo do mínimo da dieta." : "Consumo esperado acima do máximo da dieta."}</p>}
-            </div>}
+            </div>
             {salvandoId === lote.id && <p className="cocho-reading-note" role="status">Salvando leitura…</p>}
             {erro?.loteId === lote.id && <p className="cocho-reading-error" role="alert">{erro.mensagem}</p>}
             {leituraHoje?._offline_pendente && <p className="cocho-reading-note" role="status">Salva neste aparelho · aguardando internet para sincronizar</p>}

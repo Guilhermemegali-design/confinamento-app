@@ -14,9 +14,27 @@ test('soma metas por dia no período e preserva falta real', () => {
   assert.equal(grupo.saldo, -20);
   assert.equal(grupo.percentual, -10);
 });
-test('sem meta diária não inventa previsto a partir dos tratos', () => {
+test('sem meta diária identifica o previsto dos tratos', () => {
   const [grupo] = resumirDescargasDiarias([evento('2026-10-07', 50, 60)], []);
-  assert.equal(grupo.previsto, null);
+  assert.equal(grupo.previsto, 50);
   assert.equal(grupo.realizado, 60);
-  assert.equal(grupo.percentual, null);
+  assert.equal(grupo.percentual, 20);
+  assert.equal(grupo.referenciaTratos, true);
+});
+test('sem leitura recupera a previsão original dos tratos e identifica a origem', () => {
+  const [grupo] = resumirDescargasDiarias([evento('2026-11-05', 401.25, 410), evento('2026-11-05', 401.25, 416)], []);
+  assert.equal(grupo.previsto, 802.5);
+  assert.equal(grupo.referenciaTratos, true);
+});
+test('meta diária ausente e trato sem previsão continuam explicitamente incompletos', () => {
+  assert.equal(resumirDescargasDiarias([evento('2026-11-05', null, 410)], [])[0].previsto, null);
+});
+test('período mistura dias com leitura e metas dos tratos sem duplicar a leitura', () => {
+  const [g]=resumirDescargasDiarias([evento('2026-11-04',80,90),evento('2026-11-04',70,60),evento('2026-11-05',40,50),evento('2026-11-05',60,50)],[{lote_id:'l',data:'2026-11-04',quantidade_esperada:120}]);
+  assert.equal(g.previsto,220);assert.equal(g.realizado,250);assert.equal(g.referenciaTratos,true);
+});
+test('meta zero é válida e leitura duplicada exige conferência', () => {
+ const e=[evento('2026-11-05',100,20)];const r={lote_id:'l',data:'2026-11-05',quantidade_esperada:0};
+ assert.equal(resumirDescargasDiarias(e,[r])[0].previsto,0);
+ assert.equal(resumirDescargasDiarias(e,[r,r])[0].previsto,null);
 });
