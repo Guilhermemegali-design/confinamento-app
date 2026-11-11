@@ -6278,6 +6278,8 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
           (relatorioTrato?.consumoIngredientes.ingredientes || []).map(item => [inicioRelatorio, fimRelatorio, item.nome,
             item.semMeta ? null : item.previsto, item.semPeso ? null : item.real, "Composição atual cadastrada; uso direto + pré-misturas"] ))} />
 
+      <h3 style={{fontSize:16,margin:"16px 0 8px"}}>Pesagens originais das cargas</h3>
+      <p style={{fontSize:13,color:"#68736C"}}>A pré-mistura permanece abaixo como foi pesada. O consumo de seus componentes está no quadro aberto acima.</p>
       <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 930, fontSize: 12.5 }}>
           <thead>

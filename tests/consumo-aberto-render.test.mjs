@@ -23,3 +23,12 @@ test('componentes sem receita da fazenda não são inventados; composição inv�
  const html=renderToStaticMarkup(React.createElement(mod.exports.default,{dados}));assert.match(html,/composição incompleta/);
  assert.equal(renderToStaticMarkup(React.createElement(mod.exports.default,{dados:null})), '');
 });
+
+test('João confirmou núcleo genérico = Intense U: soma 1.455 direto + 18.103,30 na pré-mistura',()=>{
+ const farm='275f2b43-f18f-43fc-ab6c-741838853d7c';
+ const registros=[{nome:'Pre Mistura',previsto:55479,real:53245},{nome:'Nucleo',previsto:1480,real:1455}];
+ const dados=detalharConsumoPremisturas(registros,[{...recipe,cliente_id:farm}],farm);
+ const nucleo=dados.ingredientes.find(i=>i.nome==='Nucleo Intense U');assert.ok(Math.abs(nucleo.real-19558.3)<1e-6);
+ assert.equal(dados.ingredientes.some(i=>i.nome==='Nucleo'),false);
+ const other=detalharConsumoPremisturas(registros,[{...recipe,cliente_id:'outra'}],'outra');assert.equal(other.ingredientes.find(i=>i.nome==='Nucleo').real,1455);
+});
