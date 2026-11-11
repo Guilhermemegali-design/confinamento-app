@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, Fragment } from "react";
 import dynamic from "next/dynamic";
+import ConsumoIngredientesAbertos from "./ConsumoIngredientesAbertos";
 import {
   Trash2, Pencil, ChevronUp, ChevronDown, Download, Upload,
   LayoutDashboard, Beef, ClipboardList, BarChart3, Map as MapIcon, Settings2, Truck, Wheat, Plus, AlertTriangle,
@@ -5990,6 +5991,16 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
       planilha["!autofilter"] = { ref: planilha["!ref"] };
       const arquivo = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(arquivo, planilha, "Consumo por ingrediente");
+      if (composicoes.clienteId === cliente?.id && relatorioTrato?.consumoIngredientes.premisturas.length) {
+        const aberto = XLSX.utils.aoa_to_sheet([
+          ["Composição atual cadastrada; uso direto + pré-misturas (matéria natural)"],
+          ["Ingrediente", "Previsto MN (kg)", "Consumo MN (kg)"],
+          ...relatorioTrato.consumoIngredientes.ingredientes.map(item => [item.nome, item.semMeta ? null : item.previsto, item.semPeso ? null : item.real]),
+          ...relatorioTrato.consumoIngredientes.avisos.map(aviso => [aviso]),
+        ]);
+        aberto["!cols"] = [{wch:48},{wch:24},{wch:24}];
+        XLSX.utils.book_append_sheet(arquivo, aberto, "Premisturas abertas");
+      }
       XLSX.writeFile(arquivo, `cargas-ingredientes-${inicioRelatorio}-${fimRelatorio}.xlsx`);
     } catch {
       setErroExcel("Não foi possível gerar o Excel. Tente novamente.");
@@ -6260,6 +6271,12 @@ export function AbaCargas({ cliente, cargas, leiturasCocho = SEM_DADOS_TRATO, in
           {mensagemSincronizacao && <div style={{ fontSize: 12, color: "#1F4D45", marginTop: 8 }}>{mensagemSincronizacao}</div>}
         </div>
       )}
+
+      <ConsumoIngredientesAbertos dados={composicoes.clienteId === cliente?.id ? relatorioTrato?.consumoIngredientes : null}
+        onExportar={() => baixarCSV(`consumo-aberto-${inicioRelatorio}-${fimRelatorio}.csv`,
+          ["Início", "Fim", "Ingrediente", "Previsto MN (kg)", "Consumo MN (kg)", "Referência"],
+          (relatorioTrato?.consumoIngredientes.ingredientes || []).map(item => [inicioRelatorio, fimRelatorio, item.nome,
+            item.semMeta ? null : item.previsto, item.semPeso ? null : item.real, "Composição atual cadastrada; uso direto + pré-misturas"] ))} />
 
       <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 930, fontSize: 12.5 }}>
