@@ -11,14 +11,15 @@ import { supabase } from "@/lib/supabaseClient";
 import { buscarTodasPaginas } from "@/lib/paginacao.mjs";
 import { resumirSanidade, modalidadeSaida, observacaoMovimento, observacaoSemModalidade } from "@/lib/resumoSanitario.mjs";
 import { criarPdfErrosCargas } from "@/lib/errosCargasPdf.mjs";
-import { resumirDescargasDiarias } from "@/lib/descargasDiarias.mjs";
+import { resumirDescargasDiarias, resumirTratadoresDescargas } from "@/lib/descargasDiarias.mjs";
 import { montarCSV, resumirConsumos } from "@/lib/exportacaoConsumo.mjs";
+import { useMetasDescargas } from "@/lib/useMetasDescargas";
 import { styles } from "@/lib/styles";
 import { resumirPesoEntradaCategorias } from "@/lib/pesoEntradaCategorias.mjs";
 import { useReferenciasCochoTrato } from "@/lib/useReferenciasCochoTrato";
 import { identificarDietaCochoTrato, avaliarFaixaCocho, faixaDaReceitaTrato, receitaAtualCochoTrato } from "@/lib/referenciaCochoTrato.mjs";
 import { formatDataBR, formatBRL } from "@/lib/format";
-import { datasDisponiveisTrato, encontrarLoteDescarga, encontrarCurralDescarga, encontrarLoteDaDescarga, montarRelatorioTrato } from "@/lib/relatorioTrato.mjs";
+import { datasDisponiveisTrato, chaveDestinoLegado, encontrarLoteDescarga, encontrarCurralDescarga, encontrarLoteDaDescarga, montarRelatorioTrato } from "@/lib/relatorioTrato.mjs";
 import {
   calcularIndicadoresLote, calcularPainelConfinamento, calcularEvolucaoLote, calcularEvolucaoConsumo, calcularEvolucaoConsumoAnalises,
   calcularResumoSaidas, calcularCabecasNaData, calcularFechamentoCusto, calcularGmdSaidaParcial, proporcaoConsumoEtapa,
@@ -1107,7 +1108,7 @@ export default function ConfinamentoTab({
           onExcluirCarga={onExcluirCarga}
         />
       ) : aba === "descargas" ? (
-        <AbaDescargas saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} cargas={cargasVagao} lotes={lotes} currais={currais} leiturasCocho={leiturasCocho} curralOcupacoes={curralOcupacoes} />
+        <AbaDescargas clienteId={cliente?.id} saidasPorLote={saidasPorLote} entradasPorLote={entradasPorLote} cargas={cargasVagao} lotes={lotes} currais={currais} leiturasCocho={leiturasCocho} curralOcupacoes={curralOcupacoes} />
       ) : aba === "mapa" ? (
         <MapaCurrais
           cliente={cliente}
@@ -5315,7 +5316,7 @@ function BadgeErroDistribuicao({ percentual, assinado = false }) {
   );
 }
 
-function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralOcupacoes = [], saidasPorLote = {}, entradasPorLote = {} }) {
+function AbaDescargas({ clienteId, cargas, lotes, currais = [], leiturasCocho = [], curralOcupacoes = [], saidasPorLote = {}, entradasPorLote = {} }) {
   const [exportandoExcel, setExportandoExcel] = useState(false);
   const [erroExcel, setErroExcel] = useState(null);
   const [exportandoPdf, setExportandoPdf] = useState(false);
@@ -5332,8 +5333,8 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
       const previstoInformado = numeroDistribuicao(descarga.peso_previsto);
       const previsto = previstoInformado ?? (erroInformado != null ? realizado - erroInformado : null);
       const lote = encontrarLoteDaDescarga({ ...descarga, data: descarga.data || carga.data }, lotes, currais, curralOcupacoes);
-      const nomeCurral = curralPorId.get(descarga.curral_id || lote?.curral_id) || descarga.lote_codigo || "Sem curral";
-      const nomeLote = lote?.nome || descarga.lote_codigo || "Lote não identificado";
+      const nomeCurral = curralPorId.get(descarga.curral_id || lote?.curral_id) || (lote ? descarga.lote_codigo : `Destino legado ${chaveDestinoLegado(descarga.lote_codigo) || "sem código"}`) || "Sem curral";
+      const nomeLote = lote?.nome || "Sem vínculo histórico com lote";
       const saldo = previsto != null ? realizado - previsto : null;
       eventos.push({
         chave: `${carga.id || carga.carga_codigo}:${indice}`,
@@ -5342,7 +5343,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
         cargaCodigo: carga.carga_codigo,
         receita: carga.receita,
         tratador: String(descarga.tratador || tratadorDaCarga(carga)).trim() || "Não informado",
-        loteId: lote?.id || descarga.lote_id || `codigo:${descarga.lote_codigo || indice}`,
+        loteId: lote?.id || descarga.lote_id || `codigo:${chaveDestinoLegado(descarga.lote_codigo) || indice}`,
         loteNome: nomeLote,
         curralNome: nomeCurral,
         previsto: previsto != null && previsto >= 0 ? previsto : null,
@@ -5368,14 +5369,15 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
   const eventosFiltrados = modo === "periodo"
     ? eventos.filter((evento) => evento.data >= inicio && evento.data <= fim)
     : eventos.filter((evento) => evento.data === data);
-  const porLote = resumirDescargasDiarias(eventosFiltrados, leiturasCocho);
+  const metasOriginais = useMetasDescargas(clienteId, cargas, modo === "periodo" ? inicio : data, modo === "periodo" ? fim : data);
+  const porLote = resumirDescargasDiarias(eventosFiltrados, leiturasCocho, metasOriginais.metas);
   const usandoPrevisaoTratos = porLote.some((grupo) => grupo.referenciaTratos);
   const totalPrevisto = porLote.reduce((soma, grupo) => soma + (grupo.previsto ?? 0), 0);
   const totalRealizado = porLote.reduce((soma, grupo) => soma + grupo.realizado, 0);
   const referenciaCompleta = porLote.every((grupo) => grupo.previsto != null);
   const saldoGeral = referenciaCompleta ? totalRealizado - totalPrevisto : null;
   const erroPercentual = referenciaCompleta && totalPrevisto > 0 ? saldoGeral / totalPrevisto * 100 : null;
-  const porTratador = agruparErros(eventosFiltrados, (evento) => evento.tratador, (evento) => evento.tratador);
+  const porTratador = resumirTratadoresDescargas(eventosFiltrados);
   const semPrevisto = porLote.filter((grupo) => grupo.previsto == null).length;
 
   async function exportarIngredientesExcel() {
@@ -5410,6 +5412,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
   }
 
   async function exportarPdf() {
+    if (metasOriginais.carregando) return;
     setExportandoPdf(true);
     setErroPdf(null);
     try {
@@ -5420,7 +5423,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
           ["Lotes atendidos", String(porLote.length)], ["Previsto", textoPesoDistribuicao(referenciaCompleta ? totalPrevisto : null)],
           ["Realizado", textoPesoDistribuicao(totalRealizado)], ["Saldo real - previsto", textoPesoDistribuicao(saldoGeral, true)],
           ["Erro acumulado real", erroPercentual != null ? `${erroPercentual > 0 ? "+" : ""}${erroPercentual.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "Sem previsto"]],
-        porTratador, porLote, loteExpandido,
+        porTratador, porLote, loteExpandido, aviso: metasOriginais.erro,
       });
       pdf.save(`descargas-${modo === "periodo" ? `${inicio}-a-${fim}` : data}.pdf`);
     } catch (erro) {
@@ -5436,7 +5439,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <SectionTitle>Análise das descargas</SectionTitle>
-        <button type="button" onClick={exportarPdf} disabled={exportandoPdf || !eventosFiltrados.length} style={styles.secondaryActionBtn}>
+        <button type="button" onClick={exportarPdf} disabled={exportandoPdf || metasOriginais.carregando || !eventosFiltrados.length} style={styles.secondaryActionBtn}>
           <Download size={14} /> {exportandoPdf ? "Gerando PDF..." : "Exportar PDF"}
         </button>
         <button type="button" onClick={exportarIngredientesExcel} disabled={exportandoExcel || !eventosFiltrados.length} style={styles.secondaryActionBtn}>
@@ -5472,10 +5475,12 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
         <PainelCard label="Erro acumulado real" valor={erroPercentual != null ? `${erroPercentual.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : "—"} />
       </div>
 
+      {metasOriginais.carregando && <p role="status">Consultando metas originais do Trato…</p>}
+      {metasOriginais.erro && <p role="alert" style={{ color: "#8A6420" }}>{metasOriginais.erro}</p>}
       {usandoPrevisaoTratos && <p style={{ fontSize: 12, color: "#5C5C58", marginTop: 10 }}>Nos lotes sem leitura diária, o previsto usa as metas registradas nos tratos, incluindo eventuais compensações.</p>}
       {semPrevisto > 0 && (
         <div style={{ ...styles.card, padding: 12, marginBottom: 12, color: "#8A6420", background: "#FFF8E8", fontSize: 12.5 }}>
-          {semPrevisto} lote(s) sem leitura diária e com previsão incompleta nos tratos. O realizado inclui todas as descargas; confira a previsão na origem.
+          {semPrevisto} grupo(s) com dias sem previsão histórica. O realizado está completo. Saldo e erro ficam sem avaliação quando falta referência; previsões ausentes não são estimadas.
         </div>
       )}
 
@@ -5488,7 +5493,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
             {porTratador.map((grupo) => (
               <tr key={grupo.chave} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right" }}>
                 <td style={{ padding: 10, textAlign: "left", fontWeight: 700 }}>{grupo.nome}</td>
-                <td style={{ padding: 10 }}>{grupo.registros.length}</td>
+                <td style={{ padding: 10 }}>{grupo.registros.length}{grupo.semPrevisto > 0 && <div style={{ fontSize: 10.5, color: "#8A6420" }}>{grupo.semPrevisto} sem previsão</div>}</td>
                 <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}</td>
                 <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
                 <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
@@ -5501,7 +5506,7 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
 
       <div style={{ ...styles.card, overflowX: "auto", padding: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, padding: "12px 12px 4px" }}>Acumulado por lote</div>
-        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O previsto usa a leitura diária. Sem leitura, usa a soma das previsões registradas em cada trato, que pode incluir compensações. O erro é (realizado − previsto) / previsto. Clique em um lote para visualizar cada trato.</div>
+        <div style={{ fontSize: 11.5, color: "#8A8A82", padding: "0 12px 10px" }}>O previsto usa primeiro a meta original do dia no Trato, depois a leitura diária. Sem ambas, usa a soma das previsões registradas nos tratos, que pode incluir compensações. O erro é (realizado − previsto) / previsto. Clique em um lote para visualizar cada trato.</div>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720, fontSize: 12.5 }}>
           <thead><tr style={{ background: "#F4F2ED", color: "#5C5C58", textAlign: "right" }}><th style={{ padding: 10, textAlign: "left" }}>Curral / lote</th><th style={{ padding: 10 }}>Tratos</th><th style={{ padding: 10 }}>Previsto</th><th style={{ padding: 10 }}>Realizado</th><th style={{ padding: 10 }}>Saldo</th><th style={{ padding: 10 }}>Erro acumulado</th></tr></thead>
           <tbody>
@@ -5511,9 +5516,9 @@ function AbaDescargas({ cargas, lotes, currais = [], leiturasCocho = [], curralO
                 <Fragment key={grupo.chave}>
                   <tr onClick={() => setLoteExpandido(expandido ? null : grupo.chave)} style={{ borderTop: "1px solid #E8E5DE", textAlign: "right", cursor: "pointer" }}>
                     <td style={{ padding: 10, textAlign: "left", fontWeight: 700 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ChevronDown size={14} style={{ transform: expandido ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s" }} />{grupo.nome}</span></td>
-                    <td style={{ padding: 10 }}>{grupo.registros.length}</td>
+                    <td style={{ padding: 10 }}>{grupo.registros.length}{grupo.diasSemMeta > 0 && <div style={{ fontSize: 10.5, color: "#8A6420" }}>{grupo.diasSemMeta} dia(s) sem meta</div>}</td>
                     <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.previsto)}{grupo.referenciaTratos && <div style={{ fontSize: 10, color: "#8A8A82", marginTop: 3 }}>Metas dos tratos</div>}</td>
-                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}</td>
+                    <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.realizado)}{grupo.diasSemMeta > 0 && <div style={{ fontSize: 10.5, color: "#8A6420" }}>{textoPesoDistribuicao(grupo.realizadoSemMeta)} sem meta histórica</div>}</td>
                     <td style={{ padding: 10 }}>{textoPesoDistribuicao(grupo.saldo, true)}</td>
                     <td style={{ padding: 10 }}><BadgeErroDistribuicao percentual={grupo.percentual} assinado /></td>
                   </tr>
